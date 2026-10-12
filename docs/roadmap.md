@@ -12,9 +12,9 @@
 
 驗收：有效資料通過；重複 ID、錯誤引用、無效日期／時間、跨 project 引用、週型設定與版本區間錯誤會被拒絕；完整 test/lint/build 通過。
 
-## Phase 1B — Safe v3 → v4 migration（待辦）
+## Phase 1B — Safe v3 → v4 migration（完成）
 
-實作新的 v4 key、確定性遷移、原始 v3/v1 保留、損壞資料匯出、多分頁衝突整合，以及遷移前後完整性測試。
+已建立新的 v4 key routing、確定性遷移、原始 v3/v1 保留、原始資料回傳與遷移前後完整性測試。v4 runtime UI 啟用前不會自動執行 cutover，避免目前 v3 操作後造成 v4 副本過期；正式接線留在採用 v4 runtime 的後續 Phase。
 
 驗收：成功遷移不遺失 ID 或內容；失敗不寫入 v4、不修改舊 key；既有 v4 優先且不 fallback。
 
