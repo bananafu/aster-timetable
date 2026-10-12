@@ -94,3 +94,18 @@ export interface AppData {
 
 export type ViewMode = 'period' | 'time'
 export type ModalKind = 'event' | 'course' | 'editCourse' | 'settings' | null
+
+export type {
+  AcademicTermDescriptor,
+  AppDataV4,
+  CalendarEventV4,
+  MigrationWarningV4,
+  ProjectClass,
+  RecurringLesson,
+  ScheduleOverrideV4,
+  School,
+  SchoolLevel,
+  SemesterKind,
+  TeachingUnit,
+  TimetableProject,
+} from './v4'
