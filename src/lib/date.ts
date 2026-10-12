@@ -1,4 +1,4 @@
-import type { SemesterSettings, WeekPattern } from '../types'
+import type { AcademicTerm, AlternatingWeekPattern } from '../types'
 
 export const dayNames = ['週一', '週二', '週三', '週四', '週五']
 
@@ -28,13 +28,16 @@ export function addDays(date: Date, count: number): Date {
   return result
 }
 
-export function getWeekInfo(date: Date, semester: SemesterSettings): { number: number; pattern: WeekPattern } {
-  const semesterStart = startOfWeek(fromDateKey(semester.startDate))
+export function getWeekInfo(date: Date, term: AcademicTerm): { number: number; pattern: AlternatingWeekPattern | null } {
+  const semesterStart = startOfWeek(fromDateKey(term.startDate))
   const target = startOfWeek(date)
   const number = Math.floor((target.getTime() - semesterStart.getTime()) / 604_800_000) + 1
-  const oddMatchesA = semester.firstWeekPattern === 'A'
-  const isA = number % 2 === 1 ? oddMatchesA : !oddMatchesA
-  return { number, pattern: isA ? 'A' : 'B' }
+  if (!term.weekCycle.enabled) return { number, pattern: null }
+  const anchor = startOfWeek(fromDateKey(term.weekCycle.anchorDate))
+  const offset = Math.round((target.getTime() - anchor.getTime()) / 604_800_000)
+  const sameAsAnchor = Math.abs(offset) % 2 === 0
+  const pattern = sameAsAnchor ? term.weekCycle.anchorPattern : term.weekCycle.anchorPattern === 'A' ? 'B' : 'A'
+  return { number, pattern }
 }
 
 export function formatWeekRange(start: Date): string {

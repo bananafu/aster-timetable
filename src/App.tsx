@@ -6,14 +6,16 @@ import { ScheduleGrid } from './components/ScheduleGrid'
 import { TimeCalendar } from './components/TimeCalendar'
 import { Modal } from './components/Modal'
 import { initialData } from './data/seed'
-import { clearDemoRecords, countDemoRecords, isAppData, migrateAppData } from './data/migrations'
+import { clearDemoRecords, countDemoRecords, isAppData, isLegacyAppDataV1, migrateAppData, migrateV1ToV3 } from './data/migrations'
 import { useLocalStorage, type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
-import { addDays, getWeekInfo, startOfWeek, toDateKey } from './lib/date'
+import { addDays, fromDateKey, getWeekInfo, startOfWeek, toDateKey } from './lib/date'
 import { findCourseConflict, getNextUpcomingEvent, getTodayTeachingSummary, resolveSlot } from './lib/schedule'
+import { canDisableWeekCycle, classifyEventTerm, getActiveTerm, getSafeOverrideTerm, getTermForDate, isTermEditable, reclassifyEvents, validatePeriods, validateTermDates } from './lib/academic'
 import type { TodayTeachingSummary } from './lib/schedule'
-import type { AppData, CalendarEvent, DayOfWeek, ModalKind, ScheduleDensity, ViewMode, WeekPattern } from './types'
+import type { AcademicTerm, AppData, CalendarEvent, DayOfWeek, ModalKind, ScheduleDensity, SchoolPeriod, ViewMode, WeekPattern } from './types'
 
-const STORAGE_KEY = 'aster-timetable-data-v1'
+const STORAGE_KEY = 'aster-timetable-data-v3'
+const LEGACY_STORAGE_KEY = 'aster-timetable-data-v1'
 const DENSITY_KEY = 'aster-timetable-density-v1'
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
@@ -30,7 +32,7 @@ function downloadRawData(raw: string) {
 }
 
 export default function App() {
-  const [data, setData, storageStatus, storageControls] = useLocalStorage<AppData>(STORAGE_KEY, initialData, { migrate: migrateAppData, validate: isAppData })
+  const [data, setData, storageStatus, storageControls] = useLocalStorage<AppData>(STORAGE_KEY, initialData, { migrate: migrateAppData, validate: isAppData, legacy: { key: LEGACY_STORAGE_KEY, validate: isLegacyAppDataV1, migrate: (value) => migrateV1ToV3(value as Parameters<typeof migrateV1ToV3>[0]) } })
   const [density, setDensity] = useLocalStorage<ScheduleDensity>(DENSITY_KEY, 'comfortable')
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [viewMode, setViewMode] = useState<ViewMode>('period')
@@ -45,7 +47,12 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [])
   const weekDays = useMemo(() => Array.from({ length: 5 }, (_, index) => addDays(weekStart, index)), [weekStart])
-  const weekInfo = getWeekInfo(weekStart, data.semester)
+  const activeTerm = getActiveTerm(data)
+  const weekTerms = weekDays.map((date) => getTermForDate(data, date)).filter((term, index, terms) => term && terms.findIndex((item) => item?.id === term.id) === index)
+  const displayedTerm = weekTerms.length === 1 ? weekTerms[0] : undefined
+  const weekInfo = displayedTerm ? getWeekInfo(weekDays.find((date) => getTermForDate(data, date)?.id === displayedTerm.id) ?? weekStart, displayedTerm) : null
+  const weekTermLabel = weekTerms.length > 1 ? weekTerms.map((term) => term?.name).join(' ／ ') : displayedTerm?.name ?? '目前日期不屬於任何學期'
+  const isMixedWeek = weekTerms.length > 1 || weekDays.some((date) => !getTermForDate(data, date))
   const todaySummary = getTodayTeachingSummary(data, now)
   const upcomingEvent = getNextUpcomingEvent(data.events, now)
 
@@ -58,22 +65,25 @@ export default function App() {
   const handleAddEvent = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    setData((current) => ({
-      ...current,
-      events: [...current.events, {
+    setData((current) => {
+      const date = String(form.get('date'))
+      return ({
+      ...current, events: [...current.events, {
         id: uid(), title: String(form.get('title')), type: String(form.get('type')) as 'meeting' | 'activity' | 'task',
-        date: String(form.get('date')), startTime: String(form.get('startTime')), endTime: String(form.get('endTime')),
+        termId: classifyEventTerm({ date }, current.academicTerms), date, startTime: String(form.get('startTime')), endTime: String(form.get('endTime')),
         location: String(form.get('location') || ''), color: '#A66D52', origin: 'user',
       }],
-    }))
+    })})
     setModal(null)
   }
 
   const handleAddCourse = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
+    const term = selectedSlot ? getTermForDate(data, selectedSlot.date) : activeTerm
+    if (!term || !isTermEditable(term)) { setOperationError('此日期沒有可編輯的學期，或該學期已封存。'); return }
     const course = {
-      id: uid(), subjectId: String(form.get('subjectId')), classId: String(form.get('classId')),
+      id: uid(), termId: term.id, subjectId: String(form.get('subjectId')), classId: String(form.get('classId')),
       day: Number(form.get('day')) as DayOfWeek, periodId: Number(form.get('periodId')),
       weekPattern: String(form.get('weekPattern')) as WeekPattern, room: String(form.get('room') || ''), origin: 'user' as const,
     }
@@ -92,8 +102,10 @@ export default function App() {
     const mode = String(form.get('mode')) as 'semester' | 'date' | 'cancel'
     const original = resolveSlot(data, selectedSlot.date, selectedSlot.periodId).course
     if (!original) return
+    const term = data.academicTerms.find((item) => item.id === original.termId)
+    if (!isTermEditable(term)) { setOperationError('封存學期僅供查看，請先取消封存後再編輯。'); return }
     if (mode === 'semester') {
-      const candidate = { day: original.day, periodId: original.periodId, weekPattern: String(form.get('weekPattern')) as WeekPattern }
+      const candidate = { termId: original.termId, day: original.day, periodId: original.periodId, weekPattern: String(form.get('weekPattern')) as WeekPattern }
       if (findCourseConflict(data.courses, candidate, original.id)) {
         setOperationError('修改後會與同時段的固定課程重疊，請調整輪週設定。')
         return
@@ -111,19 +123,12 @@ export default function App() {
     }
     const action = mode === 'cancel' ? 'cancel' as const : 'replace' as const
     const next = {
-      id: uid(), date: toDateKey(selectedSlot.date), periodId: selectedSlot.periodId, action,
+      id: uid(), termId: original.termId, date: toDateKey(selectedSlot.date), periodId: selectedSlot.periodId, action,
       originalCourseId: original?.id, note: String(form.get('note') || ''),
       replacement: action === 'replace' ? { subjectId: String(form.get('subjectId')), classId: String(form.get('classId')), room: String(form.get('room') || '') } : undefined,
       origin: 'user' as const,
     }
-    setData((current) => ({ ...current, overrides: [...current.overrides.filter((item) => !(item.date === next.date && item.periodId === next.periodId)), next] }))
-    setModal(null)
-  }
-
-  const handleSettings = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    setData((current) => ({ ...current, semester: { name: String(form.get('name')), startDate: String(form.get('startDate')), endDate: String(form.get('endDate')), firstWeekPattern: String(form.get('firstWeekPattern')) as 'A' | 'B' } }))
+    setData((current) => ({ ...current, overrides: [...current.overrides.filter((item) => !(item.termId === next.termId && item.date === next.date && item.periodId === next.periodId)), next] }))
     setModal(null)
   }
 
@@ -135,8 +140,8 @@ export default function App() {
         {storageStatus !== 'saved' && <StorageSafetyNotice status={storageStatus} controls={storageControls} />}
         <div className="content">
           <section className="page-heading">
-            <div><p className="eyebrow">{data.semester.name}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? '我的課表' : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>所有資料都會自動儲存在這台裝置。</p>}</div>
-            <div className="week-pill"><span>第 {weekInfo.number} 週</span><strong>{weekInfo.pattern} 週</strong></div>
+            <div><p className="eyebrow">{weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? '我的課表' : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>所有資料都會自動儲存在這台裝置。</p>}</div>
+            <div className="week-pill"><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></div>
           </section>
 
           {activePage === 'dashboard' && <DashboardCards summary={todaySummary} event={upcomingEvent} />}
@@ -160,7 +165,8 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              {viewMode === 'period' ? <ScheduleGrid data={data} weekDays={weekDays} mode={viewMode} density={density} onEmptyClick={(date, periodId) => openSlotModal('course', date, periodId)} onCourseClick={(date, periodId) => openSlotModal('editCourse', date, periodId)} /> : <TimeCalendar data={data} weekDays={weekDays} onCourseClick={(date, periodId) => openSlotModal('editCourse', date, periodId)} />}
+              {weekTerms.some((term) => term?.archivedAt) && <p className="form-error">週內包含封存學期；封存日期為唯讀模式。</p>}
+              {viewMode === 'period' ? <ScheduleGrid data={data} weekDays={weekDays} mode={viewMode} density={density} onEmptyClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('course', date, periodId) }} onCourseClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('editCourse', date, periodId) }} /> : <TimeCalendar data={data} weekDays={weekDays} onCourseClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('editCourse', date, periodId) }} />}
               <div className="legend"><span><i className="legend-a" />A 週課程</span><span><i className="legend-b" />B 週課程</span><span><i className="legend-change" />單日調課不影響固定課表</span></div>
             </section>
           )}
@@ -169,8 +175,8 @@ export default function App() {
 
       {modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={selectedSlot ? toDateKey(selectedSlot.date) : toDateKey(new Date())} />}
       {modal === 'course' && <CourseForm data={data} slot={selectedSlot} error={operationError} onSubmit={handleAddCourse} onClose={() => setModal(null)} onEvent={() => setModal('event')} />}
-      {modal === 'editCourse' && selectedSlot && <EditCourseForm data={data} slot={selectedSlot} error={operationError} onSubmit={handleCourseEdit} onClose={() => setModal(null)} onRemove={() => { setData((current) => ({ ...current, overrides: current.overrides.filter((item) => !(item.date === toDateKey(selectedSlot.date) && item.periodId === selectedSlot.periodId)) })); setModal(null) }} />}
-      {modal === 'settings' && <SettingsForm data={data} demoCount={countDemoRecords(data)} onSubmit={handleSettings} onClearDemo={() => setData((current) => clearDemoRecords(current))} onClose={() => setModal(null)} />}
+      {modal === 'editCourse' && selectedSlot && <EditCourseForm data={data} slot={selectedSlot} error={operationError} onSubmit={handleCourseEdit} onClose={() => setModal(null)} onRemove={() => { if (!window.confirm('確定移除此單日異動？此操作無法復原。')) return; setData((current) => ({ ...current, overrides: current.overrides.filter((item) => !(item.date === toDateKey(selectedSlot.date) && item.periodId === selectedSlot.periodId)) })); setModal(null) }} />}
+      {modal === 'settings' && <SettingsForm data={data} setData={setData} demoCount={countDemoRecords(data)} onClearDemo={() => setData((current) => clearDemoRecords(current))} onClose={() => setModal(null)} />}
     </div>
   )
 }
@@ -224,11 +230,13 @@ function EventForm({ onSubmit, onClose, defaultDate }: { onSubmit: (e: FormEvent
 }
 
 function CourseForm({ data, slot, error, onSubmit, onClose, onEvent }: { data: AppData; slot: SelectedSlot | null; error: string; onSubmit: (e: FormEvent<HTMLFormElement>) => void; onClose: () => void; onEvent: () => void }) {
+  const term = slot ? getTermForDate(data, slot.date) : getActiveTerm(data)
+  const periods = [...(term?.periods ?? [])].sort((a,b) => a.order-b.order)
   return <Modal title="新增固定課程" subtitle="課程會依輪週規則出現在每週課表。" onClose={onClose}><form onSubmit={onSubmit} className="form-grid">
     <label>科目<select name="subjectId">{data.subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
     <label>班級<select name="classId">{data.classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
     <label>星期<select name="day" defaultValue={slot?.date.getDay()}>{[1,2,3,4,5].map((d) => <option key={d} value={d}>週{'一二三四五'[d-1]}</option>)}</select></label>
-    <label>節次<select name="periodId" defaultValue={slot?.periodId}>{data.periods.map((p) => <option key={p.id} value={p.id}>{p.label}（{p.startTime}）</option>)}</select></label>
+    <label>節次<select name="periodId" defaultValue={slot?.periodId}>{periods.map((p) => <option key={p.id} value={p.id}>{p.label}（{p.startTime}）</option>)}</select></label>
     <label>輪週<select name="weekPattern"><option value="every">每週</option><option value="A">只在 A 週</option><option value="B">只在 B 週</option></select></label>
     <label>教室<input name="room" placeholder="依班級預設" /></label>
     {error && <p className="form-error full" role="alert">{error}</p>}
@@ -239,7 +247,7 @@ function CourseForm({ data, slot, error, onSubmit, onClose, onEvent }: { data: A
 function EditCourseForm({ data, slot, error, onSubmit, onClose, onRemove }: { data: AppData; slot: SelectedSlot; error: string; onSubmit: (e: FormEvent<HTMLFormElement>) => void; onClose: () => void; onRemove: () => void }) {
   const resolved = resolveSlot(data, slot.date, slot.periodId)
   const course = resolved.course
-  const existing = data.overrides.find((o) => o.date === toDateKey(slot.date) && o.periodId === slot.periodId)
+  const existing = data.overrides.find((o) => o.termId === course?.termId && o.date === toDateKey(slot.date) && o.periodId === slot.periodId)
   const [mode, setMode] = useState<'semester' | 'date' | 'cancel'>(existing?.action === 'cancel' ? 'cancel' : existing ? 'date' : 'semester')
   if (!course) return null
   return <Modal title="編輯課程" subtitle={`${toDateKey(slot.date)}・第 ${slot.periodId} 節。單日異動不會覆蓋固定課程。`} onClose={onClose}><form onSubmit={onSubmit} className="form-grid">
@@ -260,16 +268,87 @@ function EditCourseForm({ data, slot, error, onSubmit, onClose, onRemove }: { da
   </form></Modal>
 }
 
-function SettingsForm({ data, demoCount, onSubmit, onClose, onClearDemo }: { data: AppData; demoCount: number; onSubmit: (e: FormEvent<HTMLFormElement>) => void; onClose: () => void; onClearDemo: () => void }) {
+function SettingsForm({ data, setData, demoCount, onClose, onClearDemo }: { data: AppData; setData: Dispatch<SetStateAction<AppData>>; demoCount: number; onClose: () => void; onClearDemo: () => void }) {
+  const active = getActiveTerm(data)!
+  const [draft, setDraft] = useState<AcademicTerm>(() => ({ ...active, weekCycle: { ...active.weekCycle }, periods: active.periods.map((item) => ({ ...item })) }))
+  const [defaultDraft, setDefaultDraft] = useState(() => data.school.defaultPeriods.map((item) => ({ ...item })))
+  const [schoolName, setSchoolName] = useState(data.school.name)
   const [confirmClear, setConfirmClear] = useState(false)
-  return <Modal title="學期與輪週設定" subtitle="A/B 週會由學期起始日自動推算。" onClose={onClose}><form onSubmit={onSubmit} className="form-grid">
-    <label className="full">學期名稱<input name="name" defaultValue={data.semester.name} required /></label>
-    <label>學期起始日<input type="date" name="startDate" defaultValue={data.semester.startDate} required /></label>
-    <label>學期結束日<input type="date" name="endDate" defaultValue={data.semester.endDate} required /></label>
-    <label className="full">第一週類型<select name="firstWeekPattern" defaultValue={data.semester.firstWeekPattern}><option value="A">A 週</option><option value="B">B 週</option></select></label>
-    <section className="demo-management full"><div><strong>示範資料</strong><p>只會清除具有可靠 demo 標記的紀錄。使用者建立或曾修改而無法辨識的資料會保留。</p></div>
-      {!confirmClear ? <button type="button" className="danger-outline" disabled={demoCount === 0} onClick={() => setConfirmClear(true)}>{demoCount > 0 ? `清除示範資料（${demoCount}）` : '沒有可清除的示範資料'}</button> : <div className="confirm-clear"><p>確定清除？重新整理後不會再次加入。</p><button type="button" onClick={() => setConfirmClear(false)}>返回</button><button type="button" className="danger-button" onClick={() => { onClearDemo(); setConfirmClear(false) }}>確認清除</button></div>}
-    </section><FormActions onClose={onClose} />
+  const [error, setError] = useState('')
+  useEffect(() => setDraft({ ...active, weekCycle: { ...active.weekCycle }, periods: active.periods.map((item) => ({ ...item })) }), [active])
+  const referenced = new Set(data.courses.filter((course) => course.termId === draft.id).map((course) => course.periodId))
+  const hasUnsavedChanges = () => schoolName !== data.school.name || JSON.stringify(defaultDraft) !== JSON.stringify(data.school.defaultPeriods) || JSON.stringify(draft) !== JSON.stringify(active)
+  const confirmDiscard = () => {
+    if (!hasUnsavedChanges()) return true
+    if (!window.confirm('目前有尚未儲存的學期設定。確定放棄變更並繼續？')) return false
+    setSchoolName(data.school.name)
+    setDefaultDraft(data.school.defaultPeriods.map((item)=>({...item})))
+    setDraft({ ...active, weekCycle: { ...active.weekCycle }, periods: active.periods.map((item)=>({...item})) })
+    return true
+  }
+  const save = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const dateError = validateTermDates(data.academicTerms, draft)
+    const periodError = validatePeriods(draft.periods, referenced) || validatePeriods(defaultDraft)
+    if (dateError || periodError) { setError(dateError || periodError || '設定不正確。'); return }
+    if (!draft.weekCycle.enabled && !canDisableWeekCycle(draft.id, data.courses)) { setError('此學期仍有 A/B 週固定課程，請先調整課程後才能停用輪週。'); return }
+    setData((current) => {
+      const terms = current.academicTerms.map((term) => term.id === draft.id ? draft : term)
+      return { ...current, school: { ...current.school, name: schoolName.trim() || '我的學校', defaultPeriods: defaultDraft }, academicTerms: terms, events: reclassifyEvents(current.events, terms) }
+    })
+    onClose()
+  }
+  const switchTerm = (id: string) => {
+    if (!confirmDiscard()) return
+    const term = data.academicTerms.find((item) => item.id === id)
+    if (!term || term.archivedAt) { setError('封存學期不可設為目前操作學期。'); return }
+    setError(''); setData((current) => ({ ...current, activeTermId: id }))
+  }
+  const addTerm = () => {
+    if (!confirmDiscard()) return
+    const latestEnd = [...data.academicTerms].sort((a,b)=>b.endDate.localeCompare(a.endDate))[0]?.endDate
+    const start = latestEnd ? addDays(fromDateKey(latestEnd), 1) : new Date()
+    const id = uid(); const created: AcademicTerm = { id, name: '新學期', startDate: toDateKey(start), endDate: toDateKey(addDays(start, 120)), createdAt: new Date().toISOString(), weekCycle: { enabled: true, anchorDate: toDateKey(start), anchorPattern: 'A' }, periods: data.school.defaultPeriods.map((item) => ({ ...item })) }
+    setData((current) => ({ ...current, academicTerms: [...current.academicTerms, created], activeTermId: id })); setError('')
+  }
+  const archive = () => {
+    if (!confirmDiscard()) return
+    const replacement = data.academicTerms.find((term) => term.id !== active.id && !term.archivedAt)
+    if (!replacement) { setError('至少需要保留一個未封存學期，請先新增另一個學期。'); return }
+    setData((current) => ({ ...current, activeTermId: replacement.id, academicTerms: current.academicTerms.map((term) => term.id === active.id ? { ...term, archivedAt: new Date().toISOString() } : term) }))
+  }
+  const updatePeriod = (id: number, field: keyof SchoolPeriod, value: string|number) => setDraft((current) => ({ ...current, periods: current.periods.map((item) => item.id === id ? { ...item, [field]: value } : item) }))
+  const removePeriod = (id: number) => { if (referenced.has(id)) { setError(`節次 ID ${id} 仍被課程引用，不能移除。`); return } setDraft((current) => ({ ...current, periods: current.periods.filter((item) => item.id !== id) })) }
+  const move = (id: number, delta: number) => setDraft((current) => { const sorted=[...current.periods].sort((a,b)=>a.order-b.order); const index=sorted.findIndex((item)=>item.id===id); const target=index+delta; if(target<0||target>=sorted.length)return current; [sorted[index],sorted[target]]=[sorted[target],sorted[index]]; return {...current,periods:sorted.map((item,order)=>({...item,order:order+1}))} })
+  const addPeriod = () => setDraft((current) => { const id=Math.max(0,...current.periods.map((item)=>item.id))+1; return {...current,periods:[...current.periods,{id,order:current.periods.length+1,label:`第 ${current.periods.length+1} 節`,startTime:'08:00',endTime:'08:50'}]} })
+  const updateDefault = (id:number, field:keyof SchoolPeriod, value:string|number) => setDefaultDraft((current)=>current.map((item)=>item.id===id?{...item,[field]:value}:item))
+  const addDefault = () => setDefaultDraft((current)=>{const id=Math.max(0,...current.map((item)=>item.id))+1;return [...current,{id,order:current.length+1,label:`第 ${current.length+1} 節`,startTime:'08:00',endTime:'08:50'}]})
+  const reassignOverride = (overrideId: string) => {
+    const override = data.overrides.find((item) => item.id === overrideId && item.termId === null)
+    if (!override?.originalCourseId) { setError('此異動缺少原課程引用，無法安全歸屬。'); return }
+    const target = getSafeOverrideTerm(data, override)
+    if (!target) { setError('日期、學期、原課程或節次引用不一致，無法安全歸屬。'); return }
+    if (!window.confirm(`確定將 ${override.date} 的異動歸屬至「${target.name}」？`)) return
+    setData((current) => ({ ...current, overrides: current.overrides.map((item) => item.id === overrideId ? { ...item, termId: target.id } : item), migrationWarnings: current.migrationWarnings.filter((warning) => !(warning.entityType === 'override' && warning.entityId === overrideId)) }))
+    setError('')
+  }
+  const requestClose = () => { if (confirmDiscard()) onClose() }
+  return <Modal title="學校與學期設定" subtitle="目前操作學期由 activeTermId 唯一決定；封存不會隨切換自動發生。" onClose={requestClose}><form onSubmit={save} className="form-grid">
+    <label className="full">學校名稱<input value={schoolName} onChange={(event)=>setSchoolName(event.target.value)} required /></label>
+    <section className="demo-management full"><div><strong>學校預設節次</strong><p>新增學期時會建立獨立快照，日後修改預設值不會覆寫舊學期。</p></div>{[...defaultDraft].sort((a,b)=>a.order-b.order).map((period)=><div className="period-editor" key={period.id}><small>ID {period.id}</small><input aria-label="預設節次名稱" value={period.label} onChange={(event)=>updateDefault(period.id,'label',event.target.value)} /><input aria-label="預設開始時間" type="time" value={period.startTime} onChange={(event)=>updateDefault(period.id,'startTime',event.target.value)} /><input aria-label="預設結束時間" type="time" value={period.endTime} onChange={(event)=>updateDefault(period.id,'endTime',event.target.value)} /><button type="button" onClick={()=>setDefaultDraft((current)=>current.filter((item)=>item.id!==period.id))}>移除</button></div>)}<button type="button" onClick={addDefault}>新增預設節次</button></section>
+    <label className="full">目前操作學期<select value={data.activeTermId} onChange={(event)=>switchTerm(event.target.value)}>{data.academicTerms.filter((term)=>!term.archivedAt).map((term)=><option key={term.id} value={term.id}>{term.name}</option>)}</select></label>
+    <div className="full form-actions"><button type="button" onClick={addTerm}>新增學期</button><button type="button" className="danger-outline" onClick={archive}>封存此學期</button></div>
+    <label className="full">學期名稱<input value={draft.name} onChange={(event)=>setDraft({...draft,name:event.target.value})} required /></label>
+    <label>學期起始日<input type="date" value={draft.startDate} onChange={(event)=>setDraft({...draft,startDate:event.target.value})} required /></label>
+    <label>學期結束日<input type="date" value={draft.endDate} onChange={(event)=>setDraft({...draft,endDate:event.target.value})} required /></label>
+    <label className="full"><span><input type="checkbox" checked={draft.weekCycle.enabled} onChange={(event)=>setDraft({...draft,weekCycle:{...draft.weekCycle,enabled:event.target.checked}})} /> 啟用 A/B 輪週</span></label>
+    <label>輪週基準日期<input type="date" value={draft.weekCycle.anchorDate} onChange={(event)=>setDraft({...draft,weekCycle:{...draft.weekCycle,anchorDate:event.target.value}})} required /></label>
+    <label>基準週型<select value={draft.weekCycle.anchorPattern} onChange={(event)=>setDraft({...draft,weekCycle:{...draft.weekCycle,anchorPattern:event.target.value as 'A'|'B'}})}><option value="A">A 週</option><option value="B">B 週</option></select></label>
+    <section className="demo-management full"><div><strong>學期節次快照</strong><p>排序與 ID 分離；上下移動不會改變課程引用的 ID。</p></div>{[...draft.periods].sort((a,b)=>a.order-b.order).map((period)=><div className="period-editor" key={period.id}><small>ID {period.id}</small><input aria-label="節次名稱" value={period.label} onChange={(event)=>updatePeriod(period.id,'label',event.target.value)} /><input aria-label="開始時間" type="time" value={period.startTime} onChange={(event)=>updatePeriod(period.id,'startTime',event.target.value)} /><input aria-label="結束時間" type="time" value={period.endTime} onChange={(event)=>updatePeriod(period.id,'endTime',event.target.value)} /><button type="button" onClick={()=>move(period.id,-1)}>↑</button><button type="button" onClick={()=>move(period.id,1)}>↓</button><button type="button" onClick={()=>removePeriod(period.id)}>移除</button></div>)}<button type="button" onClick={addPeriod}>新增節次</button></section>
+    {data.migrationWarnings.length>0 && <section className="demo-management full"><div><strong>資料遷移警告</strong><p>不會自動猜測學期或刪除資料。</p></div>{data.migrationWarnings.map((warning)=>{const override=warning.entityType==='override'?data.overrides.find((item)=>item.id===warning.entityId):undefined;const course=override?.originalCourseId?data.courses.find((item)=>item.id===override.originalCourseId):undefined;const subject=course?data.subjects.find((item)=>item.id===course.subjectId):undefined;const schoolClass=course?data.classes.find((item)=>item.id===course.classId):undefined;const courseLabel=course?`${subject?.name ?? course.subjectId}・${schoolClass?.name ?? course.classId}（${course.id}）`:override?.originalCourseId??'未設定';return <div className="warning-row" key={warning.id}><div><strong>{warning.entityType==='override'?'無法歸屬的單日異動':'無法歸屬的事件'}</strong><p>{override?`${override.date}・原課程 ${courseLabel}・節次 ID ${override.periodId}`:`紀錄 ID ${warning.entityId}`}</p><p>{warning.message}</p></div>{override&&<button type="button" onClick={()=>reassignOverride(override.id)}>驗證並重新歸屬</button>}</div>})}</section>}
+    {error && <p className="form-error full" role="alert">{error}</p>}
+    <section className="demo-management full"><div><strong>示範資料</strong><p>只會清除具有可靠 demo 標記的紀錄。</p></div>{!confirmClear?<button type="button" className="danger-outline" disabled={!demoCount} onClick={()=>setConfirmClear(true)}>{demoCount?`清除示範資料（${demoCount}）`:'沒有可清除的示範資料'}</button>:<div className="confirm-clear"><p>確定清除？</p><button type="button" onClick={()=>setConfirmClear(false)}>返回</button><button type="button" className="danger-button" onClick={()=>{onClearDemo();setConfirmClear(false)}}>確認清除</button></div>}</section>
+    <FormActions onClose={requestClose} />
   </form></Modal>
 }
 
@@ -282,5 +361,5 @@ function SubjectPanel({ data, setData }: { data: AppData; setData: Dispatch<SetS
 
 function EventsPanel({ data, setData, onAdd }: { data: AppData; setData: Dispatch<SetStateAction<AppData>>; onAdd: () => void }) {
   const events = [...data.events].sort((a,b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`))
-  return <section className="panel events-panel"><div className="panel-heading"><div><h2>會議與活動</h2><p>一次性行程獨立於固定課表。</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} />新增活動</button></div>{events.map((e) => <div className="event-row" key={e.id}><div className="event-date"><strong>{e.date.slice(5).replace('-', '/')}</strong><span>{e.startTime}</span></div><i style={{ background: e.color }} /><div><strong>{e.title}</strong><span>{e.location || '未設定地點'}・{e.startTime}–{e.endTime}</span></div><button onClick={() => setData((current) => ({ ...current, events: current.events.filter((item) => item.id !== e.id) }))}>刪除</button></div>)}</section>
+  return <section className="panel events-panel"><div className="panel-heading"><div><h2>會議與活動</h2><p>一次性行程獨立於固定課表。</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} />新增活動</button></div>{events.map((e) => <div className="event-row" key={e.id}><div className="event-date"><strong>{e.date.slice(5).replace('-', '/')}</strong><span>{e.startTime}</span></div><i style={{ background: e.color }} /><div><strong>{e.title}</strong><span>{e.location || '未設定地點'}・{e.startTime}–{e.endTime}</span></div><button onClick={() => { if (window.confirm(`確定刪除「${e.title}」？此操作無法復原。`)) setData((current) => ({ ...current, events: current.events.filter((item) => item.id !== e.id) })) }}>刪除</button></div>)}</section>
 }

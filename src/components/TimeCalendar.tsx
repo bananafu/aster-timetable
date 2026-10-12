@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import { getTermForDate } from '../lib/academic'
 import { dayNames, formatShortDate, toDateKey } from '../lib/date'
 import { resolveSlot } from '../lib/schedule'
 import type { AppData } from '../types'
@@ -19,7 +20,7 @@ export function TimeCalendar({ data, weekDays, onCourseClick }: { data: AppData;
     <div className="time-labels">{hours.map((hour) => <span key={hour}>{String(hour).padStart(2, '0')}:00</span>)}</div>
     {weekDays.map((date) => <div className="time-column" key={toDateKey(date)} style={{ height: hours.length * HOUR_HEIGHT }}>
       {hours.map((hour) => <i key={hour} style={{ top: (hour - START_HOUR) * HOUR_HEIGHT }} />)}
-      {data.periods.map((period) => {
+      {[...(getTermForDate(data, date)?.periods ?? [])].sort((a,b) => a.order-b.order).map((period) => {
         const slot = resolveSlot(data, date, period.id)
         if (!slot.subjectId || !slot.classId || slot.status === 'cancelled') return null
         const subject = data.subjects.find((item) => item.id === slot.subjectId)

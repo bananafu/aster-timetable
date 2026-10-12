@@ -5,6 +5,7 @@ export type StorageStatus = 'saved' | 'read-error' | 'write-error' | 'conflict'
 interface LocalStorageOptions<T> {
   migrate?: (value: T) => T
   validate?: (value: unknown) => value is T
+  legacy?: { key: string; validate: (value: unknown) => boolean; migrate: (value: unknown) => T }
 }
 
 export interface StorageControls {
@@ -31,6 +32,17 @@ export function loadStoredValue<T>(storage: Pick<Storage, 'getItem'>, key: strin
   let raw: string | null = null
   try {
     raw = storage.getItem(key)
+    if (raw === null && options.legacy) {
+      const legacyRaw = storage.getItem(options.legacy.key)
+      if (legacyRaw !== null) {
+        raw = legacyRaw
+        const legacyParsed: unknown = JSON.parse(legacyRaw)
+        if (!options.legacy.validate(legacyParsed)) throw new Error('Invalid legacy data structure')
+        const migrated = options.legacy.migrate(legacyParsed)
+        if (options.validate && !options.validate(migrated)) throw new Error('Invalid migrated data structure')
+        return { value: migrated, status: 'saved', raw: null, shouldPersist: true }
+      }
+    }
     if (raw === null) return { value: initialValue, status: 'saved', raw: null, shouldPersist: true }
     const value = parseValue(raw, options)
     return { value, status: 'saved', raw, shouldPersist: JSON.stringify(value) !== raw }
