@@ -18,9 +18,9 @@
 
 驗收：成功遷移不遺失 ID 或內容；失敗不寫入 v4、不修改舊 key；既有 v4 優先且不 fallback。
 
-## Phase 2 — Project and school management UI（待辦）
+## Phase 2 — Project and school management UI（進行中）
 
-加入 Toki 品牌介面、專案新增／命名／切換、學年度與學期獨立欄位、學校與 TeachingUnit 設定。
+Phase 2A 已完成 v4 runtime 單一寫入接入、首次安全 migration、專案新增／重新命名／切換、基本資料隔離及 Toki 品牌介面。完整多校、班級與 TeachingUnit 設定 UI 留待 Phase 2B。
 
 驗收：同學期可建立多專案；切換不丟失未儲存資料；各校節次與輪週設定可安全維護。
 

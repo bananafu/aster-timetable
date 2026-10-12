@@ -6,6 +6,7 @@ interface LocalStorageOptions<T> {
   migrate?: (value: T) => T
   validate?: (value: unknown) => value is T
   legacy?: { key: string; validate: (value: unknown) => boolean; migrate: (value: unknown) => T }
+  loader?: (storage: Pick<Storage, 'getItem'>, key: string, initialValue: T) => StorageLoadResult<T>
 }
 
 export interface StorageControls {
@@ -19,6 +20,7 @@ export interface StorageLoadResult<T> {
   value: T
   status: StorageStatus
   raw: string | null
+  rawBackup?: string | null
   shouldPersist: boolean
 }
 
@@ -67,20 +69,31 @@ export function getExternalUpdateDecision(hasPendingChanges: boolean, currentRaw
 }
 
 export function useLocalStorage<T>(key: string, initialValue: T, options: LocalStorageOptions<T> = {}) {
-  const [initialLoad] = useState(() => loadStoredValue(localStorage, key, initialValue, options))
+  const [initialLoad] = useState(() => options.loader ? options.loader(localStorage, key, initialValue) : loadStoredValue(localStorage, key, initialValue, options))
   const [value, setValueState] = useState<T>(initialLoad.value)
   const [status, setStatus] = useState<StorageStatus>(initialLoad.status)
-  const [rawBackup, setRawBackup] = useState<string | null>(initialLoad.status === 'read-error' ? initialLoad.raw : null)
+  const [rawBackup, setRawBackup] = useState<string | null>(initialLoad.rawBackup ?? (initialLoad.status === 'read-error' ? initialLoad.raw : null))
   const pendingRef = useRef(initialLoad.shouldPersist)
   const blockedRef = useRef(initialLoad.status !== 'saved')
   const lastStoredRawRef = useRef<string | null>(initialLoad.raw)
   const externalRawRef = useRef<string | null>(null)
   const valueRef = useRef(value)
+  const validateRef = useRef(options.validate)
   valueRef.current = value
+  validateRef.current = options.validate
 
   const setValue: Dispatch<SetStateAction<T>> = useCallback((next) => {
-    pendingRef.current = true
-    setValueState(next)
+    setValueState((current) => {
+      const resolved = typeof next === 'function' ? (next as (value: T) => T)(current) : next
+      if (validateRef.current && !validateRef.current(resolved)) {
+        blockedRef.current = true
+        setStatus('write-error')
+        return current
+      }
+      pendingRef.current = true
+      valueRef.current = resolved
+      return resolved
+    })
   }, [])
 
   const applyRaw = useCallback((raw: string | null) => {
@@ -100,6 +113,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
     const timer = window.setTimeout(() => {
       if (!pendingRef.current || blockedRef.current) return
       try {
+        if (validateRef.current && !validateRef.current(value)) throw new Error('Invalid data structure')
         const raw = JSON.stringify(value)
         localStorage.setItem(key, raw)
         lastStoredRawRef.current = raw
@@ -108,7 +122,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
         setStatus('saved')
       } catch {
         blockedRef.current = true
-        setRawBackup(lastStoredRawRef.current)
+        setRawBackup((current) => current ?? lastStoredRawRef.current)
         setStatus('write-error')
       }
     }, 150)
@@ -151,6 +165,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
     },
     keepLocal: () => {
       try {
+        if (options.validate && !options.validate(valueRef.current)) throw new Error('Invalid data structure')
         const raw = JSON.stringify(valueRef.current)
         localStorage.setItem(key, raw)
         lastStoredRawRef.current = raw
@@ -166,6 +181,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
     },
     reset: () => {
       try {
+        if (options.validate && !options.validate(initialValue)) throw new Error('Invalid initial data structure')
         const raw = JSON.stringify(initialValue)
         localStorage.setItem(key, raw)
         setValueState(initialValue)
