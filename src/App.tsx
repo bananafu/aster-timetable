@@ -5,6 +5,7 @@ import { Topbar } from './components/Topbar'
 import { ScheduleGrid } from './components/ScheduleGrid'
 import { TimeCalendar } from './components/TimeCalendar'
 import { Modal } from './components/Modal'
+import { AcademicSettingsV4 } from './components/AcademicSettingsV4'
 import { createProject, mergeProjectView, projectToLegacyView, renameProject, switchActiveProject } from './data/projectRuntime'
 import { useAppDataV4 } from './hooks/useAppDataV4'
 import { useLocalStorage, type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
@@ -330,6 +331,7 @@ function ProjectForm({ data, setData, onClose }: { data: AppDataV4; setData: Dis
         <label>結束日<input type="date" value={draft.endDate} onChange={(event) => setDraft({ ...draft, endDate: event.target.value })} required /></label>
         <div className="form-actions full"><button type="submit" className="primary-button">建立並切換</button></div>
       </form>
+      <AcademicSettingsV4 data={data} setData={setData} />
       {data.migrationWarnings.length > 0 && <section className="migration-warning-list"><strong>資料遷移警告</strong><p>以下資料仍完整保留，不會自動套用或刪除。</p>{data.migrationWarnings.map((warning) => <div className="warning-row" key={warning.id}><div><strong>{warning.entityType === 'override' ? '未歸屬的單日異動' : '待確認資料'}</strong><p>紀錄 ID {warning.entityId}</p><p>{warning.message}</p></div></div>)}</section>}
       {error && <p className="form-error" role="alert">{error}</p>}
     </div>

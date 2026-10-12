@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initialData } from '../data/seed'
+import { addSchool } from '../data/academicSettingsV4'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { APP_DATA_V1_KEY, APP_DATA_V3_KEY, APP_DATA_V4_KEY } from '../data/storageV4'
 import { useAppDataV4 } from './useAppDataV4'
@@ -13,7 +14,9 @@ function Harness() {
     <output data-testid="name">{active?.name}</output><output data-testid="status">{status}</output>
     <output data-testid="backup">{controls.rawBackup ?? ''}</output>
     <button onClick={() => setData((current) => ({ ...current, projects: current.projects.map((item) => item.id === current.activeProjectId ? { ...item, name: '本頁版本' } : item) }))}>rename</button>
+    <button onClick={() => setData((current) => addSchool(current, current.activeProjectId!, { name: '第二所學校', color: '#718B6C' }, 'persisted-school'))}>add school</button>
     <button onClick={controls.acceptExternal}>accept</button>
+    <output data-testid="school-count">{data.schools.filter((item) => item.projectId === data.activeProjectId).length}</output>
   </div>
 }
 
@@ -39,6 +42,18 @@ describe('useAppDataV4 runtime integration', () => {
     render(<Harness />)
     expect(screen.getByTestId('status').textContent).toBe('saved')
     expect(screen.getByTestId('name').textContent).toContain('原有課表')
+  })
+
+  it('學校設定寫入 v4 後，重新掛載仍完整保留', () => {
+    localStorage.setItem(APP_DATA_V4_KEY, JSON.stringify(migrateV3ToV4(initialData)))
+    const first = render(<Harness />)
+    fireEvent.click(screen.getByText('add school'))
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.getByTestId('school-count').textContent).toBe('2')
+    first.unmount()
+    render(<Harness />)
+    expect(screen.getByTestId('school-count').textContent).toBe('2')
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V4_KEY)!).schools.some((item: { id: string }) => item.id === 'persisted-school')).toBe(true)
   })
 
   it('遷移失敗時保持 read-error，不建立 v4 且保留損壞 v3', () => {

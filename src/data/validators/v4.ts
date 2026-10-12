@@ -11,12 +11,13 @@ const date = (value: unknown): value is string => {
 }
 const timestamp = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value))
 const time = (value: unknown): value is string => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value)
+const fiveMinuteStep = (value: string) => Number(value.slice(3)) % 5 === 0
 const origin = (value: unknown): value is DataOrigin | undefined => value === undefined || value === 'demo' || value === 'user'
 const unique = <T>(items: T[], key: (item: T) => string | number) => new Set(items.map(key)).size === items.length
 
 function isPeriod(value: unknown): value is SchoolPeriod {
   return record(value) && Number.isInteger(value.id) && Number.isInteger(value.order) && text(value.label)
-    && time(value.startTime) && time(value.endTime) && value.startTime < value.endTime
+    && time(value.startTime) && time(value.endTime) && fiveMinuteStep(value.startTime) && fiveMinuteStep(value.endTime) && value.startTime < value.endTime
 }
 
 function validPeriods(periods: SchoolPeriod[]) {

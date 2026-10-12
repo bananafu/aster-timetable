@@ -20,7 +20,21 @@
 
 ## Phase 2 — Project and school management UI（進行中）
 
-Phase 2A 已完成 v4 runtime 單一寫入接入、首次安全 migration、專案新增／重新命名／切換、基本資料隔離及 Toki 品牌介面。完整多校、班級與 TeachingUnit 設定 UI 留待 Phase 2B。
+### Phase 2A — v4 runtime 與專案切換（完成）
+
+已完成 v4 runtime 單一寫入接入、首次安全 migration、專案新增／重新命名／切換、基本資料隔離及 Toki 品牌介面。
+
+### Phase 2B — 多學校與任教單位設定（完成）
+
+已完成 project-scoped School、識別色、多 TeachingUnit、獨立日期／節次／A/B 週設定，以及班級新增、編輯、歸屬與引用安全保護。
+
+### Phase 2C — 跨校課表總覽（待辦）
+
+以實際時間整合不同學校與任教單位的課程，提供跨校衝突辨識；不得以 period ID 強制對齊。
+
+### Phase 2D — Phase 2 操作整合與穩定化（待辦）
+
+補齊多校設定的導覽、空狀態、響應式與完整操作驗收，再進入 Lesson editing 階段。
 
 驗收：同學期可建立多專案；切換不丟失未儲存資料；各校節次與輪週設定可安全維護。
 
