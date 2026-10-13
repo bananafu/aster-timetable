@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { AppDataV4 } from '../types'
 import { initialData } from './seed'
 import { migrateV3ToV4 } from './migrationsV4'
-import { createProject, mergeProjectView, projectToLegacyView, renameProject, switchActiveProject } from './projectRuntime'
+import { archiveProject, copyProject, createBlankProject, createProject, deleteProject, mergeProjectView, projectToLegacyView, reactivateProject, renameProject, switchActiveProject } from './projectRuntime'
+import { isAppDataV4 } from './validators/v4'
 
 function twoProjects(): AppDataV4 {
   const data = migrateV3ToV4(structuredClone(initialData))
@@ -20,6 +21,73 @@ function twoProjects(): AppDataV4 {
 }
 
 describe('v4 project runtime projection', () => {
+  it('建立空白專案使用明確預設，不複製目前專案資料', () => {
+    const source = migrateV3ToV4(structuredClone(initialData))
+    const ids = ['blank-project', 'blank-school', 'blank-unit']
+    const created = createBlankProject(source, { name: '空白課表', academicYear: 116, semester: 'second', startDate: '2028-02-01', endDate: '2028-06-30' }, () => ids.shift()!, '2028-01-01T00:00:00.000Z')
+    expect(created.schools.find((item) => item.id === 'blank-school')).toMatchObject({ name: '我的學校', color: '#A5A051' })
+    expect(created.teachingUnits.find((item) => item.id === 'blank-unit')).toMatchObject({ schoolLevel: 'senior-high', startDate: '2028-02-01', endDate: '2028-06-30' })
+    expect(created.classes.filter((item) => item.projectId === 'blank-project')).toHaveLength(0)
+    expect(created.recurringLessons.filter((item) => item.projectId === 'blank-project')).toHaveLength(0)
+    expect(isAppDataV4(created)).toBe(true)
+  })
+
+  it('複製新學期建立全新 project-scoped IDs 且不複製事件與異動', () => {
+    const source = migrateV3ToV4(structuredClone(initialData))
+    let counter = 0
+    const copied = copyProject(source, {
+      sourceProjectId: source.activeProjectId!, name: '116 學年度課表', academicYear: 116, semester: 'first',
+      units: source.teachingUnits.map((unit) => ({ sourceUnitId: unit.id, startDate: '2027-08-30', endDate: '2028-01-19', anchorDate: '2027-08-30', anchorPattern: 'B' })),
+    }, () => `copy-${++counter}`, '2027-07-01T00:00:00.000Z')
+    const copiedId = copied.activeProjectId!
+    const originalIds = new Set([
+      ...source.schools.map((item) => item.id), ...source.teachingUnits.map((item) => item.id),
+      ...source.classes.map((item) => item.id), ...source.recurringLessons.map((item) => item.id),
+    ])
+    const newEntityIds = [
+      ...copied.schools.filter((item) => item.projectId === copiedId).map((item) => item.id),
+      ...copied.teachingUnits.filter((item) => item.projectId === copiedId).map((item) => item.id),
+      ...copied.classes.filter((item) => item.projectId === copiedId).map((item) => item.id),
+      ...copied.recurringLessons.filter((item) => item.projectId === copiedId).map((item) => item.id),
+    ]
+    expect(newEntityIds.every((id) => !originalIds.has(id))).toBe(true)
+    expect(copied.recurringLessons.filter((item) => item.projectId === copiedId)).toHaveLength(source.recurringLessons.length)
+    expect(copied.events.filter((item) => item.projectId === copiedId)).toHaveLength(0)
+    expect(copied.overrides.filter((item) => item.projectId === copiedId)).toHaveLength(0)
+    expect(copied.teachingUnits.find((item) => item.projectId === copiedId)).toMatchObject({ startDate: '2027-08-30', endDate: '2028-01-19', weekCycle: { anchorDate: '2027-08-30', anchorPattern: 'B', enabled: true } })
+    expect(isAppDataV4(copied)).toBe(true)
+  })
+
+  it('複製時缺少新日期或含多版本課程會阻止操作', () => {
+    const source = migrateV3ToV4(structuredClone(initialData))
+    expect(() => copyProject(source, { sourceProjectId: source.activeProjectId!, name: '新學期', academicYear: 116, semester: 'first', units: [] }, () => 'id')).toThrow()
+    source.recurringLessons.push({ ...source.recurringLessons[0], id: 'version-2', effectiveStart: '2026-10-01', effectiveEnd: source.recurringLessons[0].effectiveEnd })
+    source.recurringLessons[0].effectiveEnd = '2026-09-30'
+    expect(() => copyProject(source, {
+      sourceProjectId: source.activeProjectId!, name: '新學期', academicYear: 116, semester: 'first',
+      units: source.teachingUnits.map((unit) => ({ sourceUnitId: unit.id, startDate: '2027-08-30', endDate: '2028-01-19', anchorDate: '2027-08-30', anchorPattern: 'A' })),
+    }, () => crypto.randomUUID())).toThrow('Versioned lessons')
+  })
+
+  it('封存、重新啟用與刪除維持其他專案及全域科目不變', () => {
+    const data = twoProjects()
+    const firstId = data.projects[0].id
+    const subjects = structuredClone(data.subjects)
+    const archived = archiveProject(data, firstId, '2027-01-01T00:00:00.000Z')
+    expect(archived.activeProjectId).toBe('project-2')
+    expect(archived.projects.find((item) => item.id === firstId)?.archivedAt).toBeTruthy()
+    const restored = reactivateProject(archived, firstId, '2027-01-02T00:00:00.000Z')
+    expect(restored.activeProjectId).toBe(firstId)
+    expect(restored.projects.find((item) => item.id === firstId)?.archivedAt).toBeUndefined()
+    const deleted = deleteProject(restored, firstId)
+    expect(deleted.projects.map((item) => item.id)).toEqual(['project-2'])
+    expect(deleted.schools.some((item) => item.projectId === firstId)).toBe(false)
+    expect(deleted.recurringLessons.some((item) => item.projectId === firstId)).toBe(false)
+    expect(deleted.projects.find((item) => item.id === 'project-2')).toEqual(data.projects.find((item) => item.id === 'project-2'))
+    expect(deleted.subjects).toEqual(subjects)
+    expect(isAppDataV4(deleted)).toBe(true)
+  })
+
   it('可新增、重新命名與切換專案，且不複製業務資料', () => {
     const source = migrateV3ToV4(structuredClone(initialData))
     const ids = ['new-project', 'new-school', 'new-unit']

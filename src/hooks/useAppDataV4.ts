@@ -7,6 +7,22 @@ import type { AppDataV4 } from '../types'
 import { useLocalStorage, type StorageLoadResult } from './useLocalStorage'
 
 export function createInitialAppDataV4(): AppDataV4 {
+  return {
+    schemaVersion: 4,
+    activeProjectId: null,
+    projects: [],
+    schools: [],
+    teachingUnits: [],
+    subjects: [],
+    classes: [],
+    recurringLessons: [],
+    events: [],
+    overrides: [],
+    migrationWarnings: [],
+  }
+}
+
+export function createExampleAppDataV4(): AppDataV4 {
   return migrateV3ToV4(initialData)
 }
 

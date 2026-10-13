@@ -9,6 +9,7 @@ type ScheduleScope = 'all' | 'school'
 interface Props {
   data: AppDataV4
   weekDays: Date[]
+  projectId?: string | null
 }
 
 function minutes(time: string) {
@@ -39,9 +40,9 @@ function LessonCard({ lesson, previous }: { lesson: ResolvedLessonV4; previous?:
   </article>
 }
 
-export function MultiSchoolSchedule({ data, weekDays }: Props) {
+export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjectId }: Props) {
   const [scope, setScope] = useState<ScheduleScope>('all')
-  const projectId = data.activeProjectId
+  const projectId = requestedProjectId === undefined ? data.activeProjectId : requestedProjectId
   const schools = useMemo(() => data.schools.filter((item) => item.projectId === projectId), [data.schools, projectId])
   const units = useMemo(() => data.teachingUnits.filter((item) => item.projectId === projectId), [data.teachingUnits, projectId])
   const [schoolId, setSchoolId] = useState(() => schools[0]?.id ?? '')

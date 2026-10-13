@@ -17,6 +17,36 @@ describe('App v4 runtime', () => {
   beforeEach(() => { vi.useFakeTimers(); removeAppKeys() })
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); removeAppKeys() })
 
+  it('首次使用不自動建立範例，預覽範例也不污染正式資料', () => {
+    render(<App />)
+    expect(screen.getByRole('button', { name: '建立空白課表' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看範例' }))
+    expect(screen.getByText('唯讀範例')).toBeTruthy()
+    act(() => vi.advanceTimersByTime(200))
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V4_KEY)!)
+    expect(stored.projects).toEqual([])
+    expect(stored.recurringLessons).toEqual([])
+  })
+
+  it('首次使用建立空白專案後只寫入 v4 且不改動舊 key', () => {
+    localStorage.setItem(APP_DATA_V3_KEY, JSON.stringify(initialData))
+    const migrated = migrateV3ToV4(initialData)
+    migrated.projects = []; migrated.schools = []; migrated.teachingUnits = []; migrated.classes = []; migrated.recurringLessons = []; migrated.events = []; migrated.overrides = []; migrated.activeProjectId = null
+    localStorage.setItem(APP_DATA_V4_KEY, JSON.stringify(migrated))
+    const oldV3 = localStorage.getItem(APP_DATA_V3_KEY)
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '建立空白課表' }))
+    fireEvent.change(screen.getByLabelText('專案名稱'), { target: { value: '我的新課表' } })
+    fireEvent.click(screen.getByRole('button', { name: '建立並開始' }))
+    act(() => vi.advanceTimersByTime(200))
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V4_KEY)!)
+    expect(stored.projects).toHaveLength(1)
+    expect(stored.projects[0].name).toBe('我的新課表')
+    expect(stored.classes).toEqual([])
+    expect(stored.recurringLessons).toEqual([])
+    expect(localStorage.getItem(APP_DATA_V3_KEY)).toBe(oldV3)
+  })
+
   it('切換專案後更新唯一 v4 state，並顯示隔離後的空課表資料', () => {
     const first = migrateV3ToV4(initialData)
     const ids = ['project-2', 'school-2', 'unit-2']

@@ -7,9 +7,10 @@ interface TopbarProps {
   onToday: () => void
   onAdd: () => void
   onMenu: () => void
+  readOnly?: boolean
 }
 
-export function Topbar({ weekStart, onWeekChange, onToday, onAdd, onMenu }: TopbarProps) {
+export function Topbar({ weekStart, onWeekChange, onToday, onAdd, onMenu, readOnly = false }: TopbarProps) {
   return (
     <header className="topbar">
       <button className="icon-button menu-button" onClick={onMenu} aria-label="開啟選單"><Menu size={21} /></button>
@@ -24,7 +25,7 @@ export function Topbar({ weekStart, onWeekChange, onToday, onAdd, onMenu }: Topb
       <div className="topbar-actions">
         <button className="icon-button search-button" aria-label="搜尋"><Search size={19} /></button>
         <button className="icon-button notification-button" aria-label="通知"><Bell size={19} /><i /></button>
-        <button className="primary-button" onClick={onAdd}><Plus size={18} />新增</button>
+        {!readOnly && <button className="primary-button" onClick={onAdd}><Plus size={18} />新增</button>}
       </div>
     </header>
   )
