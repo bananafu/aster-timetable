@@ -1,0 +1,153 @@
+import { fromDateKey, startOfWeek, toDateKey } from './date'
+import type { AlternatingWeekPattern, AppDataV4, DayOfWeek, TeachingUnit } from '../types'
+
+export type ResolvedLessonStatus = 'regular' | 'replaced' | 'cancelled'
+
+export interface ResolvedLessonV4 {
+  id: string
+  seriesId: string
+  date: string
+  projectId: string
+  schoolId: string
+  schoolName: string
+  schoolColor: string
+  teachingUnitId: string
+  teachingUnitName: string
+  subjectId: string
+  subjectName: string
+  subjectColor: string
+  classId: string
+  className: string
+  periodId: number
+  periodLabel: string
+  startTime: string
+  endTime: string
+  room?: string
+  status: ResolvedLessonStatus
+  overrideId?: string
+  note?: string
+  hasConflict: boolean
+}
+
+export interface ScheduleFiltersV4 {
+  schoolId?: string
+  teachingUnitId?: string
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+
+export function getTeachingUnitWeekPattern(date: Date, unit: TeachingUnit): AlternatingWeekPattern | null {
+  if (!unit.weekCycle.enabled) return null
+  const targetMonday = startOfWeek(date)
+  const anchorMonday = startOfWeek(fromDateKey(unit.weekCycle.anchorDate))
+  const weekOffset = Math.round((targetMonday.getTime() - anchorMonday.getTime()) / WEEK_MS)
+  const samePattern = Math.abs(weekOffset) % 2 === 0
+  return samePattern
+    ? unit.weekCycle.anchorPattern
+    : unit.weekCycle.anchorPattern === 'A' ? 'B' : 'A'
+}
+
+export function timeIntervalsOverlap(
+  left: Pick<ResolvedLessonV4, 'startTime' | 'endTime'>,
+  right: Pick<ResolvedLessonV4, 'startTime' | 'endTime'>,
+): boolean {
+  return left.startTime < right.endTime && right.startTime < left.endTime
+}
+
+function lessonAppliesOnDate(dateKey: string, day: DayOfWeek, weekPattern: string, unit: TeachingUnit, date: Date) {
+  if (dateKey < unit.startDate || dateKey > unit.endDate || date.getDay() !== day) return false
+  if (weekPattern === 'every') return true
+  return getTeachingUnitWeekPattern(date, unit) === weekPattern
+}
+
+export function resolveProjectDay(
+  data: AppDataV4,
+  projectId: string,
+  date: Date,
+  filters: ScheduleFiltersV4 = {},
+): ResolvedLessonV4[] {
+  const dateKey = toDateKey(date)
+  const units = data.teachingUnits.filter((unit) => unit.projectId === projectId
+    && (!filters.schoolId || unit.schoolId === filters.schoolId)
+    && (!filters.teachingUnitId || unit.id === filters.teachingUnitId))
+  const unitIds = new Set(units.map((unit) => unit.id))
+  const schools = new Map(data.schools.filter((school) => school.projectId === projectId).map((school) => [school.id, school]))
+  const subjects = new Map(data.subjects.map((subject) => [subject.id, subject]))
+  const classes = new Map(data.classes.filter((item) => item.projectId === projectId).map((item) => [item.id, item]))
+  const overrides = data.overrides.filter((item) => item.projectId === projectId
+    && item.teachingUnitId !== null && unitIds.has(item.teachingUnitId) && item.date === dateKey)
+
+  const resolved = data.recurringLessons.flatMap<ResolvedLessonV4>((lesson) => {
+    if (lesson.projectId !== projectId || !unitIds.has(lesson.teachingUnitId)
+      || dateKey < lesson.effectiveStart || (lesson.effectiveEnd && dateKey > lesson.effectiveEnd)) return []
+    const unit = units.find((item) => item.id === lesson.teachingUnitId)
+    if (!unit || !lessonAppliesOnDate(dateKey, lesson.day, lesson.weekPattern, unit, date)) return []
+    const school = schools.get(unit.schoolId)
+    const period = unit.periods.find((item) => item.id === lesson.periodId)
+    const originalSubject = subjects.get(lesson.subjectId)
+    const originalClass = classes.get(lesson.classId)
+    if (!school || !period || !originalSubject || !originalClass) return []
+
+    const activeSlotLessonCount = data.recurringLessons.filter((candidate) => candidate.projectId === projectId
+      && candidate.teachingUnitId === unit.id && candidate.periodId === lesson.periodId
+      && dateKey >= candidate.effectiveStart && (!candidate.effectiveEnd || dateKey <= candidate.effectiveEnd)
+      && lessonAppliesOnDate(dateKey, candidate.day, candidate.weekPattern, unit, date)).length
+    const override = overrides.find((item) => item.teachingUnitId === unit.id && item.periodId === lesson.periodId
+      && (item.originalLessonId === lesson.id || (!item.originalLessonId && activeSlotLessonCount === 1)))
+    const replacementSubject = override?.action === 'replace' ? subjects.get(override.replacement?.subjectId ?? '') : undefined
+    const replacementClass = override?.action === 'replace' ? classes.get(override.replacement?.classId ?? '') : undefined
+    const status: ResolvedLessonStatus = override?.action === 'cancel' ? 'cancelled' : override?.action === 'replace' ? 'replaced' : 'regular'
+    const subject = replacementSubject ?? originalSubject
+    const schoolClass = replacementClass ?? originalClass
+
+    return [{
+      id: lesson.id,
+      seriesId: lesson.seriesId,
+      date: dateKey,
+      projectId,
+      schoolId: school.id,
+      schoolName: school.name,
+      schoolColor: school.color,
+      teachingUnitId: unit.id,
+      teachingUnitName: unit.name,
+      subjectId: subject.id,
+      subjectName: subject.name,
+      subjectColor: subject.color,
+      classId: schoolClass.id,
+      className: schoolClass.name,
+      periodId: period.id,
+      periodLabel: period.label,
+      startTime: period.startTime,
+      endTime: period.endTime,
+      room: override?.action === 'replace' ? override.replacement?.room : lesson.room ?? schoolClass.room,
+      status,
+      overrideId: override?.id,
+      note: override?.note,
+      hasConflict: false,
+    }]
+  }).sort((left, right) => left.startTime.localeCompare(right.startTime)
+    || left.endTime.localeCompare(right.endTime)
+    || left.schoolName.localeCompare(right.schoolName)
+    || left.teachingUnitName.localeCompare(right.teachingUnitName))
+
+  const conflicts = new Set<string>()
+  const activeLessons = resolved.filter((item) => item.status !== 'cancelled')
+  activeLessons.forEach((lesson, index) => {
+    activeLessons.slice(index + 1).forEach((candidate) => {
+      if (timeIntervalsOverlap(lesson, candidate)) {
+        conflicts.add(lesson.id)
+        conflicts.add(candidate.id)
+      }
+    })
+  })
+  return resolved.map((item) => ({ ...item, hasConflict: conflicts.has(item.id) }))
+}
+
+export function resolveProjectWeek(
+  data: AppDataV4,
+  projectId: string,
+  dates: Date[],
+  filters: ScheduleFiltersV4 = {},
+) {
+  return dates.map((date) => ({ date, lessons: resolveProjectDay(data, projectId, date, filters) }))
+}

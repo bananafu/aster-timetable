@@ -6,6 +6,7 @@ import { ScheduleGrid } from './components/ScheduleGrid'
 import { TimeCalendar } from './components/TimeCalendar'
 import { Modal } from './components/Modal'
 import { AcademicSettingsV4 } from './components/AcademicSettingsV4'
+import { MultiSchoolSchedule } from './components/MultiSchoolSchedule'
 import { createProject, mergeProjectView, projectToLegacyView, renameProject, switchActiveProject } from './data/projectRuntime'
 import { useAppDataV4 } from './hooks/useAppDataV4'
 import { useLocalStorage, type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
@@ -56,6 +57,7 @@ export default function App() {
   }, [])
   const weekDays = useMemo(() => Array.from({ length: 5 }, (_, index) => addDays(weekStart, index)), [weekStart])
   const activeTerm = getActiveTerm(data)
+  const activeProject = appData.projects.find((project) => project.id === appData.activeProjectId)
   const weekTerms = weekDays.map((date) => getTermForDate(data, date)).filter((term, index, terms) => term && terms.findIndex((item) => item?.id === term.id) === index)
   const displayedTerm = weekTerms.length === 1 ? weekTerms[0] : undefined
   const weekInfo = displayedTerm ? getWeekInfo(weekDays.find((date) => getTermForDate(data, date)?.id === displayedTerm.id) ?? weekStart, displayedTerm) : null
@@ -158,8 +160,8 @@ export default function App() {
         <div className="content">
           {appData.migrationWarnings.length > 0 && <section className="migration-summary" role="status"><strong>有 {appData.migrationWarnings.length} 筆資料需要確認</strong><span>未歸屬資料已保留，且不會自動套用至課表。</span></section>}
           <section className="page-heading">
-            <div><p className="eyebrow">{weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? '我的課表' : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>所有資料都會自動儲存在這台裝置。</p>}</div>
-            <div className="week-pill"><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></div>
+            <div><p className="eyebrow">{activePage === 'timetable' ? activeProject?.name : weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? '我的課表' : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>所有資料都會自動儲存在這台裝置。</p>}</div>
+            <div className="week-pill">{activePage === 'timetable' ? <><span>多校檢視</span><strong>實際時間</strong></> : <><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></>}</div>
           </section>
 
           {activePage === 'dashboard' && <DashboardCards summary={todaySummary} event={upcomingEvent} />}
@@ -171,8 +173,8 @@ export default function App() {
           ) : (
             <section className="panel timetable-panel">
               <div className="panel-heading">
-                <div><h2>{activePage === 'dashboard' ? '本週課表' : '週課表'}</h2><p>點選課程可建立單日調課，空白節次可快速新增。</p></div>
-                <div className="schedule-controls">
+                <div><h2>{activePage === 'dashboard' ? '本週課表' : '跨校週課表'}</h2><p>{activePage === 'dashboard' ? '點選課程可建立單日調課，空白節次可快速新增。' : '依各任教單位的實際節次與輪週設定逐日整合。'}</p></div>
+                {activePage === 'dashboard' && <div className="schedule-controls">
                   <div className="view-switch" role="group" aria-label="課表密度">
                     <button className={density === 'comfortable' ? 'active' : ''} onClick={() => setDensity('comfortable')}>舒適</button>
                     <button className={density === 'compact' ? 'active' : ''} onClick={() => setDensity('compact')}>緊湊</button>
@@ -181,11 +183,12 @@ export default function App() {
                     <button className={viewMode === 'period' ? 'active' : ''} onClick={() => setViewMode('period')}>節次</button>
                     <button className={viewMode === 'time' ? 'active' : ''} onClick={() => setViewMode('time')}>時間</button>
                   </div>
-                </div>
+                </div>}
               </div>
               {weekTerms.some((term) => term?.archivedAt) && <p className="form-error">週內包含封存學期；封存日期為唯讀模式。</p>}
-              {viewMode === 'period' ? <ScheduleGrid data={data} weekDays={weekDays} mode={viewMode} density={density} onEmptyClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('course', date, periodId) }} onCourseClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('editCourse', date, periodId) }} /> : <TimeCalendar data={data} weekDays={weekDays} onCourseClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('editCourse', date, periodId) }} />}
-              <div className="legend"><span><i className="legend-a" />A 週課程</span><span><i className="legend-b" />B 週課程</span><span><i className="legend-change" />單日調課不影響固定課表</span></div>
+              {activePage === 'timetable'
+                ? <MultiSchoolSchedule data={appData} weekDays={weekDays} />
+                : <>{viewMode === 'period' ? <ScheduleGrid data={data} weekDays={weekDays} mode={viewMode} density={density} onEmptyClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('course', date, periodId) }} onCourseClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('editCourse', date, periodId) }} /> : <TimeCalendar data={data} weekDays={weekDays} onCourseClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('editCourse', date, periodId) }} />}<div className="legend"><span><i className="legend-a" />A 週課程</span><span><i className="legend-b" />B 週課程</span><span><i className="legend-change" />單日調課不影響固定課表</span></div></>}
             </section>
           )}
         </div>
