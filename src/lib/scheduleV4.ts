@@ -34,6 +34,12 @@ export interface ScheduleFiltersV4 {
   teachingUnitId?: string
 }
 
+export interface TodayTeachingSummaryV4 {
+  count: number
+  state: 'current' | 'next' | 'finished' | 'idle' | 'outside-semester'
+  lesson?: ResolvedLessonV4
+}
+
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 
 export function getTeachingUnitWeekPattern(date: Date, unit: TeachingUnit): AlternatingWeekPattern | null {
@@ -150,4 +156,17 @@ export function resolveProjectWeek(
   filters: ScheduleFiltersV4 = {},
 ) {
   return dates.map((date) => ({ date, lessons: resolveProjectDay(data, projectId, date, filters) }))
+}
+
+export function getTodayTeachingSummaryV4(data: AppDataV4, projectId: string, now: Date): TodayTeachingSummaryV4 {
+  const dateKey = toDateKey(now)
+  const hasActiveUnit = data.teachingUnits.some((unit) => unit.projectId === projectId && dateKey >= unit.startDate && dateKey <= unit.endDate)
+  if (!hasActiveUnit) return { count: 0, state: 'outside-semester' }
+  const lessons = resolveProjectDay(data, projectId, now).filter((lesson) => lesson.status !== 'cancelled')
+  const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  const current = lessons.find((lesson) => lesson.startTime <= currentTime && currentTime < lesson.endTime)
+  if (current) return { count: lessons.length, state: 'current', lesson: current }
+  const next = lessons.find((lesson) => lesson.startTime > currentTime)
+  if (next) return { count: lessons.length, state: 'next', lesson: next }
+  return { count: lessons.length, state: lessons.length > 0 ? 'finished' : 'idle' }
 }

@@ -1,25 +1,21 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import { CalendarClock, CalendarDays, Clock3, MapPin, Plus } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
-import { ScheduleGrid } from './components/ScheduleGrid'
-import { TimeCalendar } from './components/TimeCalendar'
 import { Modal } from './components/Modal'
 import { MultiSchoolSchedule } from './components/MultiSchoolSchedule'
 import { FirstUse, ProjectLifecycleModal } from './components/ProjectLifecycle'
+import { LessonEditor } from './components/LessonEditor'
 import { mergeProjectView, projectToLegacyView, switchActiveProject } from './data/projectRuntime'
 import { useAppDataV4 } from './hooks/useAppDataV4'
-import { useLocalStorage, type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
+import { type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
 import { addDays, getWeekInfo, startOfWeek, toDateKey } from './lib/date'
-import { findCourseConflict, getNextUpcomingEvent, getTodayTeachingSummary, resolveSlot } from './lib/schedule'
-import { classifyEventTerm, getActiveTerm, getTermForDate, isTermEditable } from './lib/academic'
-import type { TodayTeachingSummary } from './lib/schedule'
-import type { AppData, CalendarEvent, DayOfWeek, ModalKind, ScheduleDensity, ViewMode, WeekPattern } from './types'
+import { getNextUpcomingEvent } from './lib/schedule'
+import { classifyEventTerm, getTermForDate } from './lib/academic'
+import { getTodayTeachingSummaryV4, type TodayTeachingSummaryV4 } from './lib/scheduleV4'
+import type { AppData, CalendarEvent, ModalKind } from './types'
 
-const DENSITY_KEY = 'aster-timetable-density-v1'
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
-
-interface SelectedSlot { date: Date; periodId: number }
 
 const EMPTY_LEGACY_DATA: AppData = {
   schemaVersion: 3,
@@ -48,14 +44,12 @@ export default function App() {
       return mergeProjectView(current, current.activeProjectId, next)
     })
   }, [setAppData])
-  const [density, setDensity] = useLocalStorage<ScheduleDensity>(DENSITY_KEY, 'comfortable')
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
-  const [viewMode, setViewMode] = useState<ViewMode>('period')
   const [activePage, setActivePage] = useState('dashboard')
   const [modal, setModal] = useState<ModalKind>(null)
-  const [selectedSlot, setSelectedSlot] = useState<SelectedSlot | null>(null)
+  const [lessonEditorOpen, setLessonEditorOpen] = useState(false)
+  const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [operationError, setOperationError] = useState('')
   const [historicalProjectId, setHistoricalProjectId] = useState<string | null>(null)
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
@@ -63,7 +57,6 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [])
   const weekDays = useMemo(() => Array.from({ length: 5 }, (_, index) => addDays(weekStart, index)), [weekStart])
-  const activeTerm = getActiveTerm(data)
   const activeProject = appData.projects.find((project) => project.id === appData.activeProjectId)
   const historicalProject = appData.projects.find((project) => project.id === historicalProjectId && project.archivedAt)
   const displayProject = historicalProject ?? activeProject
@@ -72,7 +65,7 @@ export default function App() {
   const weekInfo = displayedTerm ? getWeekInfo(weekDays.find((date) => getTermForDate(data, date)?.id === displayedTerm.id) ?? weekStart, displayedTerm) : null
   const weekTermLabel = weekTerms.length > 1 ? weekTerms.map((term) => term?.name).join(' ／ ') : displayedTerm?.name ?? '目前日期不屬於任何學期'
   const isMixedWeek = weekTerms.length > 1 || weekDays.some((date) => !getTermForDate(data, date))
-  const todaySummary = getTodayTeachingSummary(data, now)
+  const todaySummary = activeProject ? getTodayTeachingSummaryV4(appData, activeProject.id, now) : { count: 0, state: 'outside-semester' as const }
   const upcomingEvent = getNextUpcomingEvent(data.events, now)
 
   const switchProject = (projectId: string) => {
@@ -80,14 +73,9 @@ export default function App() {
     if (!project) return
     setAppData((current) => switchActiveProject(current, projectId))
     setHistoricalProjectId(null)
-    setSelectedSlot(null)
+    setSelectedLessonId(null)
+    setLessonEditorOpen(false)
     setModal(null)
-  }
-
-  const openSlotModal = (kind: ModalKind, date?: Date, periodId?: number) => {
-    setOperationError('')
-    setSelectedSlot(date && periodId ? { date, periodId } : null)
-    setModal(kind)
   }
 
   const handleAddEvent = (event: FormEvent<HTMLFormElement>) => {
@@ -105,66 +93,11 @@ export default function App() {
     setModal(null)
   }
 
-  const handleAddCourse = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    const term = selectedSlot ? getTermForDate(data, selectedSlot.date) : activeTerm
-    if (!term || !isTermEditable(term)) { setOperationError('此日期沒有可編輯的學期，或該學期已封存。'); return }
-    const course = {
-      id: uid(), termId: term.id, subjectId: String(form.get('subjectId')), classId: String(form.get('classId')),
-      day: Number(form.get('day')) as DayOfWeek, periodId: Number(form.get('periodId')),
-      weekPattern: String(form.get('weekPattern')) as WeekPattern, room: String(form.get('room') || ''), origin: 'user' as const,
-    }
-    if (findCourseConflict(data.courses, course)) {
-      setOperationError('此星期、節次與輪週已有重疊的固定課程。A 週與 B 週可共用時段，但每週課程不可與其重疊。')
-      return
-    }
-    setData((current) => ({ ...current, courses: [...current.courses, course] }))
-    setModal(null)
-  }
-
-  const handleCourseEdit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!selectedSlot) return
-    const form = new FormData(event.currentTarget)
-    const mode = String(form.get('mode')) as 'semester' | 'date' | 'cancel'
-    const original = resolveSlot(data, selectedSlot.date, selectedSlot.periodId).course
-    if (!original) return
-    const term = data.academicTerms.find((item) => item.id === original.termId)
-    if (!isTermEditable(term)) { setOperationError('封存學期僅供查看，請先取消封存後再編輯。'); return }
-    if (mode === 'semester') {
-      const candidate = { termId: original.termId, day: original.day, periodId: original.periodId, weekPattern: String(form.get('weekPattern')) as WeekPattern }
-      if (findCourseConflict(data.courses, candidate, original.id)) {
-        setOperationError('修改後會與同時段的固定課程重疊，請調整輪週設定。')
-        return
-      }
-      setData((current) => ({ ...current, courses: current.courses.map((course) => course.id === original.id ? {
-        ...course,
-        subjectId: String(form.get('subjectId')),
-        classId: String(form.get('classId')),
-        room: String(form.get('room') || ''),
-        weekPattern: String(form.get('weekPattern')) as WeekPattern,
-        origin: 'user',
-      } : course) }))
-      setModal(null)
-      return
-    }
-    const action = mode === 'cancel' ? 'cancel' as const : 'replace' as const
-    const next = {
-      id: uid(), termId: original.termId, date: toDateKey(selectedSlot.date), periodId: selectedSlot.periodId, action,
-      originalCourseId: original?.id, note: String(form.get('note') || ''),
-      replacement: action === 'replace' ? { subjectId: String(form.get('subjectId')), classId: String(form.get('classId')), room: String(form.get('room') || '') } : undefined,
-      origin: 'user' as const,
-    }
-    setData((current) => ({ ...current, overrides: [...current.overrides.filter((item) => !(item.termId === next.termId && item.date === next.date && item.periodId === next.periodId)), next] }))
-    setModal(null)
-  }
-
   return (
     <div className="app-shell">
       <Sidebar activePage={activePage} onNavigate={(page) => { if (page !== 'settings') setHistoricalProjectId(null); setActivePage(page); if (page === 'settings') setModal('settings') }} open={sidebarOpen} onClose={() => setSidebarOpen(false)} storageStatus={storageStatus} projects={appData.projects} activeProjectId={appData.activeProjectId} onProjectChange={switchProject} />
       <main className="main-area">
-        {storageStatus !== 'read-error' && displayProject && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))} onAdd={() => setModal('event')} onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject)} />}
+        {storageStatus !== 'read-error' && displayProject && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))} onAdd={() => { setSelectedLessonId(null); setLessonEditorOpen(true) }} onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject)} />}
         {storageStatus !== 'saved' && <StorageSafetyNotice status={storageStatus} controls={storageControls} />}
         {storageStatus === 'read-error' ? <section className="content"><div className="panel blocked-editor"><h1>資料尚未載入</h1><p>為避免在不完整資料上編輯，目前已鎖定課表。請先匯出原始 JSON，或經二次確認後重設。</p></div></section> : !displayProject ? <FirstUse data={appData} setData={setAppData} onViewArchived={(id) => { setHistoricalProjectId(id); setActivePage('timetable') }} /> : <>
         <div className="content">
@@ -184,32 +117,19 @@ export default function App() {
           ) : (
             <section className="panel timetable-panel">
               <div className="panel-heading">
-                <div><h2>{activePage === 'dashboard' ? '本週課表' : '跨校週課表'}</h2><p>{activePage === 'dashboard' ? '點選課程可建立單日調課，空白節次可快速新增。' : '依各任教單位的實際節次與輪週設定逐日整合。'}</p></div>
-                {activePage === 'dashboard' && <div className="schedule-controls">
-                  <div className="view-switch" role="group" aria-label="課表密度">
-                    <button className={density === 'comfortable' ? 'active' : ''} onClick={() => setDensity('comfortable')}>舒適</button>
-                    <button className={density === 'compact' ? 'active' : ''} onClick={() => setDensity('compact')}>緊湊</button>
-                  </div>
-                  <div className="view-switch" role="group" aria-label="課表顯示方式">
-                    <button className={viewMode === 'period' ? 'active' : ''} onClick={() => setViewMode('period')}>節次</button>
-                    <button className={viewMode === 'time' ? 'active' : ''} onClick={() => setViewMode('time')}>時間</button>
-                  </div>
-                </div>}
+                <div><h2>{activePage === 'dashboard' ? '本週課表' : '跨校週課表'}</h2><p>依各任教單位的實際節次與輪週設定逐日整合；點選課程可編輯固定資料。</p></div>
+                {!historicalProject && <button className="primary-button" onClick={() => { setSelectedLessonId(null); setLessonEditorOpen(true) }}><Plus size={16} />新增固定課程</button>}
               </div>
-              {weekTerms.some((term) => term?.archivedAt) && <p className="form-error">週內包含封存學期；封存日期為唯讀模式。</p>}
-              {activePage === 'timetable'
-                ? <MultiSchoolSchedule data={appData} weekDays={weekDays} projectId={displayProject.id} />
-                : <>{viewMode === 'period' ? <ScheduleGrid data={data} weekDays={weekDays} mode={viewMode} density={density} onEmptyClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('course', date, periodId) }} onCourseClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('editCourse', date, periodId) }} /> : <TimeCalendar data={data} weekDays={weekDays} onCourseClick={(date, periodId) => { const term=getTermForDate(data,date); if (term && !term.archivedAt) openSlotModal('editCourse', date, periodId) }} />}<div className="legend"><span><i className="legend-a" />A 週課程</span><span><i className="legend-b" />B 週課程</span><span><i className="legend-change" />單日調課不影響固定課表</span></div></>}
+              <MultiSchoolSchedule data={appData} weekDays={weekDays} projectId={displayProject.id} onLessonClick={historicalProject ? undefined : (lessonId) => { setSelectedLessonId(lessonId); setLessonEditorOpen(true) }} />
             </section>
           )}
         </div>
         </>}
       </main>
 
-      {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={selectedSlot ? toDateKey(selectedSlot.date) : toDateKey(new Date())} />}
-      {modal === 'course' && <CourseForm data={data} slot={selectedSlot} error={operationError} onSubmit={handleAddCourse} onClose={() => setModal(null)} onEvent={() => setModal('event')} />}
-      {modal === 'editCourse' && selectedSlot && <EditCourseForm data={data} slot={selectedSlot} error={operationError} onSubmit={handleCourseEdit} onClose={() => setModal(null)} onRemove={() => { if (!window.confirm('確定移除此單日異動？此操作無法復原。')) return; setData((current) => ({ ...current, overrides: current.overrides.filter((item) => !(item.date === toDateKey(selectedSlot.date) && item.periodId === selectedSlot.periodId)) })); setModal(null) }} />}
+      {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
       {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} onClose={() => setModal(null)} onViewArchived={(id) => { setHistoricalProjectId(id); setActivePage('timetable') }} />}</>}
+      {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor data={appData} setData={setAppData} lessonId={selectedLessonId} onClose={() => setLessonEditorOpen(false)} onSaved={(projectId) => { if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
     </div>
   )
 }
@@ -232,7 +152,7 @@ function StorageSafetyNotice({ status, controls }: { status: StorageStatus; cont
   </section>
 }
 
-function DashboardCards({ summary, event }: { summary: TodayTeachingSummary; event?: CalendarEvent }) {
+function DashboardCards({ summary, event }: { summary: TodayTeachingSummaryV4; event?: CalendarEvent }) {
   const lessonLabel = summary.state === 'current' ? '目前課程' : summary.state === 'next' ? '下一節課' : '下一節課'
   const lessonEmpty = summary.state === 'finished' ? '今日課程已結束' : summary.state === 'outside-semester' ? '目前不在學期期間' : '今日無排定課程'
   return <section className="dashboard-cards">
@@ -242,7 +162,7 @@ function DashboardCards({ summary, event }: { summary: TodayTeachingSummary; eve
     </article>
     <article className="summary-card lesson-card">
       <div className="summary-icon"><Clock3 size={18} /></div>
-      <div><span>{lessonLabel}</span>{summary.slot ? <><strong>{summary.slot.subjectName}<small>・{summary.slot.className}</small></strong><p><b>{summary.slot.period.startTime}</b><i><MapPin size={11} />{summary.slot.displayRoom}</i></p></> : <strong className="empty-summary">{lessonEmpty}</strong>}</div>
+      <div><span>{lessonLabel}</span>{summary.lesson ? <><strong>{summary.lesson.subjectName}<small>・{summary.lesson.className}</small></strong><p><b>{summary.lesson.startTime}</b><i><MapPin size={11} />{summary.lesson.room || '未設定教室'}</i></p></> : <strong className="empty-summary">{lessonEmpty}</strong>}</div>
     </article>
     <article className="summary-card meeting-card">
       <div className="summary-icon"><CalendarClock size={18} /></div>
@@ -259,45 +179,6 @@ function EventForm({ onSubmit, onClose, defaultDate }: { onSubmit: (e: FormEvent
     <label>開始時間<input name="startTime" type="time" defaultValue="12:20" required /></label>
     <label>結束時間<input name="endTime" type="time" defaultValue="13:00" required /></label>
     <label className="full">地點<input name="location" placeholder="選填" /></label><FormActions onClose={onClose} />
-  </form></Modal>
-}
-
-function CourseForm({ data, slot, error, onSubmit, onClose, onEvent }: { data: AppData; slot: SelectedSlot | null; error: string; onSubmit: (e: FormEvent<HTMLFormElement>) => void; onClose: () => void; onEvent: () => void }) {
-  const term = slot ? getTermForDate(data, slot.date) : getActiveTerm(data)
-  const periods = [...(term?.periods ?? [])].sort((a,b) => a.order-b.order)
-  return <Modal title="新增固定課程" subtitle="課程會依輪週規則出現在每週課表。" onClose={onClose}><form onSubmit={onSubmit} className="form-grid">
-    <label>科目<select name="subjectId">{data.subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-    <label>班級<select name="classId">{data.classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-    <label>星期<select name="day" defaultValue={slot?.date.getDay()}>{[1,2,3,4,5].map((d) => <option key={d} value={d}>週{'一二三四五'[d-1]}</option>)}</select></label>
-    <label>節次<select name="periodId" defaultValue={slot?.periodId}>{periods.map((p) => <option key={p.id} value={p.id}>{p.label}（{p.startTime}）</option>)}</select></label>
-    <label>輪週<select name="weekPattern"><option value="every">每週</option><option value="A">只在 A 週</option><option value="B">只在 B 週</option></select></label>
-    <label>教室<input name="room" placeholder="依班級預設" /></label>
-    {error && <p className="form-error full" role="alert">{error}</p>}
-    <button type="button" className="text-button full" onClick={onEvent}><Clock3 size={15} />改為新增單次活動</button><FormActions onClose={onClose} />
-  </form></Modal>
-}
-
-function EditCourseForm({ data, slot, error, onSubmit, onClose, onRemove }: { data: AppData; slot: SelectedSlot; error: string; onSubmit: (e: FormEvent<HTMLFormElement>) => void; onClose: () => void; onRemove: () => void }) {
-  const resolved = resolveSlot(data, slot.date, slot.periodId)
-  const course = resolved.course
-  const existing = data.overrides.find((o) => o.termId === course?.termId && o.date === toDateKey(slot.date) && o.periodId === slot.periodId)
-  const [mode, setMode] = useState<'semester' | 'date' | 'cancel'>(existing?.action === 'cancel' ? 'cancel' : existing ? 'date' : 'semester')
-  if (!course) return null
-  return <Modal title="編輯課程" subtitle={`${toDateKey(slot.date)}・第 ${slot.periodId} 節。單日異動不會覆蓋固定課程。`} onClose={onClose}><form onSubmit={onSubmit} className="form-grid">
-    <fieldset className="operation-picker full"><legend>套用範圍</legend>
-      <label><input type="radio" name="mode" value="semester" checked={mode === 'semester'} onChange={() => setMode('semester')} /><span><strong>整學期固定課程</strong><small>修改每週重複的原始課程</small></span></label>
-      <label><input type="radio" name="mode" value="date" checked={mode === 'date'} onChange={() => setMode('date')} /><span><strong>僅修改指定日期</strong><small>建立一次性調課，保留原始課程</small></span></label>
-      <label><input type="radio" name="mode" value="cancel" checked={mode === 'cancel'} onChange={() => setMode('cancel')} /><span><strong>僅取消指定日期</strong><small>其他日期仍照常上課</small></span></label>
-    </fieldset>
-    {mode !== 'cancel' && <Fragment key={mode}>
-      <label>科目<select name="subjectId" defaultValue={mode === 'date' ? existing?.replacement?.subjectId || course.subjectId : course.subjectId}>{data.subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-      <label>班級<select name="classId" defaultValue={mode === 'date' ? existing?.replacement?.classId || course.classId : course.classId}>{data.classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-      <label>輪週<select name="weekPattern" defaultValue={course.weekPattern} disabled={mode === 'date'}><option value="every">每週</option><option value="A">只在 A 週</option><option value="B">只在 B 週</option></select></label>
-      <label>教室<input name="room" defaultValue={mode === 'date' ? existing?.replacement?.room || course.room : course.room} placeholder="依班級預設" /></label>
-    </Fragment>}
-    <label className="full">備註<input name="note" defaultValue={existing?.note} placeholder="例如：與王老師互調" /></label>
-    {error && <p className="form-error full" role="alert">{error}</p>}
-    {existing && <button type="button" className="danger-button" onClick={onRemove}>移除此異動</button>}<FormActions onClose={onClose} />
   </form></Modal>
 }
 

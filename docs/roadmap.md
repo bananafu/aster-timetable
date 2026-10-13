@@ -40,9 +40,15 @@
 
 驗收：首次使用不自動建立範例；空白建立不沿用目前專案；新學期日期與 A/B anchor 必須重新確認；封存專案可唯讀查看並重新啟用；刪除不影響其他專案或全域科目庫；完整 test/lint/build 通過。
 
-## Phase 3 — Lesson editing and versioning（待辦）
+## Phase 3 — Lesson editing and versioning（進行中）
 
-加入固定課程新增／編輯、永久修改生效日、單日異動與歷史檢視。
+### Phase 3A — 統一 v4 固定課程編輯（完成）
+
+已完成直接寫入 AppData v4 的 LessonEditor、固定課程新增／基本編輯／安全刪除、Project／School／TeachingUnit／Class／period 引用驗證、A/B 週衝突檢查，以及 Dashboard 與跨校課表的統一顯示及編輯入口。舊版 adapter 不再參與固定課程寫入。
+
+### Phase 3B — 單日異動與永久版本切分（待辦）
+
+加入永久修改生效日、單日移動／交換／取消及歷史版本檢視。
 
 驗收：永久修改不改寫歷史；單日異動與固定版本獨立；跨 project / unit 引用被阻擋。
 

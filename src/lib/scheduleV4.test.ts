@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveProjectDay, timeIntervalsOverlap } from './scheduleV4'
+import { getTodayTeachingSummaryV4, resolveProjectDay, timeIntervalsOverlap } from './scheduleV4'
 import type { AppDataV4, TeachingUnit } from '../types'
 
 const period = (id: number, label: string, startTime: string, endTime: string, order = id) => ({ id, order, label, startTime, endTime })
@@ -104,5 +104,12 @@ describe('v4 multi-school schedule resolver', () => {
     data.recurringLessons.push({ ...data.recurringLessons[0], id: 'lesson-a-v2', subjectId: 'subject-b', effectiveStart: '2026-09-14', effectiveEnd: undefined })
     expect(resolveProjectDay(data, 'project-a', new Date(2026, 8, 7)).filter((item) => item.seriesId === 'series-a').map((item) => item.id)).toEqual(['lesson-a'])
     expect(resolveProjectDay(data, 'project-a', new Date(2026, 8, 21)).filter((item) => item.seriesId === 'series-a').map((item) => item.id)).toEqual(['lesson-a-v2'])
+  })
+
+  it('Dashboard 今日與下一節課使用相同的 v4 多校解析結果', () => {
+    const data = fixture()
+    expect(getTodayTeachingSummaryV4(data, 'project-a', new Date(2026, 8, 7, 8, 20))).toMatchObject({ count: 2, state: 'current', lesson: { id: 'lesson-a' } })
+    expect(getTodayTeachingSummaryV4(data, 'project-a', new Date(2026, 8, 7, 8, 56))).toMatchObject({ count: 2, state: 'current', lesson: { id: 'lesson-b' } })
+    expect(getTodayTeachingSummaryV4(data, 'project-a', new Date(2026, 8, 7, 10, 0))).toMatchObject({ count: 2, state: 'finished' })
   })
 })

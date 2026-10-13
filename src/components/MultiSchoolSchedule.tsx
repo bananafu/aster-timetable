@@ -10,6 +10,7 @@ interface Props {
   data: AppDataV4
   weekDays: Date[]
   projectId?: string | null
+  onLessonClick?: (lessonId: string) => void
 }
 
 function minutes(time: string) {
@@ -23,12 +24,15 @@ function isShortBreak(previous: ResolvedLessonV4 | undefined, current: ResolvedL
   return gap >= 5 && gap <= 20
 }
 
-function LessonCard({ lesson, previous }: { lesson: ResolvedLessonV4; previous?: ResolvedLessonV4 }) {
+function LessonCard({ lesson, previous, onClick }: { lesson: ResolvedLessonV4; previous?: ResolvedLessonV4; onClick?: () => void }) {
   const style = { '--subject-color': lesson.subjectColor, '--school-color': lesson.schoolColor } as CSSProperties
   const statusLabel = lesson.status === 'cancelled' ? '單日取消' : lesson.status === 'replaced' ? '單日替換' : null
-  return <article
+  return <button type="button"
     className={`multi-lesson-card ${lesson.status} ${lesson.hasConflict ? 'conflict' : ''} ${isShortBreak(previous, lesson) ? 'short-break' : ''}`}
     style={style}
+    onClick={onClick}
+    disabled={!onClick}
+    aria-label={`編輯 ${lesson.subjectName}・${lesson.className}`}
   >
     <div className="multi-lesson-time"><strong>{lesson.periodLabel}</strong><span>{lesson.startTime}–{lesson.endTime}</span></div>
     <div className="multi-lesson-body">
@@ -37,10 +41,10 @@ function LessonCard({ lesson, previous }: { lesson: ResolvedLessonV4; previous?:
       <small>{lesson.schoolName}・{lesson.teachingUnitName}</small>
       {lesson.room && <small><MapPin size={11} />{lesson.room}</small>}
     </div>
-  </article>
+  </button>
 }
 
-export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjectId }: Props) {
+export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjectId, onLessonClick }: Props) {
   const [scope, setScope] = useState<ScheduleScope>('all')
   const projectId = requestedProjectId === undefined ? data.activeProjectId : requestedProjectId
   const schools = useMemo(() => data.schools.filter((item) => item.projectId === projectId), [data.schools, projectId])
@@ -84,7 +88,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
           <div className="multi-day-lessons">
             {lessons.length === 0
               ? <p className="cross-school-empty">無有效課程</p>
-              : lessons.map((lesson, index) => <LessonCard key={`${lesson.id}-${lesson.overrideId ?? 'fixed'}`} lesson={lesson} previous={lessons[index - 1]} />)}
+              : lessons.map((lesson, index) => <LessonCard key={`${lesson.id}-${lesson.overrideId ?? 'fixed'}`} lesson={lesson} previous={lessons[index - 1]} onClick={onLessonClick ? () => onLessonClick(lesson.id) : undefined} />)}
           </div>
         </section>)}
       </div>
