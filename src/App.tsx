@@ -134,7 +134,7 @@ export default function App() {
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
       {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} onClose={() => setModal(null)} onViewArchived={(id) => { setHistoricalProjectId(id); setActivePage('timetable') }} />}</>}
-      {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor data={appData} setData={setAppData} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} dragIntent={lessonDragIntent} onClose={() => setLessonEditorOpen(false)} onSaved={(projectId) => { if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
+      {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor data={appData} setData={setAppData} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} dragIntent={lessonDragIntent} onOpenSettings={() => { setLessonEditorOpen(false); setModal('settings') }} onClose={() => setLessonEditorOpen(false)} onSaved={(projectId) => { if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
     </div>
   )
 }

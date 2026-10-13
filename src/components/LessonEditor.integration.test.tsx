@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cancelLessonOnDate, moveLessonOnDate, permanentlyUpdateLesson } from '../data/lessonChangesV4'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { initialData } from '../data/seed'
+import { addClass, addSchool, addTeachingUnit } from '../data/academicSettingsV4'
 import { LessonEditor } from './LessonEditor'
 
 afterEach(cleanup)
@@ -134,5 +135,48 @@ describe('LessonEditor integrated experience', () => {
       ['c1', '2026-09-07', '2026-09-08'],
       ['c5', '2026-09-08', '2026-09-07'],
     ])
+  })
+
+  it('依學校與學制更新班級和節次，切換後清除失效選擇', () => {
+    const original = setup(); const projectId = original.activeProjectId!; const firstSchool = original.schools[0]
+    let data = addTeachingUnit(original, firstSchool.id, { name: '國中部', schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'junior-unit')
+    data = addClass(data, projectId, { teachingUnitId: 'junior-unit', grade: 7, classNumber: 9 }, 'class-709')
+    data = addSchool(data, projectId, { name: '第二校', color: '#718B6C' }, 'school-2')
+    data = addTeachingUnit(data, 'school-2', { name: '第二校高中部', schoolLevel: 'senior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: false, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'school-2-senior')
+    data = addClass(data, projectId, { teachingUnitId: 'school-2-senior', grade: 1, classNumber: 3 }, 'class-103')
+    render(<LessonEditor data={data} setData={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('課程學制'), { target: { value: 'junior-unit' } })
+    expect((screen.getByLabelText('課程班級') as HTMLSelectElement).value).toBe('')
+    expect((screen.getByLabelText('課程節次') as HTMLSelectElement).value).toBe('0')
+    expect(screen.getByRole('option', { name: '709' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: '二年 1 班' })).toBeNull()
+    fireEvent.change(screen.getByLabelText('課程班級'), { target: { value: 'class-709' } })
+    fireEvent.change(screen.getByLabelText('課程節次'), { target: { value: '1' } })
+
+    fireEvent.change(screen.getByLabelText('課程學校'), { target: { value: 'school-2' } })
+    expect((screen.getByLabelText('課程學制') as HTMLSelectElement).value).toBe('school-2-senior')
+    expect((screen.getByLabelText('課程班級') as HTMLSelectElement).value).toBe('')
+    expect((screen.getByLabelText('課程節次') as HTMLSelectElement).value).toBe('0')
+    expect(screen.getByRole('option', { name: '103' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: '709' })).toBeNull()
+  })
+
+  it('沒有班級或節次時顯示具體空狀態並停用儲存', () => {
+    const withoutClasses = setup(); const unitId = withoutClasses.teachingUnits[0].id
+    withoutClasses.classes = withoutClasses.classes.filter((item) => item.teachingUnitId !== unitId)
+    const onOpenSettings = vi.fn()
+    const first = render(<LessonEditor data={withoutClasses} setData={vi.fn()} onOpenSettings={onOpenSettings} onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByText('此學制尚未建立班級名單。')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '前往專案設定' }))
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    first.unmount()
+
+    const withoutPeriods = setup()
+    withoutPeriods.teachingUnits[0] = { ...withoutPeriods.teachingUnits[0], periods: [] }
+    render(<LessonEditor data={withoutPeriods} setData={vi.fn()} onOpenSettings={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByText('此學制尚未建立節次時間表。')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

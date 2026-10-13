@@ -76,6 +76,12 @@
 
 驗收：drop 前資料不變；原課程歸屬與 periodId 規則不變；有效／無效目標、衝堂、既有 override、唯讀、取消及重新載入均有自動測試；完整 test/lint/build 通過。
 
+### Phase 4C-1 — 班級名單與新增固定課程流程（完成）
+
+沿用 School → TeachingUnit → ProjectClass 關係，班級可選用年級與正整數班號並以三位以上代碼顯示；舊 name-only 班級保持相容。LessonEditor 依學校篩選國中部／高中部學制，班級與節次只取自所選 TeachingUnit，切換歸屬後會清除失效選擇；缺少學制、班級或節次時提供明確空狀態與專案設定入口，不會繞過 v4 validator 或自動建立班級。
+
+驗收：一校多學制、班級代碼、重複防護、舊資料相容、表單切換、空狀態、固定課程持久化與 Phase 4A 拖曳回歸測試通過。
+
 ## Phase 5 — Stabilization and release acceptance（待辦）
 
 完成 migration、LocalStorage、多分頁、日期邊界、無障礙及響應式驗收，並進行正式資料備份／復原演練。

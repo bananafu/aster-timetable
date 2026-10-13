@@ -47,6 +47,8 @@ export interface ProjectClass {
   projectId: string
   teachingUnitId: string
   name: string
+  grade?: number
+  classNumber?: number
   room?: string
   origin?: DataOrigin
 }

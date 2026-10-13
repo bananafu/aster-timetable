@@ -1,4 +1,5 @@
 import type { AppDataV4, SchoolLevel, SchoolPeriod, TeachingUnit } from '../types'
+import { formatClassCode, isGradeValidForLevel } from '../lib/classes'
 
 export interface SchoolDraft { name: string; color: string }
 export interface TeachingUnitDraft {
@@ -9,7 +10,7 @@ export interface TeachingUnitDraft {
   periods: SchoolPeriod[]
   weekCycle: TeachingUnit['weekCycle']
 }
-export interface ClassDraft { name: string; room?: string; teachingUnitId: string }
+export interface ClassDraft { name?: string; grade?: number; classNumber?: number; room?: string; teachingUnitId: string }
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
@@ -112,17 +113,27 @@ export function removeTeachingUnit(data: AppDataV4, unitId: string): AppDataV4 {
 
 export function addClass(data: AppDataV4, projectId: string, draft: ClassDraft, id: string): AppDataV4 {
   const unit = data.teachingUnits.find((item) => item.id === draft.teachingUnitId && item.projectId === projectId)
-  if (!unit || !draft.name.trim() || data.classes.some((item) => item.id === id)) throw new Error('班級資料或所屬任教單位不正確。')
-  return { ...data, classes: [...data.classes, { id, projectId, teachingUnitId: unit.id, name: draft.name.trim(), room: draft.room?.trim() || undefined, origin: 'user' }] }
+  if (!unit || data.classes.some((item) => item.id === id)) throw new Error('班級資料或所屬學制不正確。')
+  const structured = draft.grade !== undefined || draft.classNumber !== undefined
+  if (structured && (draft.grade === undefined || draft.classNumber === undefined || !isGradeValidForLevel(unit.schoolLevel, draft.grade) || !Number.isInteger(draft.classNumber) || draft.classNumber <= 0)) throw new Error('年級或班號不符合所選學制。')
+  if (!structured && !draft.name?.trim()) throw new Error('班級名稱不得為空白。')
+  if (structured && data.classes.some((item) => item.teachingUnitId === unit.id && item.grade === draft.grade && item.classNumber === draft.classNumber)) throw new Error('此學制已存在相同年級與班號。')
+  const name = structured ? formatClassCode(draft.grade!, draft.classNumber!) : draft.name!.trim()
+  return { ...data, classes: [...data.classes, { id, projectId, teachingUnitId: unit.id, name, grade: draft.grade, classNumber: draft.classNumber, room: draft.room?.trim() || undefined, origin: 'user' }] }
 }
 
 export function updateClass(data: AppDataV4, classId: string, draft: ClassDraft): AppDataV4 {
   const schoolClass = data.classes.find((item) => item.id === classId)
   const unit = data.teachingUnits.find((item) => item.id === draft.teachingUnitId && item.projectId === schoolClass?.projectId)
-  if (!schoolClass || !unit || !draft.name.trim()) throw new Error('班級資料或所屬任教單位不正確。')
+  if (!schoolClass || !unit) throw new Error('班級資料或所屬學制不正確。')
+  const structured = draft.grade !== undefined || draft.classNumber !== undefined
+  if (structured && (draft.grade === undefined || draft.classNumber === undefined || !isGradeValidForLevel(unit.schoolLevel, draft.grade) || !Number.isInteger(draft.classNumber) || draft.classNumber <= 0)) throw new Error('年級或班號不符合所選學制。')
+  if (!structured && !draft.name?.trim()) throw new Error('班級名稱不得為空白。')
+  if (structured && data.classes.some((item) => item.id !== classId && item.teachingUnitId === unit.id && item.grade === draft.grade && item.classNumber === draft.classNumber)) throw new Error('此學制已存在相同年級與班號。')
   if (schoolClass.teachingUnitId !== unit.id && (data.recurringLessons.some((item) => item.classId === classId)
     || data.overrides.some((item) => item.replacement?.classId === classId))) throw new Error('班級已有課程或異動引用，無法直接移至其他任教單位。')
-  return { ...data, classes: data.classes.map((item) => item.id === classId ? { ...item, teachingUnitId: unit.id, name: draft.name.trim(), room: draft.room?.trim() || undefined, origin: 'user' } : item) }
+  const name = structured ? formatClassCode(draft.grade!, draft.classNumber!) : draft.name!.trim()
+  return { ...data, classes: data.classes.map((item) => item.id === classId ? { ...item, teachingUnitId: unit.id, name, grade: draft.grade, classNumber: draft.classNumber, room: draft.room?.trim() || undefined, origin: 'user' } : item) }
 }
 
 export function removeClass(data: AppDataV4, classId: string): AppDataV4 {

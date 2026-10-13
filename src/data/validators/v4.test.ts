@@ -41,6 +41,19 @@ describe('AppData v4 validator', () => {
     expect(isAppDataV4(data)).toBe(false)
   })
 
+  it('接受舊 name-only 班級並驗證結構化班級的年級、班號及唯一性', () => {
+    const legacy = validData()
+    expect(isAppDataV4(legacy)).toBe(true)
+    const structured = validData()
+    structured.classes[0] = { ...structured.classes[0], name: '103', grade: 1, classNumber: 3 }
+    expect(isAppDataV4(structured)).toBe(true)
+    structured.classes.push({ ...structured.classes[0], id: 'duplicate-class' })
+    expect(isAppDataV4(structured)).toBe(false)
+    const invalidGrade = validData()
+    invalidGrade.classes[0] = { ...invalidGrade.classes[0], name: '703', grade: 7, classNumber: 3 }
+    expect(isAppDataV4(invalidGrade)).toBe(false)
+  })
+
   it('拒絕重複節次 ID、order 及重疊時間', () => {
     const duplicate = validData(); duplicate.teachingUnits[0].periods.push({ id: 10, order: 2, label: '第二節', startTime: '09:10', endTime: '10:00' })
     expect(isAppDataV4(duplicate)).toBe(false)

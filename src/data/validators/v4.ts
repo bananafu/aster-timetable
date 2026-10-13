@@ -87,9 +87,15 @@ function validateAppDataV4(value: unknown): value is AppDataV4 {
 
   if (!data.classes.every((item) => {
     const unit = units.get(item.teachingUnitId)
+    const structured = item.grade !== undefined || item.classNumber !== undefined
     return projects.has(item.projectId) && unit?.projectId === item.projectId && text(item.name)
+      && (!structured || (item.grade !== undefined && item.classNumber !== undefined
+        && Number.isInteger(item.grade) && Number.isInteger(item.classNumber) && item.classNumber > 0
+        && (unit.schoolLevel === 'junior-high' ? [7, 8, 9].includes(item.grade) : unit.schoolLevel === 'senior-high' ? [1, 2, 3].includes(item.grade) : false)))
       && optionalText(item.room) && origin(item.origin)
   })) return false
+  const structuredClasses = data.classes.filter((item) => item.grade !== undefined && item.classNumber !== undefined)
+  if (!unique(structuredClasses, (item) => `${item.teachingUnitId}:${item.grade}:${item.classNumber}`)) return false
 
   if (!data.recurringLessons.every((item) => {
     const unit = units.get(item.teachingUnitId)

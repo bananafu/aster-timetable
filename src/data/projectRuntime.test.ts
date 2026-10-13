@@ -130,6 +130,15 @@ describe('v4 project runtime projection', () => {
     expect(result.overrides.find((item) => item.id === 'override-2')).toEqual(data.overrides.find((item) => item.id === 'override-2'))
   })
 
+  it('legacy runtime projection round-trip 保留結構化班級欄位', () => {
+    const data = twoProjects(); const projectId = data.projects[0].id
+    data.classes[0] = { ...data.classes[0], name: '103', grade: 1, classNumber: 3 }
+    const view = projectToLegacyView(data, projectId)
+    expect(view.classes[0]).toMatchObject({ grade: 1, classNumber: 3 })
+    const merged = mergeProjectView(data, projectId, view)
+    expect(merged.classes.find((item) => item.id === data.classes[0].id)).toMatchObject({ grade: 1, classNumber: 3 })
+  })
+
   it('未歸屬事件可按日期顯示，未歸屬異動不參與任何 project 排課', () => {
     const data = twoProjects()
     data.events.push({ id: 'global-event', projectId: null, teachingUnitId: null, title: '未分類活動', type: 'activity', date: '2026-10-01', startTime: '12:00', endTime: '13:00', color: '#563F2E' })

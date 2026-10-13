@@ -13,6 +13,7 @@ import {
   type TeachingUnitDraft,
 } from '../data/academicSettingsV4'
 import type { AppDataV4, ProjectClass, School, SchoolLevel, SchoolPeriod, TeachingUnit } from '../types'
+import { classDisplayName, gradeLabel, gradesForLevel, isGradeValidForLevel } from '../lib/classes'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const levelLabel: Record<SchoolLevel, string> = { 'junior-high': '國中部', 'senior-high': '高中部', other: '其他' }
@@ -28,11 +29,15 @@ export function AcademicSettingsV4({ data, setData }: { data: AppDataV4; setData
   const classes = data.classes.filter((item) => item.projectId === projectId)
   const [schoolDraft, setSchoolDraft] = useState({ name: '', color: '#718B6C' })
   const [unitDraft, setUnitDraft] = useState({ schoolId: schools[0]?.id ?? '', name: '', schoolLevel: 'senior-high' as SchoolLevel, startDate: '', endDate: '' })
-  const [classDraft, setClassDraft] = useState<ClassDraft>({ name: '', room: '', teachingUnitId: units[0]?.id ?? '' })
+  const firstClassUnit = units[0]
+  const [classDraft, setClassDraft] = useState<ClassDraft>({ grade: gradesForLevel(firstClassUnit?.schoolLevel ?? 'other')[0], classNumber: undefined, room: '', teachingUnitId: firstClassUnit?.id ?? '' })
   const [error, setError] = useState('')
   useEffect(() => {
     if (!schools.some((item) => item.id === unitDraft.schoolId)) setUnitDraft((current) => ({ ...current, schoolId: schools[0]?.id ?? '' }))
-    if (!units.some((item) => item.id === classDraft.teachingUnitId)) setClassDraft((current) => ({ ...current, teachingUnitId: units[0]?.id ?? '' }))
+    if (!units.some((item) => item.id === classDraft.teachingUnitId)) {
+      const nextUnit = units[0]
+      setClassDraft((current) => ({ ...current, teachingUnitId: nextUnit?.id ?? '', grade: gradesForLevel(nextUnit?.schoolLevel ?? 'other')[0], classNumber: undefined }))
+    }
   }, [classDraft.teachingUnitId, schools, unitDraft.schoolId, units])
 
   const createSchool = (event: FormEvent) => {
@@ -47,7 +52,7 @@ export function AcademicSettingsV4({ data, setData }: { data: AppDataV4; setData
   const createClass = (event: FormEvent) => {
     event.preventDefault()
     apply(() => addClass(data, projectId, classDraft, uid()), setData, setError)
-    setClassDraft((current) => ({ ...current, name: '', room: '' }))
+    setClassDraft((current) => ({ ...current, classNumber: undefined, name: undefined, room: '' }))
   }
 
   return <section className="academic-settings">
@@ -66,7 +71,7 @@ export function AcademicSettingsV4({ data, setData }: { data: AppDataV4; setData
     <section className="class-settings">
       <div><strong>班級</strong><p>班級必須屬於目前專案中的一個任教單位。</p></div>
       {classes.map((schoolClass) => <ClassEditor key={schoolClass.id} schoolClass={schoolClass} units={units} data={data} setData={setData} setError={setError} />)}
-      <form className="inline-create class-create" onSubmit={createClass}><input aria-label="新班級名稱" value={classDraft.name} onChange={(event) => setClassDraft({ ...classDraft, name: event.target.value })} placeholder="班級名稱" required /><input aria-label="新班級教室" value={classDraft.room} onChange={(event) => setClassDraft({ ...classDraft, room: event.target.value })} placeholder="預設教室" /><select aria-label="新班級所屬任教單位" value={classDraft.teachingUnitId} onChange={(event) => setClassDraft({ ...classDraft, teachingUnitId: event.target.value })}>{units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select><button type="submit" disabled={!units.length}>新增班級</button></form>
+      <form className="inline-create class-create" onSubmit={createClass}><ClassIdentityFields draft={classDraft} units={units} onChange={setClassDraft} prefix="新班級" /><input aria-label="新班級教室" value={classDraft.room ?? ''} onChange={(event) => setClassDraft({ ...classDraft, room: event.target.value })} placeholder="預設教室" /><button type="submit" disabled={!units.length}>新增班級</button></form>
     </section>
     {error && <p className="form-error" role="alert">{error}</p>}
   </section>
@@ -103,7 +108,28 @@ function UnitEditor({ unit, data, setData, setError }: { unit: TeachingUnit; dat
 }
 
 function ClassEditor({ schoolClass, units, data, setData, setError }: { schoolClass: ProjectClass; units: TeachingUnit[]; data: AppDataV4; setData: Dispatch<SetStateAction<AppDataV4>>; setError: (value: string) => void }) {
-  const [draft, setDraft] = useState<ClassDraft>({ name: schoolClass.name, room: schoolClass.room ?? '', teachingUnitId: schoolClass.teachingUnitId })
-  useEffect(() => setDraft({ name: schoolClass.name, room: schoolClass.room ?? '', teachingUnitId: schoolClass.teachingUnitId }), [schoolClass])
-  return <form className="class-editor-row" onSubmit={(event) => { event.preventDefault(); apply(() => updateClass(data, schoolClass.id, draft), setData, setError) }}><input aria-label="班級名稱" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required /><input aria-label="班級教室" value={draft.room} onChange={(event) => setDraft({ ...draft, room: event.target.value })} placeholder="預設教室" /><select aria-label="班級所屬任教單位" value={draft.teachingUnitId} onChange={(event) => setDraft({ ...draft, teachingUnitId: event.target.value })}>{units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select><button type="submit">儲存</button><button type="button" className="danger-outline" onClick={() => { if (window.confirm(`確定刪除「${schoolClass.name}」？`)) apply(() => removeClass(data, schoolClass.id), setData, setError) }}>刪除</button></form>
+  const toDraft = (item: ProjectClass): ClassDraft => ({ name: item.name, grade: item.grade, classNumber: item.classNumber, room: item.room ?? '', teachingUnitId: item.teachingUnitId })
+  const [draft, setDraft] = useState<ClassDraft>(() => toDraft(schoolClass))
+  useEffect(() => setDraft(toDraft(schoolClass)), [schoolClass])
+  return <form className="class-editor-row" onSubmit={(event) => { event.preventDefault(); apply(() => updateClass(data, schoolClass.id, draft), setData, setError) }}><ClassIdentityFields draft={draft} units={units} onChange={setDraft} prefix="班級" legacyName={schoolClass.grade === undefined || schoolClass.classNumber === undefined} /><input aria-label="班級教室" value={draft.room ?? ''} onChange={(event) => setDraft({ ...draft, room: event.target.value })} placeholder="預設教室" /><span className="class-code-preview">顯示：{classDisplayName({ name: draft.name ?? schoolClass.name, grade: draft.grade, classNumber: draft.classNumber })}</span><button type="submit">儲存</button><button type="button" className="danger-outline" onClick={() => { if (window.confirm(`確定刪除「${classDisplayName(schoolClass)}」？`)) apply(() => removeClass(data, schoolClass.id), setData, setError) }}>刪除</button></form>
+}
+
+function ClassIdentityFields({ draft, units, onChange, prefix, legacyName = false }: { draft: ClassDraft; units: TeachingUnit[]; onChange: (draft: ClassDraft) => void; prefix: string; legacyName?: boolean }) {
+  const unit = units.find((item) => item.id === draft.teachingUnitId)
+  const grades = gradesForLevel(unit?.schoolLevel ?? 'other')
+  const selectUnit = (teachingUnitId: string) => {
+    const nextUnit = units.find((item) => item.id === teachingUnitId)
+    const nextGrades = gradesForLevel(nextUnit?.schoolLevel ?? 'other')
+    onChange({
+      ...draft,
+      teachingUnitId,
+      grade: draft.grade !== undefined && isGradeValidForLevel(nextUnit?.schoolLevel ?? 'other', draft.grade) ? draft.grade : nextGrades[0],
+      classNumber: nextGrades.length ? draft.classNumber : undefined,
+      name: nextGrades.length ? undefined : draft.name,
+    })
+  }
+  return <>
+    <select aria-label={`${prefix}所屬學制`} value={draft.teachingUnitId} onChange={(event) => selectUnit(event.target.value)}>{units.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+    {grades.length > 0 && !legacyName ? <><select aria-label={`${prefix}年級`} value={draft.grade ?? ''} onChange={(event) => onChange({ ...draft, grade: Number(event.target.value), name: undefined })}>{grades.map((grade) => <option key={grade} value={grade}>{gradeLabel(unit!.schoolLevel, grade)}</option>)}</select><input aria-label={`${prefix}班號`} type="number" min="1" step="1" value={draft.classNumber ?? ''} onChange={(event) => onChange({ ...draft, classNumber: event.target.value ? Number(event.target.value) : undefined, name: undefined })} placeholder="班號" required /></> : <input aria-label={`${prefix}名稱`} value={draft.name ?? ''} onChange={(event) => onChange({ ...draft, name: event.target.value, grade: undefined, classNumber: undefined })} placeholder="班級名稱" required />}
+  </>
 }

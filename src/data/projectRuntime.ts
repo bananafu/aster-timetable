@@ -179,7 +179,7 @@ export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.a
     createdAt: project.createdAt,
   }))
   const classes: SchoolClass[] = data.classes.filter((item) => item.projectId === project.id)
-    .map(({ id, name, room, origin }) => ({ id, name, room, origin }))
+    .map(({ id, name, grade, classNumber, room, origin }) => ({ id, name, grade, classNumber, room, origin }))
   const courses: Course[] = data.recurringLessons.filter((item) => item.projectId === project.id)
     .map(({ id, teachingUnitId, subjectId, classId, day, periodId, weekPattern, room, origin }) => ({
       id, termId: teachingUnitId, subjectId, classId, day, periodId, weekPattern, room, origin,
@@ -228,7 +228,7 @@ export function mergeProjectView(data: AppDataV4, projectId: string, view: AppDa
     const existing = existingClasses.get(item.id)
     const teachingUnitId = existing?.teachingUnitId ?? teachingUnits[0]?.id
     if (!teachingUnitId || !unitIds.has(teachingUnitId)) throw new Error('Class does not have a valid teaching unit')
-    return { ...item, projectId, teachingUnitId }
+    return { ...item, grade: item.grade ?? existing?.grade, classNumber: item.classNumber ?? existing?.classNumber, projectId, teachingUnitId }
   })
   const existingLessons = new Map(data.recurringLessons.filter((item) => item.projectId === projectId).map((item) => [item.id, item]))
   const recurringLessons = view.courses.map((course) => {

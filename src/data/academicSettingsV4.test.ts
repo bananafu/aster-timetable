@@ -3,6 +3,7 @@ import { initialData } from './seed'
 import { migrateV3ToV4 } from './migrationsV4'
 import { addClass, addSchool, addTeachingUnit, createDefaultPeriods, removeClass, removeSchool, removeTeachingUnit, updateClass, updateSchool, updateTeachingUnit } from './academicSettingsV4'
 import { isAppDataV4 } from './validators/v4'
+import { classDisplayName } from '../lib/classes'
 
 const source = () => migrateV3ToV4(structuredClone(initialData))
 
@@ -31,6 +32,38 @@ describe('v4 academic settings', () => {
     expect(unit).toMatchObject({ schoolId, schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { anchorPattern: 'B' } })
     expect(unit.periods[0]).toMatchObject({ startTime: '08:10', endTime: '08:55' })
     expect(isAppDataV4(result)).toBe(true)
+  })
+
+  it('同一學校可同時建立國中部與高中部', () => {
+    const data = source(); const schoolId = data.schools[0].id
+    const withJunior = addTeachingUnit(data, schoolId, { name: '國中部', schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'junior-unit')
+    const result = addTeachingUnit(withJunior, schoolId, { name: '高中部', schoolLevel: 'senior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'senior-unit')
+    expect(result.teachingUnits.filter((item) => item.schoolId === schoolId).map((item) => item.schoolLevel)).toEqual(expect.arrayContaining(['junior-high', 'senior-high']))
+    expect(isAppDataV4(result)).toBe(true)
+  })
+
+  it('建立 709、812、103 班級並保留穩定 ID', () => {
+    const data = source(); const projectId = data.activeProjectId!; const schoolId = data.schools[0].id
+    let result = addTeachingUnit(data, schoolId, { name: '國中部', schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'junior-unit')
+    result = addTeachingUnit(result, schoolId, { name: '高中部', schoolLevel: 'senior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'senior-unit')
+    result = addClass(result, projectId, { teachingUnitId: 'junior-unit', grade: 7, classNumber: 9 }, 'stable-709')
+    result = addClass(result, projectId, { teachingUnitId: 'junior-unit', grade: 8, classNumber: 12 }, 'stable-812')
+    result = addClass(result, projectId, { teachingUnitId: 'senior-unit', grade: 1, classNumber: 3 }, 'stable-103')
+    expect(result.classes.filter((item) => item.id.startsWith('stable-')).map((item) => [item.id, classDisplayName(item)])).toEqual([
+      ['stable-709', '709'], ['stable-812', '812'], ['stable-103', '103'],
+    ])
+    expect(isAppDataV4(result)).toBe(true)
+  })
+
+  it('阻止同一學制重複年級班號，並保留舊 name-only 班級', () => {
+    const data = source(); const projectId = data.activeProjectId!; const schoolId = data.schools[0].id
+    const withSenior = addTeachingUnit(data, schoolId, { name: '高中部', schoolLevel: 'senior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'senior-unit')
+    const added = addClass(withSenior, projectId, { teachingUnitId: 'senior-unit', grade: 1, classNumber: 3 }, 'structured')
+    expect(() => addClass(added, projectId, { teachingUnitId: 'senior-unit', grade: 1, classNumber: 3 }, 'duplicate')).toThrow('相同年級與班號')
+    const legacy = data.classes[0]
+    expect(legacy.grade).toBeUndefined()
+    expect(classDisplayName(legacy)).toBe(legacy.name)
+    expect(isAppDataV4(added)).toBe(true)
   })
 
   it('可新增及編輯 project-scoped 班級與所屬 TeachingUnit', () => {

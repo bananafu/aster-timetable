@@ -1,5 +1,6 @@
 import { fromDateKey, startOfWeek, toDateKey } from './date'
 import type { AlternatingWeekPattern, AppDataV4, DayOfWeek, TeachingUnit } from '../types'
+import { classDisplayName } from './classes'
 
 export type ResolvedLessonStatus = 'regular' | 'replaced' | 'cancelled' | 'moved'
 
@@ -122,7 +123,7 @@ export function resolveProjectDay(
       subjectName: subject.name,
       subjectColor: subject.color,
       classId: schoolClass.id,
-      className: schoolClass.name,
+      className: classDisplayName(schoolClass),
       periodId: period.id,
       periodLabel: period.label,
       startTime: period.startTime,
@@ -151,7 +152,7 @@ export function resolveProjectDay(
       id: lesson.id, seriesId: lesson.seriesId, date: dateKey, projectId, schoolId: school.id,
       schoolName: school.name, schoolColor: school.color, teachingUnitId: unit.id, teachingUnitName: unit.name,
       subjectId: subject.id, subjectName: subject.name, subjectColor: subject.color,
-      classId: schoolClass.id, className: schoolClass.name, periodId: period.id, periodLabel: period.label,
+      classId: schoolClass.id, className: classDisplayName(schoolClass), periodId: period.id, periodLabel: period.label,
       startTime: period.startTime, endTime: period.endTime, room: lesson.room ?? schoolClass.room,
       status: 'moved', overrideId: override.id, note: override.note, hasConflict: false,
     }]

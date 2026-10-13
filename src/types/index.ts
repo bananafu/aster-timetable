@@ -5,7 +5,7 @@ export type DataOrigin = 'demo' | 'user'
 export type ScheduleDensity = 'comfortable' | 'compact'
 
 export interface Subject { id: string; name: string; shortName: string; color: string; origin?: DataOrigin }
-export interface SchoolClass { id: string; name: string; room?: string; origin?: DataOrigin }
+export interface SchoolClass { id: string; name: string; grade?: number; classNumber?: number; room?: string; origin?: DataOrigin }
 
 export interface SchoolPeriod {
   id: number
