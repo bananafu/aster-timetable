@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppDataV4 } from '../../types'
-import { isAppDataV4 } from './v4'
+import { isAppDataV4, isCompatibleAppDataV4, isSafeAppDataV4Update } from './v4'
 
 const validData = (): AppDataV4 => ({
   schemaVersion: 4,
@@ -18,6 +18,35 @@ const validData = (): AppDataV4 => ({
 
 describe('AppData v4 validator', () => {
   it('接受多專案架構的有效資料及未歸屬事件與異動', () => expect(isAppDataV4(validData())).toBe(true))
+
+  it('相容讀取只放寬既有節次的時間粒度，不放寬時間格式或範圍', () => {
+    const legacy = validData(); legacy.teachingUnits[0].periods[0].startTime = '08:03'
+    expect(isAppDataV4(legacy)).toBe(false)
+    expect(isCompatibleAppDataV4(legacy)).toBe(true)
+    const brokenFormat = validData(); brokenFormat.teachingUnits[0].periods[0].startTime = '8:03'
+    expect(isCompatibleAppDataV4(brokenFormat)).toBe(false)
+    const brokenRange = validData(); brokenRange.teachingUnits[0].periods[0].endTime = '08:00'
+    expect(isCompatibleAppDataV4(brokenRange)).toBe(false)
+  })
+
+  it('安全更新只保留相同 project、unit、period 的既有異常時間', () => {
+    const current = validData(); current.teachingUnits[0].periods.push({ id: 20, order: 2, label: '舊第二節', startTime: '09:03', endTime: '09:58' })
+    const unrelated = structuredClone(current); unrelated.projects[0].name = '更新名稱'
+    expect(isSafeAppDataV4Update(current, unrelated)).toBe(true)
+
+    const added = structuredClone(current); added.teachingUnits[0].periods.push({ id: 30, order: 3, label: '第三節', startTime: '10:03', endTime: '10:58' })
+    expect(isSafeAppDataV4Update(current, added)).toBe(false)
+
+    const changedLegacy = structuredClone(current); changedLegacy.teachingUnits[0].periods[1].startTime = '09:04'
+    expect(isSafeAppDataV4Update(current, changedLegacy)).toBe(false)
+
+    const valid = validData(); const changedValid = structuredClone(valid); changedValid.teachingUnits[0].periods[0].startTime = '08:03'
+    expect(isSafeAppDataV4Update(valid, changedValid)).toBe(false)
+
+    const removed = structuredClone(current); removed.teachingUnits[0].periods = removed.teachingUnits[0].periods.filter((period) => period.id !== 20)
+    expect(isSafeAppDataV4Update(current, removed)).toBe(true)
+    expect(isSafeAppDataV4Update(removed, current)).toBe(false)
+  })
 
   it('允許相同學年度與學期存在不同名稱的專案', () => {
     const data = validData()

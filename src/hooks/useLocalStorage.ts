@@ -5,6 +5,7 @@ export type StorageStatus = 'saved' | 'read-error' | 'write-error' | 'conflict'
 interface LocalStorageOptions<T> {
   migrate?: (value: T) => T
   validate?: (value: unknown) => value is T
+  validateUpdate?: (current: T, next: T) => boolean
   legacy?: { key: string; validate: (value: unknown) => boolean; migrate: (value: unknown) => T }
   loader?: (storage: Pick<Storage, 'getItem'>, key: string, initialValue: T) => StorageLoadResult<T>
 }
@@ -74,22 +75,26 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
   const [status, setStatus] = useState<StorageStatus>(initialLoad.status)
   const [rawBackup, setRawBackup] = useState<string | null>(initialLoad.rawBackup ?? (initialLoad.status === 'read-error' ? initialLoad.raw : null))
   const pendingRef = useRef(initialLoad.shouldPersist)
+  const pendingBaseRef = useRef(initialLoad.value)
   const blockedRef = useRef(initialLoad.status !== 'saved')
   const lastStoredRawRef = useRef<string | null>(initialLoad.raw)
   const externalRawRef = useRef<string | null>(null)
   const valueRef = useRef(value)
   const validateRef = useRef(options.validate)
+  const validateUpdateRef = useRef(options.validateUpdate)
   valueRef.current = value
   validateRef.current = options.validate
+  validateUpdateRef.current = options.validateUpdate
 
   const setValue: Dispatch<SetStateAction<T>> = useCallback((next) => {
     setValueState((current) => {
       const resolved = typeof next === 'function' ? (next as (value: T) => T)(current) : next
-      if (validateRef.current && !validateRef.current(resolved)) {
+      if ((validateRef.current && !validateRef.current(resolved)) || (validateUpdateRef.current && !validateUpdateRef.current(current, resolved))) {
         blockedRef.current = true
         setStatus('write-error')
         return current
       }
+      if (!pendingRef.current) pendingBaseRef.current = current
       pendingRef.current = true
       valueRef.current = resolved
       return resolved
@@ -98,9 +103,11 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
 
   const applyRaw = useCallback((raw: string | null) => {
     const nextValue = raw === null ? initialValue : parseValue(raw, options)
+    if (validateUpdateRef.current && !validateUpdateRef.current(valueRef.current, nextValue)) throw new Error('Unsafe external data update')
     setValueState(nextValue)
     valueRef.current = nextValue
     pendingRef.current = false
+    pendingBaseRef.current = nextValue
     blockedRef.current = false
     lastStoredRawRef.current = raw
     externalRawRef.current = null
@@ -114,10 +121,12 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
       if (!pendingRef.current || blockedRef.current) return
       try {
         if (validateRef.current && !validateRef.current(value)) throw new Error('Invalid data structure')
+        if (validateUpdateRef.current && !validateUpdateRef.current(pendingBaseRef.current, value)) throw new Error('Unsafe pending data update')
         const raw = JSON.stringify(value)
         localStorage.setItem(key, raw)
         lastStoredRawRef.current = raw
         pendingRef.current = false
+        pendingBaseRef.current = value
         setRawBackup(null)
         setStatus('saved')
       } catch {
@@ -166,10 +175,12 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
     keepLocal: () => {
       try {
         if (options.validate && !options.validate(valueRef.current)) throw new Error('Invalid data structure')
+        if (options.validateUpdate && !options.validateUpdate(pendingBaseRef.current, valueRef.current)) throw new Error('Unsafe pending data update')
         const raw = JSON.stringify(valueRef.current)
         localStorage.setItem(key, raw)
         lastStoredRawRef.current = raw
         pendingRef.current = false
+        pendingBaseRef.current = valueRef.current
         blockedRef.current = false
         externalRawRef.current = null
         setRawBackup(null)
@@ -188,6 +199,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
         valueRef.current = initialValue
         lastStoredRawRef.current = raw
         pendingRef.current = false
+        pendingBaseRef.current = initialValue
         blockedRef.current = false
         externalRawRef.current = null
         setRawBackup(null)

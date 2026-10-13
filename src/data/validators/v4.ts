@@ -15,9 +15,11 @@ const fiveMinuteStep = (value: string) => Number(value.slice(3)) % 5 === 0
 const origin = (value: unknown): value is DataOrigin | undefined => value === undefined || value === 'demo' || value === 'user'
 const unique = <T>(items: T[], key: (item: T) => string | number) => new Set(items.map(key)).size === items.length
 
-function isPeriod(value: unknown): value is SchoolPeriod {
+function isPeriod(value: unknown, allowLegacyTimeGranularity: boolean): value is SchoolPeriod {
   return record(value) && Number.isInteger(value.id) && Number.isInteger(value.order) && text(value.label)
-    && time(value.startTime) && time(value.endTime) && fiveMinuteStep(value.startTime) && fiveMinuteStep(value.endTime) && value.startTime < value.endTime
+    && time(value.startTime) && time(value.endTime)
+    && (allowLegacyTimeGranularity || (fiveMinuteStep(value.startTime) && fiveMinuteStep(value.endTime)))
+    && value.startTime < value.endTime
 }
 
 function validPeriods(periods: SchoolPeriod[]) {
@@ -52,7 +54,7 @@ function versionsDoNotOverlap(lessons: RecurringLesson[]) {
   return true
 }
 
-function validateAppDataV4(value: unknown): value is AppDataV4 {
+function validateAppDataV4(value: unknown, allowLegacyTimeGranularity = false): value is AppDataV4 {
   if (!record(value) || value.schemaVersion !== 4) return false
   if (!hasUniqueIds(value.projects) || !hasUniqueIds(value.schools) || !hasUniqueIds(value.teachingUnits)
     || !hasUniqueIds(value.subjects) || !hasUniqueIds(value.classes) || !hasUniqueIds(value.recurringLessons)
@@ -82,7 +84,7 @@ function validateAppDataV4(value: unknown): value is AppDataV4 {
       && date(item.startDate) && date(item.endDate) && item.startDate <= item.endDate
       && date(item.weekCycle.anchorDate) && ['A', 'B'].includes(item.weekCycle.anchorPattern)
       && typeof item.weekCycle.enabled === 'boolean' && Array.isArray(item.periods)
-      && item.periods.every(isPeriod) && validPeriods(item.periods)
+      && item.periods.every((period) => isPeriod(period, allowLegacyTimeGranularity)) && validPeriods(item.periods)
   })) return false
 
   if (!data.classes.every((item) => {
@@ -146,4 +148,29 @@ export function isAppDataV4(value: unknown): value is AppDataV4 {
   } catch {
     return false
   }
+}
+
+export function isCompatibleAppDataV4(value: unknown): value is AppDataV4 {
+  try {
+    return validateAppDataV4(value, true)
+  } catch {
+    return false
+  }
+}
+
+function hasFiveMinuteGranularity(period: SchoolPeriod) {
+  return fiveMinuteStep(period.startTime) && fiveMinuteStep(period.endTime)
+}
+
+export function isSafeAppDataV4Update(current: AppDataV4, next: AppDataV4): boolean {
+  if (!isCompatibleAppDataV4(next)) return false
+  return next.teachingUnits.every((nextUnit) => nextUnit.periods.every((nextPeriod) => {
+    if (hasFiveMinuteGranularity(nextPeriod)) return true
+    const currentUnit = current.teachingUnits.find((unit) => unit.projectId === nextUnit.projectId && unit.id === nextUnit.id)
+    const currentPeriod = currentUnit?.periods.find((period) => period.id === nextPeriod.id)
+    return currentPeriod !== undefined
+      && !hasFiveMinuteGranularity(currentPeriod)
+      && currentPeriod.startTime === nextPeriod.startTime
+      && currentPeriod.endTime === nextPeriod.endTime
+  }))
 }

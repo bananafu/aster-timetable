@@ -2,7 +2,7 @@ import type { AppDataV4 } from '../types'
 import type { StorageStatus } from '../hooks/useLocalStorage'
 import { isAppData, isLegacyAppDataV1, type LegacyAppDataV1 } from './migrations'
 import { migrateV1ToV4, migrateV3ToV4 } from './migrationsV4'
-import { isAppDataV4 } from './validators/v4'
+import { isAppDataV4, isCompatibleAppDataV4 } from './validators/v4'
 
 export const APP_DATA_V4_KEY = 'aster-timetable-data-v4'
 export const APP_DATA_V3_KEY = 'aster-timetable-data-v3'
@@ -32,7 +32,7 @@ export function loadAppDataV4(storage: Pick<Storage, 'getItem'>, initialValue: A
   if (v4Raw !== null) {
     try {
       const value = parse(v4Raw)
-      if (!isAppDataV4(value)) throw new Error('Invalid AppData v4')
+      if (!isCompatibleAppDataV4(value)) throw new Error('Invalid AppData v4')
       return { value, status: 'saved', source: 'v4', rawBackup: v4Raw, shouldPersist: false }
     } catch {
       return { value: initialValue, status: 'read-error', source: 'v4', rawBackup: v4Raw, shouldPersist: false }

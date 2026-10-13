@@ -18,6 +18,23 @@ describe('AppData v4 storage routing', () => {
     expect(getItem).toHaveBeenCalledTimes(1)
   })
 
+  it('從 v4 storage 安全載入非五分鐘舊節次並保留原值與 periodId', () => {
+    const v4 = initialV4(); const period = v4.teachingUnits[0].periods[0]
+    period.startTime = '08:03'; period.endTime = '08:58'
+    const result = loadAppDataV4({ getItem: (key) => key === APP_DATA_V4_KEY ? JSON.stringify(v4) : null }, initialV4())
+    expect(result).toMatchObject({ status: 'saved', source: 'v4', shouldPersist: false })
+    expect(result.value.teachingUnits[0].periods[0]).toMatchObject({ id: period.id, startTime: '08:03', endTime: '08:58' })
+  })
+
+  it('相容載入仍拒絕真正損壞的節次資料', () => {
+    const malformed = initialV4(); malformed.teachingUnits[0].periods[0].startTime = '8:03'
+    const reversed = initialV4(); reversed.teachingUnits[0].periods[0].endTime = '07:55'
+    for (const value of [malformed, reversed]) {
+      const result = loadAppDataV4({ getItem: (key) => key === APP_DATA_V4_KEY ? JSON.stringify(value) : null }, initialV4())
+      expect(result).toMatchObject({ status: 'read-error', source: 'v4', shouldPersist: false })
+    }
+  })
+
   it('損壞 v4 存在時不 fallback 至有效 v3，且保留原始內容', () => {
     const values = new Map([[APP_DATA_V4_KEY, '{broken-v4'], [APP_DATA_V3_KEY, JSON.stringify(initialData)]])
     const getItem = vi.fn((key: string) => values.get(key) ?? null)

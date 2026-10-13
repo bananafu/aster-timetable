@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { initialData } from '../data/seed'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { APP_DATA_V4_KEY, loadAppDataV4 } from '../data/storageV4'
-import { isAppDataV4 } from '../data/validators/v4'
+import { isCompatibleAppDataV4, isSafeAppDataV4Update } from '../data/validators/v4'
 import type { AppDataV4 } from '../types'
 import { useLocalStorage, type StorageLoadResult } from './useLocalStorage'
 
@@ -29,7 +29,8 @@ export function createExampleAppDataV4(): AppDataV4 {
 export function useAppDataV4() {
   const initialValue = useMemo(createInitialAppDataV4, [])
   return useLocalStorage<AppDataV4>(APP_DATA_V4_KEY, initialValue, {
-    validate: isAppDataV4,
+    validate: isCompatibleAppDataV4,
+    validateUpdate: isSafeAppDataV4Update,
     loader: (storage) => {
       const result = loadAppDataV4(storage, initialValue)
       return {
