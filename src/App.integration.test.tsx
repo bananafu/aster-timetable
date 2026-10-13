@@ -91,4 +91,25 @@ describe('App v4 runtime', () => {
     render(<App />)
     expect(JSON.parse(localStorage.getItem(APP_DATA_V4_KEY)!).recurringLessons).toHaveLength(data.recurringLessons.length + 1)
   })
+
+  it('桌面拖曳經預覽確認後寫入 v4，重新載入仍保留單日移動', () => {
+    vi.setSystemTime(new Date(2026, 8, 7, 7, 0))
+    const data = migrateV3ToV4(initialData)
+    localStorage.setItem(APP_DATA_V4_KEY, JSON.stringify(data))
+    const first = render(<App />)
+    const card = screen.getAllByLabelText('編輯 國文・二年 1 班')[0]
+    const dataTransfer = { effectAllowed: '', setData: vi.fn(), getData: vi.fn() }
+    fireEvent.dragStart(card, { dataTransfer })
+    const targets = screen.getByLabelText('2026-09-08 可放置節次').querySelectorAll('.lesson-drop-target')
+    const target = [...targets].find((item) => item.textContent?.includes('第 8 節'))!
+    fireEvent.drop(target, { dataTransfer })
+    expect(screen.getByText(/拖曳只建立操作意圖/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    act(() => vi.advanceTimersByTime(200))
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V4_KEY)!).overrides.at(-1)).toMatchObject({ action: 'move', originalLessonId: 'c1', target: { date: '2026-09-08', periodId: 8 } })
+    first.unmount()
+    render(<App />)
+    expect(screen.getByText('單日移動')).toBeTruthy()
+  })
 })

@@ -13,6 +13,7 @@ import { addDays, getWeekInfo, startOfWeek, toDateKey } from './lib/date'
 import { getNextUpcomingEvent } from './lib/schedule'
 import { classifyEventTerm, getTermForDate } from './lib/academic'
 import { getTodayTeachingSummaryV4, type TodayTeachingSummaryV4 } from './lib/scheduleV4'
+import type { LessonDragIntent } from './lib/lessonDrag'
 import type { AppData, CalendarEvent, ModalKind } from './types'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
@@ -50,6 +51,7 @@ export default function App() {
   const [lessonEditorOpen, setLessonEditorOpen] = useState(false)
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null)
   const [selectedLessonDate, setSelectedLessonDate] = useState<string | null>(null)
+  const [lessonDragIntent, setLessonDragIntent] = useState<LessonDragIntent | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [historicalProjectId, setHistoricalProjectId] = useState<string | null>(null)
   const [now, setNow] = useState(() => new Date())
@@ -76,6 +78,7 @@ export default function App() {
     setHistoricalProjectId(null)
     setSelectedLessonId(null)
     setSelectedLessonDate(null)
+    setLessonDragIntent(null)
     setLessonEditorOpen(false)
     setModal(null)
   }
@@ -99,7 +102,7 @@ export default function App() {
     <div className="app-shell">
       <Sidebar activePage={activePage} onNavigate={(page) => { if (page !== 'settings') setHistoricalProjectId(null); setActivePage(page); if (page === 'settings') setModal('settings') }} open={sidebarOpen} onClose={() => setSidebarOpen(false)} storageStatus={storageStatus} projects={appData.projects} activeProjectId={appData.activeProjectId} onProjectChange={switchProject} />
       <main className="main-area">
-        {storageStatus !== 'read-error' && displayProject && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))} onAdd={() => { setSelectedLessonId(null); setSelectedLessonDate(null); setLessonEditorOpen(true) }} onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject)} />}
+        {storageStatus !== 'read-error' && displayProject && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))} onAdd={() => { setSelectedLessonId(null); setSelectedLessonDate(null); setLessonDragIntent(null); setLessonEditorOpen(true) }} onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject)} />}
         {storageStatus !== 'saved' && <StorageSafetyNotice status={storageStatus} controls={storageControls} />}
         {storageStatus === 'read-error' ? <section className="content"><div className="panel blocked-editor"><h1>資料尚未載入</h1><p>為避免在不完整資料上編輯，目前已鎖定課表。請先匯出原始 JSON，或經二次確認後重設。</p></div></section> : !displayProject ? <FirstUse data={appData} setData={setAppData} onViewArchived={(id) => { setHistoricalProjectId(id); setActivePage('timetable') }} /> : <>
         <div className="content">
@@ -120,9 +123,9 @@ export default function App() {
             <section className="panel timetable-panel">
               <div className="panel-heading">
                 <div><h2>{activePage === 'dashboard' ? '本週課表' : '跨校週課表'}</h2><p>依各任教單位的實際節次與輪週設定逐日整合；點選課程可編輯固定資料。</p></div>
-                {!historicalProject && <button className="primary-button" onClick={() => { setSelectedLessonId(null); setSelectedLessonDate(null); setLessonEditorOpen(true) }}><Plus size={16} />新增固定課程</button>}
+                {!historicalProject && <button className="primary-button" onClick={() => { setSelectedLessonId(null); setSelectedLessonDate(null); setLessonDragIntent(null); setLessonEditorOpen(true) }}><Plus size={16} />新增固定課程</button>}
               </div>
-              <MultiSchoolSchedule data={appData} weekDays={weekDays} projectId={displayProject.id} onLessonClick={historicalProject ? undefined : (lessonId, date) => { setSelectedLessonId(lessonId); setSelectedLessonDate(date); setLessonEditorOpen(true) }} />
+              <MultiSchoolSchedule data={appData} weekDays={weekDays} projectId={displayProject.id} onLessonClick={historicalProject ? undefined : (lessonId, date) => { setSelectedLessonId(lessonId); setSelectedLessonDate(date); setLessonDragIntent(null); setLessonEditorOpen(true) }} onLessonDrop={historicalProject ? undefined : (intent) => { setSelectedLessonId(intent.lessonId); setSelectedLessonDate(intent.sourceDate); setLessonDragIntent(intent); setLessonEditorOpen(true) }} />
             </section>
           )}
         </div>
@@ -131,7 +134,7 @@ export default function App() {
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
       {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} onClose={() => setModal(null)} onViewArchived={(id) => { setHistoricalProjectId(id); setActivePage('timetable') }} />}</>}
-      {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor data={appData} setData={setAppData} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} onClose={() => setLessonEditorOpen(false)} onSaved={(projectId) => { if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
+      {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor data={appData} setData={setAppData} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} dragIntent={lessonDragIntent} onClose={() => setLessonEditorOpen(false)} onSaved={(projectId) => { if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
     </div>
   )
 }

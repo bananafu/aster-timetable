@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveProjectDay } from '../lib/scheduleV4'
 import { initialData } from './seed'
 import { migrateV3ToV4 } from './migrationsV4'
-import { cancelLessonOnDate, endLessonFromDate, moveLessonOnDate, permanentlySwapLessons, permanentlyUpdateLesson, replaceLessonOnDate, revokeLessonOverride, swapLessonsOnDate } from './lessonChangesV4'
+import { cancelLessonOnDate, endLessonFromDate, moveLessonOnDate, permanentlySwapLessons, permanentlyUpdateLesson, replaceLessonOnDate, revokeLessonOverride, swapLessonOccurrences, swapLessonsOnDate } from './lessonChangesV4'
 
 const ids = (...values: string[]) => {
   let index = 0
@@ -49,6 +49,20 @@ describe('v4 lesson changes', () => {
     const result = swapLessonsOnDate(setup(), 'c1', 'c2', '2026-09-07', ids('group', 'swap-a', 'swap-b'))
     expect(day(result, '2026-09-07').filter((item) => ['c1', 'c2'].includes(item.id)).map((item) => [item.id, item.periodId])).toEqual([['c2', 1], ['c1', 3]])
     expect(day(result, '2026-09-14').filter((item) => ['c1', 'c2'].includes(item.id)).map((item) => [item.id, item.periodId])).toEqual([['c1', 1], ['c2', 3]])
+  })
+
+  it('跨日期交換原子移動雙方並可完整撤銷', () => {
+    const swapped = swapLessonOccurrences(setup(), 'c1', '2026-09-07', 'c5', '2026-09-08', ids('cross-day', 'swap-a', 'swap-b'))
+    expect(day(swapped, '2026-09-07').filter((item) => ['c1', 'c5'].includes(item.id)).map((item) => [item.id, item.periodId, item.status])).toEqual([['c5', 1, 'moved']])
+    expect(day(swapped, '2026-09-08').filter((item) => ['c1', 'c5'].includes(item.id)).map((item) => [item.id, item.periodId, item.status])).toEqual([['c1', 2, 'moved']])
+    expect(swapped.overrides.filter((item) => item.groupId === 'cross-day')).toHaveLength(2)
+    expect(day(swapped, '2026-09-14').find((item) => item.id === 'c1')?.periodId).toBe(1)
+    expect(day(swapped, '2026-09-15').find((item) => item.id === 'c5')?.periodId).toBe(2)
+
+    const restored = revokeLessonOverride(swapped, 'swap-a')
+    expect(restored.overrides.filter((item) => item.groupId === 'cross-day')).toHaveLength(0)
+    expect(day(restored, '2026-09-07').find((item) => item.id === 'c1')).toMatchObject({ periodId: 1, status: 'regular' })
+    expect(day(restored, '2026-09-08').find((item) => item.id === 'c5')).toMatchObject({ periodId: 2, status: 'regular' })
   })
 
   it('永久修改切分版本並將生效日後 override 改指向新版本', () => {

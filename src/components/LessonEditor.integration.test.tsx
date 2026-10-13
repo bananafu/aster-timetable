@@ -103,4 +103,36 @@ describe('LessonEditor integrated experience', () => {
     expect(result.overrides[0]).toMatchObject({ action: 'move', originalLessonId: 'c1', target: { periodId: 8 } })
     expect(result.overrides[0].id).not.toBe('cancel-existing')
   })
+
+  it('拖曳意圖預設為僅此日期，確認前不寫入', () => {
+    const data = setup(); const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" dragIntent={{ lessonId: 'c1', projectId: data.activeProjectId!, sourceDate: '2026-09-07', targetDate: '2026-09-08', targetPeriodId: 8, targetStartTime: '16:10', targetEndTime: '17:00', conflictLessonIds: [] }} onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByText(/拖曳只建立操作意圖/).textContent).toContain('預設僅移動 2026-09-07')
+    expect((screen.getByLabelText('課程異動類型') as HTMLSelectElement).value).toBe('move')
+    expect((screen.getByLabelText('移至日期') as HTMLInputElement).value).toBe('2026-09-08')
+    expect((screen.getByLabelText('移至節次') as HTMLSelectElement).value).toBe('8')
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(setData).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    expect(setData).toHaveBeenCalledTimes(1)
+  })
+
+  it('拖到其他日期的既有課程時可預覽並原子交換', () => {
+    const data = setup(); const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" dragIntent={{ lessonId: 'c1', projectId: data.activeProjectId!, sourceDate: '2026-09-07', targetDate: '2026-09-08', targetPeriodId: 2, targetStartTime: '09:10', targetEndTime: '10:00', conflictLessonIds: ['c5'] }} onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'swap' } })
+    expect(screen.getByRole('option', { name: /09:10 國文/ })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('交換課程'), { target: { value: 'c5' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('異動預覽').textContent).toContain('2026-09-08')
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    const result = setData.mock.calls[0][0] as ReturnType<typeof setup>
+    expect(result.overrides).toHaveLength(2)
+    expect(new Set(result.overrides.map((item) => item.groupId)).size).toBe(1)
+    expect(result.overrides.map((item) => [item.originalLessonId, item.date, item.target?.date])).toEqual([
+      ['c1', '2026-09-07', '2026-09-08'],
+      ['c5', '2026-09-08', '2026-09-07'],
+    ])
+  })
 })

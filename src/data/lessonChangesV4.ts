@@ -76,21 +76,24 @@ function periodMatchingTime(data: AppDataV4, lesson: RecurringLesson, startTime:
 }
 
 export function swapLessonsOnDate(data: AppDataV4, firstId: string, secondId: string, date: string, createId: () => string): AppDataV4 {
+  return swapLessonOccurrences(data, firstId, date, secondId, date, createId)
+}
+
+export function swapLessonOccurrences(data: AppDataV4, firstId: string, firstDate: string, secondId: string, secondDate: string, createId: () => string): AppDataV4 {
   if (firstId === secondId) throw new Error('Two different lessons are required')
-  const first = assertWritableLesson(data, firstId, date).lesson
-  const second = assertWritableLesson(data, secondId, date).lesson
+  const first = assertWritableLesson(data, firstId, firstDate).lesson
+  const second = assertWritableLesson(data, secondId, secondDate).lesson
   if (first.projectId !== second.projectId) throw new Error('Lessons must belong to the same project')
-  assertNoExistingOverride(data, firstId, date); assertNoExistingOverride(data, secondId, date)
-  const resolved = resolveProjectDay(data, first.projectId, fromDateKey(date))
-  const firstSlot = resolved.find((item) => item.id === firstId)!
-  const secondSlot = resolved.find((item) => item.id === secondId)!
+  assertNoExistingOverride(data, firstId, firstDate); assertNoExistingOverride(data, secondId, secondDate)
+  const firstSlot = resolveProjectDay(data, first.projectId, fromDateKey(firstDate)).find((item) => item.id === firstId)!
+  const secondSlot = resolveProjectDay(data, first.projectId, fromDateKey(secondDate)).find((item) => item.id === secondId)!
   const firstTarget = periodMatchingTime(data, first, secondSlot.startTime, secondSlot.endTime)
   const secondTarget = periodMatchingTime(data, second, firstSlot.startTime, firstSlot.endTime)
   if (!firstTarget || !secondTarget) throw new Error('Cross-school swap has no matching real-time period in each original unit')
   const groupId = createId()
   const overrides: ScheduleOverrideV4[] = [
-    { id: createId(), groupId, projectId: first.projectId, teachingUnitId: first.teachingUnitId, date, periodId: first.periodId, action: 'move', originalLessonId: first.id, target: { date, periodId: firstTarget.id }, origin: 'user' },
-    { id: createId(), groupId, projectId: second.projectId, teachingUnitId: second.teachingUnitId, date, periodId: second.periodId, action: 'move', originalLessonId: second.id, target: { date, periodId: secondTarget.id }, origin: 'user' },
+    { id: createId(), groupId, projectId: first.projectId, teachingUnitId: first.teachingUnitId, date: firstDate, periodId: first.periodId, action: 'move', originalLessonId: first.id, target: { date: secondDate, periodId: firstTarget.id }, origin: 'user' },
+    { id: createId(), groupId, projectId: second.projectId, teachingUnitId: second.teachingUnitId, date: secondDate, periodId: second.periodId, action: 'move', originalLessonId: second.id, target: { date: firstDate, periodId: secondTarget.id }, origin: 'user' },
   ]
   return validResult({ ...data, overrides: [...data.overrides, ...overrides] })
 }

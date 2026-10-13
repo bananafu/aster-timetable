@@ -64,11 +64,17 @@
 
 驗收：取消／移動／替換／交換均可安全恢復；交換不會單邊撤銷；版本切分後重新指向的 override 仍可撤銷；封存、project isolation、重新載入與既有 storage／多分頁保護測試通過。
 
-## Phase 4 — Schedule interactions（待辦）
+## Phase 4 — Schedule interactions（進行中）
 
 在既有跨校實際時間總覽上加入拖曳與進階互動；保留單校節次檢視。
 
 驗收：不同節次制度可正確並列；邊界相接不誤判衝突；拖曳結果需經資料層驗證。
+
+### Phase 4A — 桌面拖曳調課（完成）
+
+已在總課表與各校課表加入桌面滑鼠拖曳。拖曳只產生經原 TeachingUnit 實際時間映射的操作意圖，drop 後開啟既有 LessonEditor，預設為「僅此日期／移動」，經預覽與確認才寫入 v4。目標占用會導向既有交換／保留衝堂／取消流程；已有 override、封存專案、學期外日期及無法安全映射的跨校時段均不會直接寫入。Escape 可取消拖曳，手機觸控拖曳留待 Phase 4B。
+
+驗收：drop 前資料不變；原課程歸屬與 periodId 規則不變；有效／無效目標、衝堂、既有 override、唯讀、取消及重新載入均有自動測試；完整 test/lint/build 通過。
 
 ## Phase 5 — Stabilization and release acceptance（待辦）
 
