@@ -1,6 +1,7 @@
 import { fromDateKey, startOfWeek, toDateKey } from './date'
 import type { AlternatingWeekPattern, AppDataV4, DayOfWeek, TeachingUnit } from '../types'
 import { classDisplayName } from './classes'
+import { selectedTimetableId } from '../data/timetableCompatibility'
 
 export type ResolvedLessonStatus = 'regular' | 'replaced' | 'cancelled' | 'moved'
 
@@ -9,6 +10,7 @@ export interface ResolvedLessonV4 {
   seriesId: string
   date: string
   projectId: string
+  timetableId?: string
   schoolId: string
   schoolName: string
   schoolColor: string
@@ -31,6 +33,7 @@ export interface ResolvedLessonV4 {
 }
 
 export interface ScheduleFiltersV4 {
+  timetableId?: string
   schoolId?: string
   teachingUnitId?: string
 }
@@ -73,6 +76,7 @@ export function resolveProjectDay(
   date: Date,
   filters: ScheduleFiltersV4 = {},
 ): ResolvedLessonV4[] {
+  const timetableId = selectedTimetableId(data, projectId, filters.timetableId)
   const dateKey = toDateKey(date)
   const units = data.teachingUnits.filter((unit) => unit.projectId === projectId
     && (!filters.schoolId || unit.schoolId === filters.schoolId)
@@ -82,11 +86,12 @@ export function resolveProjectDay(
   const subjects = new Map(data.subjects.map((subject) => [subject.id, subject]))
   const classes = new Map(data.classes.filter((item) => item.projectId === projectId).map((item) => [item.id, item]))
   const assignedOverrides = data.overrides.filter((item) => item.projectId === projectId
+    && (data.schemaVersion !== 6 || item.timetableId === timetableId)
     && item.teachingUnitId !== null && unitIds.has(item.teachingUnitId))
   const overrides = assignedOverrides.filter((item) => item.date === dateKey)
 
   const resolved = data.recurringLessons.flatMap<ResolvedLessonV4>((lesson) => {
-    if (lesson.projectId !== projectId || !unitIds.has(lesson.teachingUnitId)
+    if (lesson.projectId !== projectId || (data.schemaVersion === 6 && lesson.timetableId !== timetableId) || !unitIds.has(lesson.teachingUnitId)
       || dateKey < lesson.effectiveStart || (lesson.effectiveEnd && dateKey > lesson.effectiveEnd)) return []
     const unit = units.find((item) => item.id === lesson.teachingUnitId)
     if (!unit || !lessonAppliesOnDate(dateKey, lesson.day, lesson.weekPattern, unit, date)) return []
@@ -97,6 +102,7 @@ export function resolveProjectDay(
     if (!school || !period || !originalSubject || !originalClass) return []
 
     const activeSlotLessonCount = data.recurringLessons.filter((candidate) => candidate.projectId === projectId
+      && (data.schemaVersion !== 6 || candidate.timetableId === timetableId)
       && candidate.teachingUnitId === unit.id && candidate.periodId === lesson.periodId
       && dateKey >= candidate.effectiveStart && (!candidate.effectiveEnd || dateKey <= candidate.effectiveEnd)
       && lessonAppliesOnDate(dateKey, candidate.day, candidate.weekPattern, unit, date)).length
@@ -114,6 +120,7 @@ export function resolveProjectDay(
       seriesId: lesson.seriesId,
       date: dateKey,
       projectId,
+      ...(timetableId && { timetableId }),
       schoolId: school.id,
       schoolName: school.name,
       schoolColor: school.color,
@@ -145,11 +152,11 @@ export function resolveProjectDay(
     const subject = lesson ? subjects.get(lesson.subjectId) : undefined
     const schoolClass = lesson ? classes.get(lesson.classId) : undefined
     const sourceDate = fromDateKey(override.date)
-    if (!lesson || !unit || !school || !period || !subject || !schoolClass
+    if (!lesson || (data.schemaVersion === 6 && lesson.timetableId !== timetableId) || !unit || !school || !period || !subject || !schoolClass
       || override.date < lesson.effectiveStart || (lesson.effectiveEnd && override.date > lesson.effectiveEnd)
       || !lessonAppliesOnDate(override.date, lesson.day, lesson.weekPattern, unit, sourceDate)) return []
     return [{
-      id: lesson.id, seriesId: lesson.seriesId, date: dateKey, projectId, schoolId: school.id,
+      id: lesson.id, seriesId: lesson.seriesId, date: dateKey, projectId, ...(timetableId && { timetableId }), schoolId: school.id,
       schoolName: school.name, schoolColor: school.color, teachingUnitId: unit.id, teachingUnitName: unit.name,
       subjectId: subject.id, subjectName: subject.name, subjectColor: subject.color,
       classId: schoolClass.id, className: classDisplayName(schoolClass), periodId: period.id, periodLabel: period.label,
@@ -185,11 +192,12 @@ export function resolveProjectWeek(
   return dates.map((date) => ({ date, lessons: resolveProjectDay(data, projectId, date, filters) }))
 }
 
-export function getTodayTeachingSummaryV4(data: AppDataV4, projectId: string, now: Date): TodayTeachingSummaryV4 {
+export function getTodayTeachingSummaryV4(data: AppDataV4, projectId: string, now: Date, timetableId?: string): TodayTeachingSummaryV4 {
+  selectedTimetableId(data, projectId, timetableId)
   const dateKey = toDateKey(now)
   const hasActiveUnit = data.teachingUnits.some((unit) => unit.projectId === projectId && dateKey >= unit.startDate && dateKey <= unit.endDate)
   if (!hasActiveUnit) return { count: 0, state: 'outside-semester' }
-  const lessons = resolveProjectDay(data, projectId, now).filter((lesson) => lesson.status !== 'cancelled')
+  const lessons = resolveProjectDay(data, projectId, now, { timetableId }).filter((lesson) => lesson.status !== 'cancelled')
   const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
   const current = lessons.find((lesson) => lesson.startTime <= currentTime && currentTime < lesson.endTime)
   if (current) return { count: lessons.length, state: 'current', lesson: current }

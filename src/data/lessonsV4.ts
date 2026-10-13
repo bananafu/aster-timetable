@@ -1,8 +1,11 @@
-import { isAppDataV4 } from './validators/v4'
+import { isCurrentAppData } from './validators/current'
+import { subjectChoiceAllowed } from '../lib/subjects'
+import { assertLessonTimetable, selectedTimetableId } from './timetableCompatibility'
 import type { AppDataV4, DayOfWeek, RecurringLesson, WeekPattern } from '../types'
 
 export interface LessonDraftV4 {
   projectId: string
+  timetableId?: string
   schoolId: string
   teachingUnitId: string
   subjectId: string
@@ -23,14 +26,14 @@ function weekPatternsOverlap(left: WeekPattern, right: WeekPattern) {
   return left === 'every' || right === 'every' || left === right
 }
 
-function validateDraft(data: AppDataV4, draft: LessonDraftV4) {
+function validateDraft(data: AppDataV4, draft: LessonDraftV4, previous?: RecurringLesson) {
   const project = data.projects.find((item) => item.id === draft.projectId)
   const school = data.schools.find((item) => item.id === draft.schoolId)
   const unit = data.teachingUnits.find((item) => item.id === draft.teachingUnitId)
   const schoolClass = data.classes.find((item) => item.id === draft.classId)
   if (!project || project.archivedAt) throw new Error('Archived or missing projects are read-only')
   if (!school || school.projectId !== project.id || !unit || unit.projectId !== project.id || unit.schoolId !== school.id) throw new Error('School and teaching unit do not belong to the project')
-  if (!data.subjects.some((item) => item.id === draft.subjectId)) throw new Error('Subject does not exist')
+  if (!subjectChoiceAllowed(data.subjects.find((item) => item.id === draft.subjectId), unit.schoolLevel, unit.id, previous)) throw new Error('Subject does not apply to this school level')
   if (!schoolClass || schoolClass.projectId !== project.id || schoolClass.teachingUnitId !== unit.id) throw new Error('Class does not belong to the teaching unit')
   if (!unit.periods.some((item) => item.id === draft.periodId)) throw new Error('Period does not belong to the teaching unit')
   if (![1, 2, 3, 4, 5].includes(draft.day)) throw new Error('Weekday is invalid')
@@ -41,23 +44,26 @@ function validateDraft(data: AppDataV4, draft: LessonDraftV4) {
 function assertNoConflict(data: AppDataV4, candidate: RecurringLesson, excludedId?: string) {
   const conflict = data.recurringLessons.find((item) => item.id !== excludedId
     && item.projectId === candidate.projectId && item.teachingUnitId === candidate.teachingUnitId
+    && (data.schemaVersion !== 6 || item.timetableId === candidate.timetableId)
     && item.day === candidate.day && item.periodId === candidate.periodId
     && weekPatternsOverlap(item.weekPattern, candidate.weekPattern) && rangesOverlap(item, candidate))
   if (conflict) throw new Error('A conflicting recurring lesson already exists')
 }
 
 function assertValidResult(value: AppDataV4) {
-  if (!isAppDataV4(value)) throw new Error('Lesson operation produced invalid AppData v4')
+  if (!isCurrentAppData(value)) throw new Error('Lesson operation produced invalid AppData')
   return value
 }
 
 export function addLessonV4(data: AppDataV4, draft: LessonDraftV4, createId: () => string): AppDataV4 {
   const { unit } = validateDraft(data, draft)
+  const timetableId = selectedTimetableId(data, draft.projectId, draft.timetableId)
   const id = createId()
   const lesson: RecurringLesson = {
     id,
     seriesId: id,
     projectId: draft.projectId,
+    ...(timetableId && { timetableId }),
     teachingUnitId: draft.teachingUnitId,
     subjectId: draft.subjectId,
     classId: draft.classId,
@@ -76,8 +82,11 @@ export function addLessonV4(data: AppDataV4, draft: LessonDraftV4, createId: () 
 export function updateLessonV4(data: AppDataV4, lessonId: string, draft: LessonDraftV4): AppDataV4 {
   const existing = data.recurringLessons.find((item) => item.id === lessonId)
   if (!existing) throw new Error('Lesson does not exist')
+  const timetableId = assertLessonTimetable(data, lessonId, draft.timetableId)
+  if (existing.projectId !== draft.projectId) throw new Error('Lesson cannot change project')
+  if (selectedTimetableId(data, draft.projectId, draft.timetableId) !== timetableId) throw new Error('Lesson cannot change timetable')
   if (data.recurringLessons.some((item) => item.seriesId === existing.seriesId && item.effectiveStart > existing.effectiveStart)) throw new Error('Historical lesson versions are read-only')
-  const { unit } = validateDraft(data, draft)
+  const { unit } = validateDraft(data, draft, existing)
   const hasOverrides = data.overrides.some((item) => item.originalLessonId === lessonId)
   const structuralChange = existing.projectId !== draft.projectId || existing.teachingUnitId !== draft.teachingUnitId
     || existing.day !== draft.day || existing.periodId !== draft.periodId || existing.weekPattern !== draft.weekPattern
@@ -104,9 +113,10 @@ export function updateLessonV4(data: AppDataV4, lessonId: string, draft: LessonD
   })
 }
 
-export function deleteLessonV4(data: AppDataV4, lessonId: string): AppDataV4 {
+export function deleteLessonV4(data: AppDataV4, lessonId: string, timetableId?: string): AppDataV4 {
   const lesson = data.recurringLessons.find((item) => item.id === lessonId)
   if (!lesson) throw new Error('Lesson does not exist')
+  assertLessonTimetable(data, lessonId, timetableId)
   const project = data.projects.find((item) => item.id === lesson.projectId)
   if (!project || project.archivedAt) throw new Error('Archived or missing projects are read-only')
   if (data.overrides.some((item) => item.originalLessonId === lessonId)) throw new Error('Lesson has date-specific overrides')

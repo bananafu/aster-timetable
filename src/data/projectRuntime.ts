@@ -9,9 +9,12 @@ import type {
   SchoolPeriod,
   SemesterKind,
 } from '../types'
+import { subjectChoiceAllowed } from '../lib/subjects'
+import { singleTimetableId } from './timetableCompatibility'
 
 export interface NewProjectInput {
   name: string
+  teacherName?: string
   academicYear: number
   semester: SemesterKind
   customLabel?: string
@@ -56,13 +59,16 @@ export function renameProject(data: AppDataV4, projectId: string, name: string, 
 
 export function createBlankProject(data: AppDataV4, input: NewProjectInput, createId: () => string, now = new Date().toISOString()): AppDataV4 {
   const name = input.name.trim()
+  const teacherName = input.teacherName?.trim()
   if (!name || !Number.isInteger(input.academicYear) || input.academicYear <= 0 || !input.startDate || !input.endDate || input.startDate > input.endDate
-    || (input.semester === 'custom' && !input.customLabel?.trim())) throw new Error('New project data is invalid')
+    || (input.semester === 'custom' && !input.customLabel?.trim()) || (data.schemaVersion === 6 && !teacherName)) throw new Error('New project data is invalid')
   const projectId = createId(); const schoolId = createId(); const unitId = createId()
+  const timetableId = data.schemaVersion === 6 ? createId() : undefined
   return {
     ...data,
     activeProjectId: projectId,
     projects: [...data.projects, { id: projectId, name, term: { academicYear: input.academicYear, semester: input.semester, customLabel: input.semester === 'custom' ? input.customLabel?.trim() : undefined }, createdAt: now, updatedAt: now }],
+    ...(timetableId && { timetables: [...(data.timetables ?? []), { id: timetableId, projectId, name, teacherName: teacherName! }] }),
     schools: [...data.schools, { id: schoolId, projectId, name: '我的學校', color: '#A5A051' }],
     teachingUnits: [...data.teachingUnits, { id: unitId, projectId, schoolId, name: '主要任教單位', schoolLevel: 'senior-high', startDate: input.startDate, endDate: input.endDate, timezone: 'Asia/Taipei', periods: BLANK_PROJECT_PERIODS.map((item) => ({ ...item })), weekCycle: { enabled: true, anchorDate: input.startDate, anchorPattern: 'A' } }],
   }
@@ -74,6 +80,7 @@ export function copyProject(data: AppDataV4, input: CopyProjectInput, createId: 
   const source = data.projects.find((item) => item.id === input.sourceProjectId)
   const sourceSchools = data.schools.filter((item) => item.projectId === input.sourceProjectId)
   const sourceUnits = data.teachingUnits.filter((item) => item.projectId === input.sourceProjectId)
+  const sourceTimetableId = singleTimetableId(data, input.sourceProjectId)
   const name = input.name.trim()
   if (!source || !name || sourceSchools.length === 0 || sourceUnits.length === 0 || input.units.length !== sourceUnits.length
     || !Number.isInteger(input.academicYear) || input.academicYear <= 0
@@ -86,11 +93,16 @@ export function copyProject(data: AppDataV4, input: CopyProjectInput, createId: 
   })) throw new Error('Every teaching unit requires new dates and an anchor')
 
   const sourceLessons = data.recurringLessons.filter((item) => item.projectId === source.id)
+  if (sourceLessons.some((lesson) => {
+    const unit = sourceUnits.find((item) => item.id === lesson.teachingUnitId)
+    return !unit || !subjectChoiceAllowed(data.subjects.find((item) => item.id === lesson.subjectId), unit.schoolLevel, unit.id)
+  })) throw new Error('Copied lessons require subjects applicable to their school levels')
   const versions = new Map<string, number>()
   sourceLessons.forEach((lesson) => versions.set(lesson.seriesId, (versions.get(lesson.seriesId) ?? 0) + 1))
   if ([...versions.values()].some((count) => count > 1)) throw new Error('Versioned lessons require manual review before copying')
 
   const projectId = createId()
+  const timetableId = sourceTimetableId ? createId() : undefined
   const schoolIds = new Map(sourceSchools.map((school) => [school.id, createId()]))
   const unitIds = new Map(sourceUnits.map((unit) => [unit.id, createId()]))
   const sourceClasses = data.classes.filter((item) => item.projectId === source.id)
@@ -101,6 +113,7 @@ export function copyProject(data: AppDataV4, input: CopyProjectInput, createId: 
     ...data,
     activeProjectId: projectId,
     projects: [...data.projects, { id: projectId, name, term: { academicYear: input.academicYear, semester: input.semester, customLabel: input.semester === 'custom' ? input.customLabel?.trim() : undefined }, createdAt: now, updatedAt: now }],
+    ...(timetableId && { timetables: [...(data.timetables ?? []), { ...data.timetables!.find((item) => item.id === sourceTimetableId)!, id: timetableId, projectId }] }),
     schools: [...data.schools, ...sourceSchools.map((school) => ({ ...school, id: schoolIds.get(school.id)!, projectId }))],
     teachingUnits: [...data.teachingUnits, ...sourceUnits.map((unit) => {
       const config = configs.get(unit.id)!
@@ -110,7 +123,7 @@ export function copyProject(data: AppDataV4, input: CopyProjectInput, createId: 
     recurringLessons: [...data.recurringLessons, ...sourceLessons.map((item) => {
       const config = configs.get(item.teachingUnitId)!
       const id = lessonIds.get(item.id)!
-      return { ...item, id, seriesId: id, projectId, teachingUnitId: unitIds.get(item.teachingUnitId)!, classId: classIds.get(item.classId)!, effectiveStart: config.startDate, effectiveEnd: config.endDate }
+      return { ...item, id, seriesId: id, projectId, ...(timetableId && { timetableId }), teachingUnitId: unitIds.get(item.teachingUnitId)!, classId: classIds.get(item.classId)!, effectiveStart: config.startDate, effectiveEnd: config.endDate }
     })],
   }
 }
@@ -145,6 +158,7 @@ export function deleteProject(data: AppDataV4, projectId: string): AppDataV4 {
     ...data,
     activeProjectId: nextActive,
     projects: remainingProjects,
+    ...(data.schemaVersion === 6 && { timetables: data.timetables?.filter((item) => item.projectId !== projectId) }),
     schools: data.schools.filter((item) => item.projectId !== projectId),
     teachingUnits: data.teachingUnits.filter((item) => item.projectId !== projectId),
     classes: data.classes.filter((item) => item.projectId !== projectId),
@@ -159,9 +173,12 @@ export function getActiveProject(data: AppDataV4) {
   return data.projects.find((project) => project.id === data.activeProjectId)
 }
 
-export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.activeProjectId): AppData {
+export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.activeProjectId, requestedTimetableId?: string): AppData {
   const project = data.projects.find((item) => item.id === requestedProjectId)
   if (!project) throw new Error('Active project does not exist')
+  const projectTimetables = data.schemaVersion === 6 ? data.timetables?.filter((item) => item.projectId === project.id) ?? [] : []
+  if (requestedTimetableId && !projectTimetables.some((item) => item.id === requestedTimetableId)) throw new Error('Timetable does not belong to the project')
+  const timetableId = requestedTimetableId ?? (projectTimetables.length === 1 ? projectTimetables[0].id : undefined)
   const schools = data.schools.filter((item) => item.projectId === project.id)
   const units = data.teachingUnits.filter((item) => item.projectId === project.id)
   const firstUnit = units[0]
@@ -180,13 +197,15 @@ export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.a
   }))
   const classes: SchoolClass[] = data.classes.filter((item) => item.projectId === project.id)
     .map(({ id, name, grade, classNumber, room, origin }) => ({ id, name, grade, classNumber, room, origin }))
-  const courses: Course[] = data.recurringLessons.filter((item) => item.projectId === project.id)
+  const courses: Course[] = data.recurringLessons.filter((item) => item.projectId === project.id
+    && (data.schemaVersion !== 6 || item.timetableId === timetableId))
     .map(({ id, teachingUnitId, subjectId, classId, day, periodId, weekPattern, room, origin }) => ({
       id, termId: teachingUnitId, subjectId, classId, day, periodId, weekPattern, room, origin,
     }))
   const events: CalendarEvent[] = data.events.filter((item) => item.projectId === project.id || item.projectId === null)
     .map((item) => ({ id: item.id, termId: item.teachingUnitId ?? null, title: item.title, type: item.type, date: item.date, startTime: item.startTime, endTime: item.endTime, location: item.location, notes: item.notes, color: item.color, origin: item.origin }))
-  const overrides: ScheduleOverride[] = data.overrides.filter((item): item is typeof item & { action: 'cancel' | 'replace' } => item.projectId === project.id && item.action !== 'move')
+  const overrides: ScheduleOverride[] = data.overrides.filter((item): item is typeof item & { action: 'cancel' | 'replace' } => item.projectId === project.id && item.action !== 'move'
+    && (data.schemaVersion !== 6 || item.timetableId === timetableId))
     .map((item) => ({ id: item.id, termId: item.teachingUnitId, date: item.date, periodId: item.periodId, action: item.action, originalCourseId: item.originalLessonId, replacement: item.replacement, note: item.note, origin: item.origin }))
 
   return {
@@ -213,6 +232,7 @@ export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.a
 export function mergeProjectView(data: AppDataV4, projectId: string, view: AppData): AppDataV4 {
   const project = data.projects.find((item) => item.id === projectId)
   if (!project) throw new Error('Project does not exist')
+  const timetableId = singleTimetableId(data, projectId)
   const existingUnits = new Map(data.teachingUnits.filter((item) => item.projectId === projectId).map((item) => [item.id, item]))
   const firstSchool = data.schools.find((item) => item.projectId === projectId)
   if (!firstSchool) throw new Error('Project does not have a school')
@@ -235,10 +255,12 @@ export function mergeProjectView(data: AppDataV4, projectId: string, view: AppDa
     const unit = teachingUnits.find((item) => item.id === course.termId)
     if (!unit) throw new Error('Course does not have a valid teaching unit')
     const existing = existingLessons.get(course.id)
+    if (!subjectChoiceAllowed(data.subjects.find((item) => item.id === course.subjectId), unit.schoolLevel, unit.id, existing)) throw new Error('Course subject does not apply to the teaching unit')
     return {
       id: course.id,
       seriesId: existing?.seriesId ?? course.id,
       projectId,
+      ...(timetableId && { timetableId }),
       teachingUnitId: unit.id,
       subjectId: course.subjectId,
       classId: course.classId,
@@ -256,12 +278,16 @@ export function mergeProjectView(data: AppDataV4, projectId: string, view: AppDa
     projectId: termId === null ? null : projectId,
     teachingUnitId: termId,
   }))
-  const overrides = view.overrides.map(({ termId, originalCourseId, ...override }) => ({
-    ...override,
-    projectId,
-    teachingUnitId: termId,
-    originalLessonId: originalCourseId,
-  }))
+  const overrides = view.overrides.map(({ termId, originalCourseId, ...override }) => {
+    if (override.replacement) {
+      const unit = teachingUnits.find((item) => item.id === termId)
+      const previous = data.overrides.find((item) => item.id === override.id)
+      const unchanged = previous?.replacement?.subjectId === override.replacement.subjectId && previous.teachingUnitId === termId
+      if (!unit ? !unchanged : !subjectChoiceAllowed(data.subjects.find((item) => item.id === override.replacement?.subjectId), unit.schoolLevel, unit.id,
+        previous?.replacement ? { subjectId: previous.replacement.subjectId, teachingUnitId: previous.teachingUnitId ?? '' } : undefined)) throw new Error('Override subject does not apply to the teaching unit')
+    }
+    return { ...override, projectId, ...(timetableId && { timetableId }), teachingUnitId: termId, originalLessonId: originalCourseId }
+  })
   const nativeOverrides = data.overrides.filter((item) => item.projectId === projectId && item.action === 'move')
 
   return {
@@ -269,7 +295,7 @@ export function mergeProjectView(data: AppDataV4, projectId: string, view: AppDa
     projects: data.projects.map((item) => item.id === projectId ? { ...item, updatedAt: new Date().toISOString() } : item),
     schools: data.schools.map((item) => item.id === firstSchool.id ? { ...item, name: view.school.name } : item),
     teachingUnits: [...data.teachingUnits.filter((item) => item.projectId !== projectId), ...teachingUnits],
-    subjects: view.subjects.map((subject) => ({ ...subject })),
+    subjects: data.subjects,
     classes: [...data.classes.filter((item) => item.projectId !== projectId), ...classes],
     recurringLessons: [...data.recurringLessons.filter((item) => item.projectId !== projectId), ...recurringLessons],
     events: [...data.events.filter((item) => item.projectId !== projectId && item.projectId !== null), ...events],

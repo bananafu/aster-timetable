@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cancelLessonOnDate, moveLessonOnDate, permanentlyUpdateLesson } from '../data/lessonChangesV4'
 import { migrateV3ToV4 } from '../data/migrationsV4'
+import { migrateV4ToV5 } from '../data/migrationsV5'
 import { initialData } from '../data/seed'
 import { addClass, addSchool, addTeachingUnit } from '../data/academicSettingsV4'
 import { LessonEditor } from './LessonEditor'
@@ -14,6 +15,42 @@ function setup() {
 }
 
 describe('LessonEditor integrated experience', () => {
+  it('學制切換後清除不適用科目，空狀態可建立目前學制科目', () => {
+    const base = migrateV4ToV5(setup())
+    base.teachingUnits[0].schoolLevel = 'senior-high'
+    base.subjects = base.subjects.map((subject, index) => ({ ...subject, name: index === 0 ? '高中科目' : subject.name, applicableSchoolLevels: ['senior-high'] }))
+    const unit = { ...base.teachingUnits[0], id: 'unit-j', schoolLevel: 'junior-high' as const }
+    base.teachingUnits.push(unit)
+    const setData = vi.fn()
+    render(<LessonEditor data={base} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect((screen.getByLabelText('課程科目') as HTMLSelectElement).value).toBe(base.subjects[0].id)
+    fireEvent.change(screen.getByLabelText('課程學制'), { target: { value: 'unit-j' } })
+    expect(screen.queryByLabelText('課程科目')).toBeNull()
+    expect(screen.getByText('目前學制尚無適用科目，可建立科目或前往專案設定。')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '國中科目' } })
+    fireEvent.click(screen.getByRole('button', { name: '建立科目' }))
+    expect(setData.mock.calls[0][0].subjects.at(-1)).toMatchObject({ name: '國中科目', applicableSchoolLevels: ['junior-high'] })
+  })
+
+  it('既有不適用科目仍顯示課程脈絡，且不會靜默改選', () => {
+    const data = migrateV4ToV5(setup())
+    data.subjects.find((item) => item.id === 'chinese')!.applicableSchoolLevels = ['junior-high']
+    render(<LessonEditor data={data} setData={vi.fn()} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByLabelText('目前課程資訊').textContent).toContain('國文')
+    expect(screen.getByText('既有科目不適用目前學制；原課程仍保留，可修改其他欄位。若要更換科目，請選擇適用科目。')).toBeTruthy()
+    expect((screen.getByLabelText('課程科目') as HTMLSelectElement).value).toBe('')
+    expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('未選學制時不顯示全域科目選單或新增入口', () => {
+    const data = migrateV4ToV5(setup())
+    data.teachingUnits = []
+    render(<LessonEditor data={data} setData={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByText('請先選擇學校與學制，才能選擇或新增科目。')).toBeTruthy()
+    expect(screen.queryByLabelText('課程科目')).toBeNull()
+    expect(screen.queryByRole('button', { name: '建立科目' })).toBeNull()
+  })
   it('顯示點擊日期的完整課程脈絡與 A/B 狀態', () => {
     const data = setup()
     render(<LessonEditor data={data} setData={vi.fn()} lessonId="c3" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
@@ -107,7 +144,7 @@ describe('LessonEditor integrated experience', () => {
 
   it('拖曳意圖預設為僅此日期，確認前不寫入', () => {
     const data = setup(); const setData = vi.fn()
-    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" dragIntent={{ lessonId: 'c1', projectId: data.activeProjectId!, sourceDate: '2026-09-07', targetDate: '2026-09-08', targetPeriodId: 8, targetStartTime: '16:10', targetEndTime: '17:00', conflictLessonIds: [] }} onClose={vi.fn()} onSaved={vi.fn()} />)
+    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" dragIntent={{ lessonId: 'c1', projectId: data.activeProjectId!, timetableId: null, sourceDate: '2026-09-07', targetDate: '2026-09-08', targetPeriodId: 8, targetStartTime: '16:10', targetEndTime: '17:00', conflictLessonIds: [] }} onClose={vi.fn()} onSaved={vi.fn()} />)
     expect(screen.getByText(/拖曳只建立操作意圖/).textContent).toContain('預設僅移動 2026-09-07')
     expect((screen.getByLabelText('課程異動類型') as HTMLSelectElement).value).toBe('move')
     expect((screen.getByLabelText('移至日期') as HTMLInputElement).value).toBe('2026-09-08')
@@ -120,7 +157,7 @@ describe('LessonEditor integrated experience', () => {
 
   it('拖到其他日期的既有課程時可預覽並原子交換', () => {
     const data = setup(); const setData = vi.fn()
-    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" dragIntent={{ lessonId: 'c1', projectId: data.activeProjectId!, sourceDate: '2026-09-07', targetDate: '2026-09-08', targetPeriodId: 2, targetStartTime: '09:10', targetEndTime: '10:00', conflictLessonIds: ['c5'] }} onClose={vi.fn()} onSaved={vi.fn()} />)
+    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" dragIntent={{ lessonId: 'c1', projectId: data.activeProjectId!, timetableId: null, sourceDate: '2026-09-07', targetDate: '2026-09-08', targetPeriodId: 2, targetStartTime: '09:10', targetEndTime: '10:00', conflictLessonIds: ['c5'] }} onClose={vi.fn()} onSaved={vi.fn()} />)
     fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'swap' } })
     expect(screen.getByRole('option', { name: /09:10 國文/ })).toBeTruthy()
     fireEvent.change(screen.getByLabelText('交換課程'), { target: { value: 'c5' } })

@@ -4,7 +4,7 @@ export type AlternatingWeekPattern = 'A' | 'B'
 export type DataOrigin = 'demo' | 'user'
 export type ScheduleDensity = 'comfortable' | 'compact'
 
-export interface Subject { id: string; name: string; shortName: string; color: string; origin?: DataOrigin }
+export interface Subject { id: string; name: string; shortName: string; color: string; applicableSchoolLevels?: import('./v4').SchoolLevel[]; origin?: DataOrigin }
 export interface SchoolClass { id: string; name: string; grade?: number; classNumber?: number; room?: string; origin?: DataOrigin }
 
 export interface SchoolPeriod {
@@ -98,6 +98,8 @@ export type ModalKind = 'event' | 'course' | 'editCourse' | 'settings' | null
 export type {
   AcademicTermDescriptor,
   AppDataV4,
+  AppDataV5,
+  AppDataV6,
   CalendarEventV4,
   MigrationWarningV4,
   ProjectClass,
@@ -105,7 +107,10 @@ export type {
   ScheduleOverrideV4,
   School,
   SchoolLevel,
+  SubjectV5,
   SemesterKind,
   TeachingUnit,
   TimetableProject,
+  Timetable,
 } from './v4'
+export { SCHOOL_LEVELS } from './v4'

@@ -11,6 +11,7 @@ interface Props {
   data: AppDataV4
   weekDays: Date[]
   projectId?: string | null
+  timetableId?: string
   onLessonClick?: (lessonId: string, date: string) => void
   onLessonDrop?: (intent: LessonDragIntent) => void
 }
@@ -51,7 +52,7 @@ function LessonCard({ lesson, previous, onClick, draggable, onDragStart, onDragE
   </button>
 }
 
-export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjectId, onLessonClick, onLessonDrop }: Props) {
+export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjectId, timetableId, onLessonClick, onLessonDrop }: Props) {
   const [scope, setScope] = useState<ScheduleScope>('all')
   const projectId = requestedProjectId === undefined ? data.activeProjectId : requestedProjectId
   const schools = useMemo(() => data.schools.filter((item) => item.projectId === projectId), [data.schools, projectId])
@@ -65,6 +66,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
     setSchoolId(schools[0]?.id ?? '')
     setUnitId('all')
   }, [projectId, schools])
+  useEffect(() => { setDraggedLesson(null); setDragFeedback('') }, [timetableId])
   useEffect(() => {
     const cancelDrag = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { setDraggedLesson(null); setDragFeedback('已取消拖曳，沒有修改任何資料。') }
@@ -75,16 +77,17 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
 
   const schoolUnits = units.filter((item) => item.schoolId === schoolId)
   const schedule = useMemo(
-    () => projectId ? resolveProjectWeek(data, projectId, weekDays, scope === 'school'
-      ? { schoolId, teachingUnitId: unitId === 'all' ? undefined : unitId }
-      : {}) : [],
-    [data, projectId, weekDays, scope, schoolId, unitId],
+    () => projectId && (data.schemaVersion !== 6 || timetableId)
+      ? resolveProjectWeek(data, projectId, weekDays, scope === 'school'
+        ? { timetableId, schoolId, teachingUnitId: unitId === 'all' ? undefined : unitId }
+        : { timetableId }) : [],
+    [data, projectId, timetableId, weekDays, scope, schoolId, unitId],
   )
   const conflictCount = schedule.flatMap((day) => day.lessons).filter((lesson) => lesson.hasConflict).length
   const draggedUnit = draggedLesson ? data.teachingUnits.find((item) => item.id === draggedLesson.teachingUnitId) : undefined
   const dropLesson = (date: string, startTime: string, endTime: string) => {
     if (!draggedLesson || !onLessonDrop) return
-    const result = createLessonDragIntent(data, draggedLesson, { date, startTime, endTime })
+    const result = createLessonDragIntent(data, draggedLesson, { date, startTime, endTime, timetableId })
     setDraggedLesson(null)
     if (!result.valid) { setDragFeedback(result.reason); return }
     setDragFeedback(result.intent.conflictLessonIds.length > 0 ? '目標已有課程，請在預覽中選擇交換、保留衝堂或取消。' : '')
@@ -92,6 +95,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
   }
 
   if (!projectId) return <div className="cross-school-empty">目前沒有可顯示的課表專案。</div>
+  if (data.schemaVersion === 6 && !timetableId) return <div className="cross-school-empty">請先選擇教師課表。</div>
 
   return <div className="multi-schedule">
     <div className="multi-schedule-toolbar">
@@ -112,7 +116,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
         {schedule.map(({ date, lessons }, dayIndex) => <section className="multi-day-column" key={date.toISOString()}>
           <header><span>{dayNames[dayIndex]}</span><strong>{formatShortDate(date)}</strong></header>
           <div className="multi-day-lessons">
-            {draggedLesson && draggedUnit && <div className="lesson-drop-targets" aria-label={`${toDateKey(date)} 可放置節次`}>{[...draggedUnit.periods].sort((left, right) => left.order - right.order).map((period) => { const result = createLessonDragIntent(data, draggedLesson, { date: toDateKey(date), startTime: period.startTime, endTime: period.endTime }); return <div key={period.id} className={`lesson-drop-target ${result.valid ? 'valid' : 'invalid'} ${result.valid && result.intent.conflictLessonIds.length ? 'occupied' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dropLesson(toDateKey(date), period.startTime, period.endTime) }}><strong>{period.label}</strong><span>{period.startTime}–{period.endTime}</span><em>{result.valid ? result.intent.conflictLessonIds.length ? '已有課程' : '放置於此' : '不可放置'}</em></div> })}</div>}
+            {draggedLesson && draggedUnit && <div className="lesson-drop-targets" aria-label={`${toDateKey(date)} 可放置節次`}>{[...draggedUnit.periods].sort((left, right) => left.order - right.order).map((period) => { const result = createLessonDragIntent(data, draggedLesson, { date: toDateKey(date), startTime: period.startTime, endTime: period.endTime, timetableId }); return <div key={period.id} className={`lesson-drop-target ${result.valid ? 'valid' : 'invalid'} ${result.valid && result.intent.conflictLessonIds.length ? 'occupied' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dropLesson(toDateKey(date), period.startTime, period.endTime) }}><strong>{period.label}</strong><span>{period.startTime}–{period.endTime}</span><em>{result.valid ? result.intent.conflictLessonIds.length ? '已有課程' : '放置於此' : '不可放置'}</em></div> })}</div>}
             {lessons.length === 0
               ? <p className="cross-school-empty">無有效課程</p>
               : lessons.map((lesson, index) => <LessonCard key={`${lesson.id}-${lesson.overrideId ?? 'fixed'}`} lesson={lesson} previous={lessons[index - 1]} onClick={onLessonClick ? () => onLessonClick(lesson.id, lesson.date) : undefined} draggable={Boolean(onLessonDrop)} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', lesson.id); setDraggedLesson(lesson); setDragFeedback('') }} onDragEnd={() => setDraggedLesson(null)} onDragOver={(event) => { if (draggedLesson) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); dropLesson(lesson.date, lesson.startTime, lesson.endTime) }} />)}

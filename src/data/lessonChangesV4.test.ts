@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveProjectDay } from '../lib/scheduleV4'
 import { initialData } from './seed'
 import { migrateV3ToV4 } from './migrationsV4'
+import { migrateV4ToV5 } from './migrationsV5'
 import { cancelLessonOnDate, endLessonFromDate, moveLessonOnDate, permanentlySwapLessons, permanentlyUpdateLesson, replaceLessonOnDate, revokeLessonOverride, swapLessonOccurrences, swapLessonsOnDate } from './lessonChangesV4'
 
 const ids = (...values: string[]) => {
@@ -12,6 +13,34 @@ const setup = () => migrateV3ToV4(structuredClone(initialData))
 const day = (data: ReturnType<typeof setup>, date: string) => resolveProjectDay(data, data.activeProjectId!, new Date(`${date}T12:00:00`))
 
 describe('v4 lesson changes', () => {
+  it('v5 replacement and permanent change reject an inapplicable subject without altering existing lessons', () => {
+    const data = migrateV4ToV5(setup())
+    data.subjects.find((item) => item.id === 'history')!.applicableSchoolLevels = ['senior-high']
+    const lesson = data.recurringLessons.find((item) => item.id === 'c1')!
+    const unit = data.teachingUnits.find((item) => item.id === lesson.teachingUnitId)!
+    const oldSubjectId = lesson.subjectId
+    expect(() => replaceLessonOnDate(data, lesson.id, '2026-09-07', { subjectId: 'history', classId: lesson.classId }, ids('bad-replacement'))).toThrow()
+    expect(() => permanentlyUpdateLesson(data, lesson.id, '2026-09-14', { projectId: lesson.projectId, schoolId: unit.schoolId, teachingUnitId: unit.id, subjectId: 'history', classId: lesson.classId, day: lesson.day, periodId: lesson.periodId, weekPattern: lesson.weekPattern }, ids('bad-permanent'))).toThrow()
+    expect(data.recurringLessons.find((item) => item.id === 'c1')?.subjectId).toBe(oldSubjectId)
+  })
+
+  it('allows unchanged legacy subject references when editing other fields, including a replacement override', () => {
+    let data = migrateV4ToV5(setup())
+    const lesson = data.recurringLessons.find((item) => item.id === 'c1')!
+    const unit = data.teachingUnits.find((item) => item.id === lesson.teachingUnitId)!
+    data = replaceLessonOnDate(data, lesson.id, '2026-09-07', { subjectId: 'history', classId: lesson.classId }, ids('old-replace')) as typeof data
+    data.subjects.find((item) => item.id === 'history')!.applicableSchoolLevels = ['senior-high']
+    data.subjects.find((item) => item.id === lesson.subjectId)!.applicableSchoolLevels = ['junior-high']
+    const edited = replaceLessonOnDate(data, lesson.id, '2026-09-07', { subjectId: 'history', classId: lesson.classId, room: '新教室' }, ids('new-replace'), 'old-replace')
+    expect(edited.overrides).toHaveLength(1)
+    expect(edited.overrides[0]).toMatchObject({ id: 'new-replace', replacement: { subjectId: 'history', room: '新教室' } })
+    const permanent = permanentlyUpdateLesson(data, lesson.id, '2026-09-14', {
+      projectId: lesson.projectId, schoolId: unit.schoolId, teachingUnitId: unit.id,
+      subjectId: lesson.subjectId, classId: lesson.classId, day: lesson.day, periodId: lesson.periodId,
+      weekPattern: lesson.weekPattern, room: '另一教室',
+    }, ids('new-version'))
+    expect(permanent.recurringLessons.find((item) => item.id === 'new-version')?.subjectId).toBe(lesson.subjectId)
+  })
   it('單日取消只影響指定日期', () => {
     const result = cancelLessonOnDate(setup(), 'c1', '2026-09-07', ids('cancel'))
     expect(day(result, '2026-09-07').find((item) => item.id === 'c1')?.status).toBe('cancelled')

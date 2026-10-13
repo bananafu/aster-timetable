@@ -1,5 +1,26 @@
 # Toki v0.3.2 architecture
 
+## Phase 4C-3C-2B 多教師資料基礎與 v6 儲存
+
+`AppDataV6` 新增 project-scoped `Timetable`；固定課程與已歸屬單日異動保存 `timetableId`，未歸屬舊異動保留 `null` 並繼續不參與排課。每個 v5 Project（含封存）確定性地轉成一份預設課表，既有課程、版本、異動及科目 ID 不變。舊資料沒有授課教師姓名，預設課表以 `teacherName: null` 與 `teacherNamePending: true` 明確標記待補；新建空白專案的預設課表要求輸入真實教師姓名。
+
+新 key 為 `aster-timetable-data-v6`。讀取優先 v6；損壞時保留原始內容並停止，不回退覆寫。v6 不存在時沿用 v5→v4→v3→v1 安全載入，通過 v6 validator 後才寫新 key，所有舊 key 原樣保留。非 5 分鐘節次可原值保留，多分頁衝突保護沿用現有 hook。
+
+此階段沒有多課表 UI；舊固定課程、異動、專案複製與 legacy project view 寫入只在 Project 恰有一份課表時執行，避免任意選第一份。多教師解析、衝堂、拖曳、交換、複製學期及課表切換留待 4C-3C-2C。畫面選取狀態不進入 `AppDataV6`，切換不得產生資料寫入。
+
+## Phase 4C-3A-1 科目適用學制與 v5 儲存
+
+Subject 仍為單一全域資料，保留既有 ID、名稱、簡稱與顏色；`applicableSchoolLevels` 是非空、無重複的 `SchoolLevel[]`，涵蓋 `junior-high`、`senior-high`、`other`。任教科目設定與 LessonEditor 共用同一適用性判斷，依所選 TeachingUnit 的 `schoolLevel` 篩選可選科目。已排課程、封存專案與歷史版本仍依穩定 subjectId 解析，不因篩選而隱藏。
+
+新增 `aster-timetable-data-v5` 與 `schemaVersion: 5`。首次載入優先讀取 v5；v5 存在但損壞時保留原始內容並停止，不回退。v5 不存在時沿用既有 v4／v3／v1 安全讀取路徑，再將缺少適用學制的舊科目確定性地標記為適用所有既有學制。所有舊 key 原樣保留。遷移寫入前會再次檢查 v5 key 是否已由其他分頁建立；舊有非 5 分鐘節次可原值遷移，但不得新增或修改成非 5 分鐘時間。
+
+## Phase 4C-3A-2 科目安全管理
+
+共用科目資料操作提供新增、編輯、刪除、搜尋與全域引用分析。固定課程的所有版本和單日替換的 replacement 引用都參與檢查，包含複製、封存與未歸屬資料。縮減適用學制時，只要被移除的學制仍有引用，或引用無法可靠判定學制，就拒絕變更；刪除要求零引用與明確確認。全域名稱、簡稱和顏色修改也要求呼叫端明確確認，並提供受影響專案及引用紀錄。
+
+對既有不一致課程，資料層允許同一任教單位保留原 subjectId 並修改其他欄位；新指定或改選不適用科目一律拒絕。舊 SubjectPanel 的顏色更新改走共用操作，legacy project view 不再回寫 Subject。此階段不變更 v5 schema 或 storage key。
+複製專案若會建立學制不適用的新課程引用，會先阻止複製；legacy project view 合併時也會檢查固定課程與 replacement 的科目選擇。
+
 ## Phase 0 決策摘要
 
 v0.3.2 採用 AppData v4 與 Single-user / Multi-school architecture。App 品牌與課表專案分離；每份 `TimetableProject` 代表一個可獨立命名的學年度／學期課表，並可包含多所學校及各校不同的節次制度。

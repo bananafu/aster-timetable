@@ -41,6 +41,15 @@ describe('useLocalStorage multi-tab integration',()=>{
     expect(localStorage.getItem('hook-test')).toBe('{"count":9}')
   })
 
+  it('detects an external write before saving even if its storage event was missed',()=>{
+    render(<Harness />)
+    fireEvent.click(screen.getByText('local'))
+    localStorage.setItem('hook-test','{"count":9}')
+    act(()=>vi.advanceTimersByTime(500))
+    expect(screen.getByTestId('status').textContent).toBe('conflict')
+    expect(localStorage.getItem('hook-test')).toBe('{"count":9}')
+  })
+
   it('adopts the external version and keeps storage consistent',()=>{
     render(<Harness />)
     fireEvent.click(screen.getByText('local'))

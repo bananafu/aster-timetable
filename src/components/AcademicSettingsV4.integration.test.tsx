@@ -3,11 +3,43 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { initialData } from '../data/seed'
+import { migrateV4ToV5 } from '../data/migrationsV5'
 import { AcademicSettingsV4 } from './AcademicSettingsV4'
 
 afterEach(cleanup)
 
 describe('AcademicSettingsV4 class roster', () => {
+  it('依所選學校與學制顯示科目，新增科目預設目前學制', () => {
+    const data = migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    data.schools.push({ id: 'school-j', projectId: data.activeProjectId!, name: '國中校', color: '#718B6C' })
+    data.teachingUnits.push({ ...data.teachingUnits[0], id: 'unit-j', schoolId: 'school-j', schoolLevel: 'junior-high' })
+    data.subjects = data.subjects.map((subject, index) => index === 0
+      ? { ...subject, name: '高中科目', applicableSchoolLevels: ['senior-high'] }
+      : index === 1 ? { ...subject, name: '國中科目', applicableSchoolLevels: ['junior-high'] }
+        : index === 2 ? { ...subject, name: '共用科目', applicableSchoolLevels: ['senior-high', 'junior-high'] }
+          : { ...subject, applicableSchoolLevels: ['senior-high'] })
+    const setData = vi.fn()
+    render(<AcademicSettingsV4 data={data} setData={setData} page="subjects" />)
+    expect(screen.getByText('高中科目')).toBeTruthy()
+    expect(screen.getByText('共用科目')).toBeTruthy()
+    expect(screen.queryByText('國中科目')).toBeNull()
+    fireEvent.change(screen.getByLabelText('任教學校'), { target: { value: 'school-j' } })
+    expect(screen.getByText('國中科目')).toBeTruthy()
+    expect(screen.queryByText('高中科目')).toBeNull()
+    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '新科目' } })
+    fireEvent.click(screen.getByRole('button', { name: '新增科目' }))
+    expect(setData.mock.calls[0][0].subjects.at(-1)).toMatchObject({ name: '新科目', applicableSchoolLevels: ['junior-high'] })
+  })
+
+  it('沒有學制時不顯示全域科目庫或新增入口', () => {
+    const data = migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))
+    data.teachingUnits = []
+    render(<AcademicSettingsV4 data={data} setData={vi.fn()} page="subjects" />)
+    expect(screen.getByText('請先選擇學校與學制，才能查看或新增科目。')).toBeTruthy()
+    expect(screen.queryByText('國文')).toBeNull()
+    expect(screen.queryByRole('button', { name: '新增科目' })).toBeNull()
+  })
   it('以年級與正整數班號建立結構化班級並產生顯示代碼', () => {
     const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
     data.teachingUnits[0].schoolLevel = 'senior-high'

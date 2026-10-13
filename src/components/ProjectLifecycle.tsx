@@ -10,7 +10,7 @@ import { MultiSchoolSchedule } from './MultiSchoolSchedule'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const academicYearNow = () => Math.max(1, new Date().getFullYear() - 1911)
-const blankDraft = (): NewProjectInput => ({ name: '', academicYear: academicYearNow(), semester: 'first', customLabel: '', startDate: toDateKey(new Date()), endDate: toDateKey(addDays(new Date(), 120)) })
+const blankDraft = (): NewProjectInput => ({ name: '', teacherName: '', academicYear: academicYearNow(), semester: 'first', customLabel: '', startDate: toDateKey(new Date()), endDate: toDateKey(addDays(new Date(), 120)) })
 
 function TermFields({ value, onChange, requireDates = true }: { value: NewProjectInput; onChange: (value: NewProjectInput) => void; requireDates?: boolean }) {
   return <>
@@ -38,12 +38,12 @@ export function FirstUse({ data, setData, onViewArchived }: { data: AppDataV4; s
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    try { createBlank(data, draft, setData); setError('') } catch { setError('請確認專案名稱、學年度及學期日期。') }
+    try { createBlank(data, draft, setData); setError('') } catch { setError('請確認專案名稱、授課教師姓名、學年度及學期日期。') }
   }
 
   return <section className="content first-use">
     <div className="first-use-hero"><p className="eyebrow">Toki・開始使用</p><h1>建立你的第一份課表</h1><p>空白專案使用明確的預設學校、任教單位與 7 節高中節次；範例只供預覽，不會寫入正式資料。</p><div className="first-use-actions"><button className="primary-button" onClick={() => { setShowCreate(true); setShowExample(false) }}><FolderPlus size={17} />建立空白課表</button><button onClick={() => { setShowExample(true); setShowCreate(false) }}><Eye size={17} />查看範例</button></div></div>
-    {showCreate && <form className="panel form-grid onboarding-form" onSubmit={submit}><div className="full"><h2>空白課表設定</h2><p>預設建立「我的學校／主要任教單位」，不會複製任何既有資料。</p></div><TermFields value={draft} onChange={setDraft} />{error && <p className="form-error full">{error}</p>}<div className="form-actions full"><button type="button" onClick={() => setShowCreate(false)}>取消</button><button className="primary-button" type="submit">建立並開始</button></div></form>}
+    {showCreate && <form className="panel form-grid onboarding-form" onSubmit={submit}><div className="full"><h2>空白課表設定</h2><p>預設建立「我的學校／主要任教單位」，不會複製任何既有資料。</p></div><TermFields value={draft} onChange={setDraft} /><label className="full">授課教師姓名<input value={draft.teacherName ?? ''} onChange={(event) => setDraft({ ...draft, teacherName: event.target.value })} required /></label>{error && <p className="form-error full">{error}</p>}<div className="form-actions full"><button type="button" onClick={() => setShowCreate(false)}>取消</button><button className="primary-button" type="submit">建立並開始</button></div></form>}
     {showExample && <section className="panel example-preview"><div className="panel-heading"><div><h2>唯讀範例</h2><p>此預覽不會建立專案或寫入 LocalStorage。</p></div><button onClick={() => setShowExample(false)}>關閉</button></div><MultiSchoolSchedule data={example} weekDays={exampleWeek} /></section>}
     {archived.length > 0 && <section className="panel archived-projects"><div className="panel-heading"><div><h2>歷史專案</h2><p>可唯讀查看或重新啟用。</p></div></div>{archived.map((project) => <div className="project-history-row" key={project.id}><div><strong>{project.name}</strong><span>{project.term.academicYear} 學年度・{project.term.semester}</span></div><button onClick={() => onViewArchived(project.id)}><Eye size={14} />查看</button><button onClick={() => setData((current) => reactivateProject(current, project.id))}><RotateCcw size={14} />重新啟用</button></div>)}</section>}
   </section>
@@ -64,7 +64,7 @@ export function ProjectLifecycleModal({ data, setData, onClose, onViewArchived }
 
   const submitBlank = (event: FormEvent) => {
     event.preventDefault()
-    try { createBlank(data, draft, setData, onClose) } catch { setError('請確認空白專案的名稱與日期。') }
+    try { createBlank(data, draft, setData, onClose) } catch { setError('請確認空白專案的名稱、授課教師姓名與日期。') }
   }
   const submitCopy = (event: FormEvent) => {
     event.preventDefault()
@@ -72,12 +72,16 @@ export function ProjectLifecycleModal({ data, setData, onClose, onViewArchived }
       setData(copyProject(data, { sourceProjectId: copySourceId, name: copyDraft.name, academicYear: copyDraft.academicYear, semester: copyDraft.semester, customLabel: copyDraft.customLabel, units: sourceUnits.map((unit) => ({ sourceUnitId: unit.id, ...unitDates[unit.id] })) }, uid))
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error && reason.message.includes('Versioned') ? '來源包含多版本固定課程，需在 LessonEditor 完成版本確認後才能安全複製。' : '每個任教單位都必須設定新的起訖日期與 A/B anchor，且 anchor 必須位於新日期範圍內。')
+      setError(reason instanceof Error && reason.message.includes('Versioned') ? '來源包含多版本固定課程，需在 LessonEditor 完成版本確認後才能安全複製。'
+        : reason instanceof Error && reason.message.includes('Multiple or missing timetables') ? '多教師專案複製尚未支援，目前不會建立不完整副本。'
+        : reason instanceof Error && reason.message.includes('subjects applicable') ? '來源課程使用了不適用目前學制的科目，請先檢查科目適用學制後再複製。'
+          : '每個任教單位都必須設定新的起訖日期與 A/B anchor，且 anchor 必須位於新日期範圍內。')
     }
   }
   const remove = (projectId: string) => {
     const project = data.projects.find((item) => item.id === projectId)!
     const counts = {
+      timetables: data.timetables?.filter((item) => item.projectId === projectId).length ?? 0,
       schools: data.schools.filter((item) => item.projectId === projectId).length,
       units: data.teachingUnits.filter((item) => item.projectId === projectId).length,
       classes: data.classes.filter((item) => item.projectId === projectId).length,
@@ -85,7 +89,7 @@ export function ProjectLifecycleModal({ data, setData, onClose, onViewArchived }
       events: data.events.filter((item) => item.projectId === projectId).length,
       overrides: data.overrides.filter((item) => item.projectId === projectId).length,
     }
-    if (!window.confirm(`永久刪除「${project.name}」？\n將刪除 ${counts.schools} 所學校、${counts.units} 個任教單位、${counts.classes} 個班級、${counts.lessons} 筆固定課程、${counts.events} 筆事件及 ${counts.overrides} 筆異動。\n其他專案與全域科目不受影響。`)) return
+    if (!window.confirm(`永久刪除「${project.name}」？\n將刪除 ${counts.timetables} 份教師課表、${counts.schools} 所學校、${counts.units} 個任教單位、${counts.classes} 個班級、${counts.lessons} 筆固定課程、${counts.events} 筆事件及 ${counts.overrides} 筆異動。\n其他專案與全域科目不受影響。`)) return
     setData((current) => deleteProject(current, projectId))
   }
 
@@ -99,7 +103,7 @@ export function ProjectLifecycleModal({ data, setData, onClose, onViewArchived }
     {page === 'schools-settings' && <AcademicSettingsV4 data={data} setData={setData} page="schools" />}
     {(page === 'periods' || page === 'classes' || page === 'subjects') && <AcademicSettingsV4 data={data} setData={setData} page={page} />}
     {page === 'name' && active && <form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); if (!name.trim()) { setError('專案名稱不得為空白。'); return } setData((current) => renameProject(current, active.id, name)); setError('') }}><label className="full">目前專案名稱<input value={name} onChange={(event) => setName(event.target.value)} required /></label><div className="form-actions full"><button type="button" className="danger-button" onClick={() => { if (window.confirm(`封存「${active.name}」？封存後仍可唯讀查看及重新啟用。`)) { setData((current) => archiveProject(current, active.id)); onClose() } }}><Archive size={14} />封存</button><button type="submit" className="primary-button">重新命名</button></div></form>}
-    {page === 'blank' && <form className="form-grid project-create-form" onSubmit={submitBlank}><div className="full"><strong>建立空白課表</strong><p>使用固定預設，不沿用目前專案的學校、節次、班級或課程。</p></div><TermFields value={draft} onChange={setDraft} /><div className="form-actions full"><button type="submit" className="primary-button">建立並切換</button></div></form>}
+    {page === 'blank' && <form className="form-grid project-create-form" onSubmit={submitBlank}><div className="full"><strong>建立空白課表</strong><p>使用固定預設，不沿用目前專案的學校、節次、班級或課程。</p></div><TermFields value={draft} onChange={setDraft} /><label className="full">授課教師姓名<input value={draft.teacherName ?? ''} onChange={(event) => setDraft({ ...draft, teacherName: event.target.value })} required /></label><div className="form-actions full"><button type="submit" className="primary-button">建立並切換</button></div></form>}
     {page === 'copy' && data.projects.length > 0 && <form className="form-grid project-create-form" onSubmit={submitCopy}><div className="full"><strong>複製為新學期</strong><p>複製學校、任教單位、節次、班級與固定課程；不複製事件、取消或單日異動。</p></div><label className="full">來源專案<select value={copySourceId} onChange={(event) => setCopySourceId(event.target.value)}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><TermFields value={copyDraft} onChange={setCopyDraft} requireDates={false} />{sourceUnits.map((unit) => { const value = unitDates[unit.id] ?? { startDate: '', endDate: '', anchorDate: '', anchorPattern: 'A' as const }; return <fieldset className="copy-unit-dates full" key={unit.id}><legend>{unit.name}</legend><label>新起始日<input type="date" value={value.startDate} onChange={(event) => setUnitDates({ ...unitDates, [unit.id]: { ...value, startDate: event.target.value } })} required /></label><label>新結束日<input type="date" value={value.endDate} onChange={(event) => setUnitDates({ ...unitDates, [unit.id]: { ...value, endDate: event.target.value } })} required /></label><label>A/B anchor<input type="date" value={value.anchorDate} onChange={(event) => setUnitDates({ ...unitDates, [unit.id]: { ...value, anchorDate: event.target.value } })} required /></label><label>anchor 週型<select value={value.anchorPattern} onChange={(event) => setUnitDates({ ...unitDates, [unit.id]: { ...value, anchorPattern: event.target.value as 'A' | 'B' } })}><option value="A">A 週</option><option value="B">B 週</option></select></label></fieldset>})}<div className="form-actions full"><button type="submit" className="primary-button"><Copy size={14} />複製並切換</button></div></form>}
     {page === 'history' && <section className="archived-projects"><div><strong>歷史與專案管理</strong><p>封存專案可唯讀查看、重新啟用或永久刪除。</p></div>{data.projects.map((project) => <div className="project-history-row" key={project.id}><div><strong>{project.name}</strong><span>{project.archivedAt ? '已封存' : project.id === data.activeProjectId ? '使用中' : '可使用'}</span></div>{project.archivedAt && <><button onClick={() => { onViewArchived(project.id); onClose() }}><Eye size={14} />查看</button><button onClick={() => { setData((current) => reactivateProject(current, project.id)); onClose() }}><RotateCcw size={14} />重新啟用</button></>}<button className="danger-button" onClick={() => remove(project.id)}><Trash2 size={14} />刪除</button></div>)}</section>}
     {page === 'history' && data.migrationWarnings.length > 0 && <section className="migration-warning-list"><strong>資料遷移警告</strong><p>以下資料仍完整保留，不會自動套用或刪除。</p>{data.migrationWarnings.map((warning) => <div className="warning-row" key={warning.id}><div><strong>{warning.entityType === 'override' ? '未歸屬的單日異動' : '待確認資料'}</strong><p>紀錄 ID {warning.entityId}</p><p>{warning.message}</p></div></div>)}</section>}

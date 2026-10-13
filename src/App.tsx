@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CalendarClock, CalendarDays, Clock3, MapPin, Plus } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
@@ -6,7 +6,11 @@ import { Modal } from './components/Modal'
 import { MultiSchoolSchedule } from './components/MultiSchoolSchedule'
 import { FirstUse, ProjectLifecycleModal } from './components/ProjectLifecycle'
 import { LessonEditor } from './components/LessonEditor'
-import { mergeProjectView, projectToLegacyView, switchActiveProject } from './data/projectRuntime'
+import { TimetableControls, TimetableForm } from './components/TimetableControls'
+import { projectToLegacyView, switchActiveProject } from './data/projectRuntime'
+import { createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
+import { getSubjectImpact, updateSubject } from './data/subjectsV5'
+import { SCHOOL_LEVELS } from './types'
 import { useAppDataV4 } from './hooks/useAppDataV4'
 import { type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
 import { addDays, getWeekInfo, startOfWeek, toDateKey } from './lib/date'
@@ -36,15 +40,20 @@ function downloadRawData(raw: string) {
 
 export default function App() {
   const [appData, setAppData, storageStatus, storageControls] = useAppDataV4()
-  const data = useMemo(() => appData.activeProjectId ? projectToLegacyView(appData) : EMPTY_LEGACY_DATA, [appData])
-  const setData = useCallback<Dispatch<SetStateAction<AppData>>>((update) => {
-    setAppData((current) => {
-      if (!current.activeProjectId) return current
-      const view = projectToLegacyView(current)
-      const next = typeof update === 'function' ? update(view) : update
-      return mergeProjectView(current, current.activeProjectId, next)
-    })
-  }, [setAppData])
+  // Timetable selection is view state; it must never update persisted AppData.
+  const [timetableSelection, setTimetableSelection] = useState(() => ({
+    projectId: appData.activeProjectId,
+    timetableId: appData.timetables?.find((item) => item.projectId === appData.activeProjectId)?.id ?? null,
+  }))
+  const activeTimetableCandidate = timetableSelection.projectId === appData.activeProjectId
+    ? timetableSelection.timetableId : appData.timetables?.find((item) => item.projectId === appData.activeProjectId)?.id ?? null
+  const activeTimetableId = appData.timetables?.some((item) => item.projectId === appData.activeProjectId && item.id === activeTimetableCandidate)
+    ? activeTimetableCandidate : null
+  const data = useMemo(() => {
+    if (!appData.activeProjectId) return EMPTY_LEGACY_DATA
+    const view = projectToLegacyView(appData, appData.activeProjectId, activeTimetableId ?? undefined)
+    return activeTimetableCandidate && !activeTimetableId ? { ...view, courses: [], overrides: [] } : view
+  }, [appData, activeTimetableCandidate, activeTimetableId])
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [activePage, setActivePage] = useState('dashboard')
   const [modal, setModal] = useState<ModalKind>(null)
@@ -54,7 +63,15 @@ export default function App() {
   const [lessonDragIntent, setLessonDragIntent] = useState<LessonDragIntent | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [historicalProjectId, setHistoricalProjectId] = useState<string | null>(null)
+  const [timetableDialog, setTimetableDialog] = useState<{ mode: 'create' | 'edit'; projectId: string; timetableId?: string; original?: TimetableDetails } | null>(null)
+  const [timetableError, setTimetableError] = useState('')
   const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    setSelectedLessonId(null)
+    setSelectedLessonDate(null)
+    setLessonDragIntent(null)
+    setLessonEditorOpen(false)
+  }, [activeTimetableId])
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 60_000)
     return () => window.clearInterval(timer)
@@ -63,35 +80,111 @@ export default function App() {
   const activeProject = appData.projects.find((project) => project.id === appData.activeProjectId)
   const historicalProject = appData.projects.find((project) => project.id === historicalProjectId && project.archivedAt)
   const displayProject = historicalProject ?? activeProject
+  const displayTimetables = appData.timetables?.filter((item) => item.projectId === displayProject?.id) ?? []
+  const displayTimetableCandidate = timetableSelection.projectId === displayProject?.id
+    ? timetableSelection.timetableId : displayTimetables[0]?.id ?? null
+  const displayTimetable = displayTimetables.find((item) => item.id === displayTimetableCandidate)
   const weekTerms = weekDays.map((date) => getTermForDate(data, date)).filter((term, index, terms) => term && terms.findIndex((item) => item?.id === term.id) === index)
   const displayedTerm = weekTerms.length === 1 ? weekTerms[0] : undefined
   const weekInfo = displayedTerm ? getWeekInfo(weekDays.find((date) => getTermForDate(data, date)?.id === displayedTerm.id) ?? weekStart, displayedTerm) : null
   const weekTermLabel = weekTerms.length > 1 ? weekTerms.map((term) => term?.name).join(' ／ ') : displayedTerm?.name ?? '目前日期不屬於任何學期'
   const isMixedWeek = weekTerms.length > 1 || weekDays.some((date) => !getTermForDate(data, date))
-  const todaySummary = activeProject ? getTodayTeachingSummaryV4(appData, activeProject.id, now) : { count: 0, state: 'outside-semester' as const }
+  const activeTimetable = appData.timetables?.find((item) => item.projectId === activeProject?.id && item.id === activeTimetableId)
+  const todaySummary = activeProject && (appData.schemaVersion !== 6 || activeTimetable)
+    ? getTodayTeachingSummaryV4(appData, activeProject.id, now, activeTimetable?.id)
+    : { count: 0, state: 'idle' as const }
   const upcomingEvent = getNextUpcomingEvent(data.events, now)
+
+  const changeSubjectColor = (subjectId: string, color: string) => {
+    const subject = appData.subjects.find((item) => item.id === subjectId)
+    if (!subject) return
+    const impact = getSubjectImpact(appData, subjectId)
+    if (!window.confirm(`變更「${subject.name}」的全域顏色？科目庫會同步更新；目前有 ${impact.projectIds.length} 個專案、${impact.references.length} 筆課程或異動引用。`)) return
+    setAppData((current) => {
+      const latest = current.subjects.find((item) => item.id === subjectId)
+      if (!latest) return current
+      return updateSubject(current, subjectId, {
+        name: latest.name, shortName: latest.shortName, color,
+        applicableSchoolLevels: [...(latest.applicableSchoolLevels ?? SCHOOL_LEVELS)],
+      }, true)
+    })
+  }
+
+  const chooseTimetable = (projectId: string, timetableId: string) => {
+    if (!appData.timetables?.some((item) => item.id === timetableId && item.projectId === projectId)) return
+    setTimetableSelection({ projectId, timetableId })
+    setSelectedLessonId(null)
+    setSelectedLessonDate(null)
+    setLessonDragIntent(null)
+    setLessonEditorOpen(false)
+  }
+
+  const viewArchivedProject = (projectId: string) => {
+    setHistoricalProjectId(projectId)
+    setTimetableSelection({ projectId, timetableId: appData.timetables?.find((item) => item.projectId === projectId)?.id ?? null })
+    setSelectedLessonId(null)
+    setSelectedLessonDate(null)
+    setLessonDragIntent(null)
+    setLessonEditorOpen(false)
+    setActivePage('timetable')
+  }
+
+  const submitTimetable = (details: TimetableDetails) => {
+    if (!timetableDialog || timetableDialog.projectId !== displayProject?.id || historicalProject || storageStatus !== 'saved') {
+      setTimetableError('目前專案無法修改課表資訊。'); return
+    }
+    try {
+      if (timetableDialog.mode === 'create') {
+        const id = uid()
+        const next = createTimetable(appData, timetableDialog.projectId, details, id)
+        setAppData(next)
+        setTimetableSelection({ projectId: timetableDialog.projectId, timetableId: id })
+        setSelectedLessonId(null)
+        setSelectedLessonDate(null)
+        setLessonDragIntent(null)
+        setLessonEditorOpen(false)
+      } else {
+        if (!timetableDialog.timetableId) throw new Error('Timetable does not exist')
+        const latest = appData.timetables?.find((item) => item.id === timetableDialog.timetableId && item.projectId === timetableDialog.projectId)
+        if (!latest || latest.name !== timetableDialog.original?.name || latest.teacherName !== timetableDialog.original?.teacherName) {
+          setTimetableError('課表資訊已變更，請關閉後重新開啟編輯。'); return
+        }
+        setAppData(updateTimetable(appData, timetableDialog.timetableId, details))
+      }
+      setTimetableDialog(null)
+      setTimetableError('')
+    } catch (reason) {
+      setTimetableError(reason instanceof Error && reason.message.includes('read-only')
+        ? '封存或不存在的專案不可修改課表。' : '課表名稱與授課教師姓名不正確，或課表資料已變更。')
+    }
+  }
 
   const switchProject = (projectId: string) => {
     const project = appData.projects.find((item) => item.id === projectId && !item.archivedAt)
     if (!project) return
     setAppData((current) => switchActiveProject(current, projectId))
     setHistoricalProjectId(null)
+    setTimetableSelection({ projectId, timetableId: appData.timetables?.find((item) => item.projectId === projectId)?.id ?? null })
     setSelectedLessonId(null)
     setSelectedLessonDate(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
+    setTimetableDialog(null)
     setModal(null)
   }
 
   const handleAddEvent = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    setData((current) => {
-      const date = String(form.get('date'))
+    const date = String(form.get('date'))
+    const unitId = classifyEventTerm({ date }, data.academicTerms)
+    setAppData((current) => {
+      const assignedUnit = current.teachingUnits.find((item) => item.id === unitId && item.projectId === current.activeProjectId)
       return ({
       ...current, events: [...current.events, {
         id: uid(), title: String(form.get('title')), type: String(form.get('type')) as 'meeting' | 'activity' | 'task',
-        termId: classifyEventTerm({ date }, current.academicTerms), date, startTime: String(form.get('startTime')), endTime: String(form.get('endTime')),
+        projectId: assignedUnit ? current.activeProjectId : null, teachingUnitId: assignedUnit?.id ?? null,
+        date, startTime: String(form.get('startTime')), endTime: String(form.get('endTime')),
         location: String(form.get('location') || ''), color: '#A66D52', origin: 'user',
       }],
     })})
@@ -104,28 +197,31 @@ export default function App() {
       <main className="main-area">
         {storageStatus !== 'read-error' && displayProject && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))} onAdd={() => { setSelectedLessonId(null); setSelectedLessonDate(null); setLessonDragIntent(null); setLessonEditorOpen(true) }} onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject)} />}
         {storageStatus !== 'saved' && <StorageSafetyNotice status={storageStatus} controls={storageControls} />}
-        {storageStatus === 'read-error' ? <section className="content"><div className="panel blocked-editor"><h1>資料尚未載入</h1><p>為避免在不完整資料上編輯，目前已鎖定課表。請先匯出原始 JSON，或經二次確認後重設。</p></div></section> : !displayProject ? <FirstUse data={appData} setData={setAppData} onViewArchived={(id) => { setHistoricalProjectId(id); setActivePage('timetable') }} /> : <>
+        {storageStatus === 'read-error' ? <section className="content"><div className="panel blocked-editor"><h1>資料尚未載入</h1><p>為避免在不完整資料上編輯，目前已鎖定課表。請先匯出原始 JSON，或經二次確認後重設。</p></div></section> : !displayProject ? <FirstUse data={appData} setData={setAppData} onViewArchived={viewArchivedProject} /> : <>
         <div className="content">
-          {historicalProject && <section className="history-mode" role="status"><div><strong>歷史專案・唯讀</strong><span>目前查看「{historicalProject.name}」，不會修改此專案。</span></div><button onClick={() => setHistoricalProjectId(null)}>返回目前專案</button></section>}
+          {historicalProject && <section className="history-mode" role="status"><div><strong>歷史專案・唯讀</strong><span>目前查看「{historicalProject.name}」，不會修改此專案。</span></div><button onClick={() => { setHistoricalProjectId(null); setTimetableSelection({ projectId: appData.activeProjectId, timetableId: appData.timetables?.find((item) => item.projectId === appData.activeProjectId)?.id ?? null }) }}>返回目前專案</button></section>}
           {appData.migrationWarnings.length > 0 && <section className="migration-summary" role="status"><strong>有 {appData.migrationWarnings.length} 筆資料需要確認</strong><span>未歸屬資料已保留，且不會自動套用至課表。</span></section>}
           <section className="page-heading">
             <div><p className="eyebrow">{activePage === 'timetable' ? displayProject.name : weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? '我的課表' : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>{historicalProject ? '封存專案僅供查看。' : '所有資料都會自動儲存在這台裝置。'}</p>}</div>
-            <div className="week-pill">{activePage === 'timetable' ? <><span>多校檢視</span><strong>實際時間</strong></> : <><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></>}</div>
+            <div className="page-heading-side">
+              {(activePage === 'timetable' || activePage === 'dashboard') && <TimetableControls timetables={displayTimetables} selected={displayTimetable} canManage={!historicalProject && storageStatus === 'saved'} onSelect={(id) => chooseTimetable(displayProject.id, id)} onCreate={() => { setTimetableError(''); setTimetableDialog({ mode: 'create', projectId: displayProject.id }) }} onEdit={() => { if (!displayTimetable) return; setTimetableError(''); setTimetableDialog({ mode: 'edit', projectId: displayProject.id, timetableId: displayTimetable.id, original: { name: displayTimetable.name, teacherName: displayTimetable.teacherName } }) }} />}
+              <div className="week-pill">{activePage === 'timetable' ? <><span>多校檢視</span><strong>實際時間</strong></> : <><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></>}</div>
+            </div>
           </section>
 
           {activePage === 'dashboard' && <DashboardCards summary={todaySummary} event={upcomingEvent} />}
 
           {activePage === 'subjects' ? (
-            <SubjectPanel data={data} setData={setData} />
+            <SubjectPanel data={data} onColorChange={changeSubjectColor} />
           ) : activePage === 'events' ? (
-            <EventsPanel data={data} setData={setData} onAdd={() => setModal('event')} />
+            <EventsPanel data={data} onDelete={(eventId) => setAppData((current) => ({ ...current, events: current.events.filter((item) => item.id !== eventId) }))} onAdd={() => setModal('event')} />
           ) : (
             <section className="panel timetable-panel">
               <div className="panel-heading">
                 <div><h2>{activePage === 'dashboard' ? '本週課表' : '跨校週課表'}</h2><p>依各任教單位的實際節次與輪週設定逐日整合；點選課程可編輯固定資料。</p></div>
                 {!historicalProject && <button className="primary-button" onClick={() => { setSelectedLessonId(null); setSelectedLessonDate(null); setLessonDragIntent(null); setLessonEditorOpen(true) }}><Plus size={16} />新增固定課程</button>}
               </div>
-              <MultiSchoolSchedule data={appData} weekDays={weekDays} projectId={displayProject.id} onLessonClick={historicalProject ? undefined : (lessonId, date) => { setSelectedLessonId(lessonId); setSelectedLessonDate(date); setLessonDragIntent(null); setLessonEditorOpen(true) }} onLessonDrop={historicalProject ? undefined : (intent) => { setSelectedLessonId(intent.lessonId); setSelectedLessonDate(intent.sourceDate); setLessonDragIntent(intent); setLessonEditorOpen(true) }} />
+              <MultiSchoolSchedule key={displayTimetable?.id ?? displayProject.id} data={appData} weekDays={weekDays} projectId={displayProject.id} timetableId={displayTimetable?.id} onLessonClick={historicalProject ? undefined : (lessonId, date) => { setSelectedLessonId(lessonId); setSelectedLessonDate(date); setLessonDragIntent(null); setLessonEditorOpen(true) }} onLessonDrop={historicalProject ? undefined : (intent) => { setSelectedLessonId(intent.lessonId); setSelectedLessonDate(intent.sourceDate); setLessonDragIntent(intent); setLessonEditorOpen(true) }} />
             </section>
           )}
         </div>
@@ -133,8 +229,9 @@ export default function App() {
       </main>
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
-      {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} onClose={() => setModal(null)} onViewArchived={(id) => { setHistoricalProjectId(id); setActivePage('timetable') }} />}</>}
-      {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor data={appData} setData={setAppData} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} dragIntent={lessonDragIntent} onOpenSettings={() => { setLessonEditorOpen(false); setModal('settings') }} onClose={() => setLessonEditorOpen(false)} onSaved={(projectId) => { if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
+      {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} onClose={() => setModal(null)} onViewArchived={viewArchivedProject} />}</>}
+      {timetableDialog && <TimetableForm key={`${timetableDialog.mode}:${timetableDialog.timetableId ?? timetableDialog.projectId}`} mode={timetableDialog.mode} timetable={appData.timetables?.find((item) => item.id === timetableDialog.timetableId && item.projectId === timetableDialog.projectId)} error={timetableError} onSubmit={submitTimetable} onClose={() => { setTimetableDialog(null); setTimetableError('') }} />}
+      {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor key={activeTimetable?.id ?? activeProject?.id} data={appData} setData={setAppData} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} dragIntent={lessonDragIntent} onOpenSettings={() => { setLessonEditorOpen(false); setModal('settings') }} onClose={() => setLessonEditorOpen(false)} onSaved={(projectId) => { if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
     </div>
   )
 }
@@ -189,12 +286,12 @@ function EventForm({ onSubmit, onClose, defaultDate }: { onSubmit: (e: FormEvent
 
 function FormActions({ onClose }: { onClose: () => void }) { return <div className="form-actions full"><button type="button" onClick={onClose}>取消</button><button type="submit" className="primary-button">儲存</button></div> }
 
-function SubjectPanel({ data, setData }: { data: AppData; setData: Dispatch<SetStateAction<AppData>> }) {
-  return <div className="manage-grid"><section className="panel manage-panel"><div className="panel-heading"><div><h2>科目</h2><p>以顏色快速辨識課程。</p></div></div>{data.subjects.map((s) => <div className="manage-row" key={s.id}><i style={{ background: s.color }} /><div><strong>{s.name}</strong><span>{data.courses.filter((c) => c.subjectId === s.id).length} 門課</span></div><input aria-label={`${s.name} 顏色`} type="color" value={s.color} onChange={(e) => setData((current) => ({ ...current, subjects: current.subjects.map((item) => item.id === s.id ? { ...item, color: e.target.value, origin: 'user' } : item) }))} /></div>)}</section>
+function SubjectPanel({ data, onColorChange }: { data: AppData; onColorChange: (subjectId: string, color: string) => void }) {
+  return <div className="manage-grid"><section className="panel manage-panel"><div className="panel-heading"><div><h2>科目</h2><p>以顏色快速辨識課程。</p></div></div>{data.subjects.map((s) => <div className="manage-row" key={s.id}><i style={{ background: s.color }} /><div><strong>{s.name}</strong><span>{data.courses.filter((c) => c.subjectId === s.id).length} 門課</span></div><input aria-label={`${s.name} 顏色`} type="color" value={s.color} onChange={(e) => onColorChange(s.id, e.target.value)} /></div>)}</section>
     <section className="panel manage-panel"><div className="panel-heading"><div><h2>班級</h2><p>班級與預設教室分開管理。</p></div></div>{data.classes.map((c) => <div className="manage-row" key={c.id}><div className="class-avatar">{c.name.slice(-2,-1)}</div><div><strong>{c.name}</strong><span>{c.room || '未設定教室'}</span></div></div>)}</section></div>
 }
 
-function EventsPanel({ data, setData, onAdd }: { data: AppData; setData: Dispatch<SetStateAction<AppData>>; onAdd: () => void }) {
+function EventsPanel({ data, onDelete, onAdd }: { data: AppData; onDelete: (eventId: string) => void; onAdd: () => void }) {
   const events = [...data.events].sort((a,b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`))
-  return <section className="panel events-panel"><div className="panel-heading"><div><h2>會議與活動</h2><p>一次性行程獨立於固定課表。</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} />新增活動</button></div>{events.map((e) => <div className="event-row" key={e.id}><div className="event-date"><strong>{e.date.slice(5).replace('-', '/')}</strong><span>{e.startTime}</span></div><i style={{ background: e.color }} /><div><strong>{e.title}</strong><span>{e.location || '未設定地點'}・{e.startTime}–{e.endTime}</span></div><button onClick={() => { if (window.confirm(`確定刪除「${e.title}」？此操作無法復原。`)) setData((current) => ({ ...current, events: current.events.filter((item) => item.id !== e.id) })) }}>刪除</button></div>)}</section>
+  return <section className="panel events-panel"><div className="panel-heading"><div><h2>會議與活動</h2><p>一次性行程獨立於固定課表。</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} />新增活動</button></div>{events.map((e) => <div className="event-row" key={e.id}><div className="event-date"><strong>{e.date.slice(5).replace('-', '/')}</strong><span>{e.startTime}</span></div><i style={{ background: e.color }} /><div><strong>{e.title}</strong><span>{e.location || '未設定地點'}・{e.startTime}–{e.endTime}</span></div><button onClick={() => { if (window.confirm(`確定刪除「${e.title}」？此操作無法復原。`)) onDelete(e.id) }}>刪除</button></div>)}</section>
 }

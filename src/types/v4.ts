@@ -2,6 +2,7 @@ import type { AlternatingWeekPattern, DataOrigin, DayOfWeek, EventType, SchoolPe
 
 export type SemesterKind = 'first' | 'second' | 'summer' | 'custom'
 export type SchoolLevel = 'junior-high' | 'senior-high' | 'other'
+export const SCHOOL_LEVELS: readonly SchoolLevel[] = ['junior-high', 'senior-high', 'other']
 
 export interface AcademicTermDescriptor {
   academicYear: number
@@ -16,6 +17,15 @@ export interface TimetableProject {
   archivedAt?: string
   createdAt: string
   updatedAt: string
+}
+
+export interface Timetable {
+  id: string
+  projectId: string
+  name: string
+  teacherName: string | null
+  /** Only a timetable created from pre-v6 data may await a real teacher name. */
+  teacherNamePending?: true
 }
 
 export interface School {
@@ -57,6 +67,8 @@ export interface RecurringLesson {
   id: string
   seriesId: string
   projectId: string
+  /** Required in v6; optional here for the retained v4/v5 readers. */
+  timetableId?: string
   teachingUnitId: string
   subjectId: string
   classId: string
@@ -87,6 +99,8 @@ export interface CalendarEventV4 {
 export interface ScheduleOverrideV4 {
   id: string
   projectId: string | null
+  /** Null is reserved for unassigned legacy overrides in v6. */
+  timetableId?: string | null
   teachingUnitId: string | null
   date: string
   periodId: number
@@ -107,9 +121,12 @@ export interface MigrationWarningV4 {
 }
 
 export interface AppDataV4 {
-  schemaVersion: 4
+  // Existing runtime operations accept both persisted generations during v5 cutover.
+  schemaVersion: 4 | 5 | 6
   activeProjectId: string | null
   projects: TimetableProject[]
+  /** Required in v6; absent from the retained v4/v5 formats. */
+  timetables?: Timetable[]
   schools: School[]
   teachingUnits: TeachingUnit[]
   subjects: Subject[]
@@ -118,4 +135,17 @@ export interface AppDataV4 {
   events: CalendarEventV4[]
   overrides: ScheduleOverrideV4[]
   migrationWarnings: MigrationWarningV4[]
+}
+
+export type SubjectV5 = Subject & { applicableSchoolLevels: SchoolLevel[] }
+export type AppDataV5 = Omit<AppDataV4, 'schemaVersion' | 'subjects'> & {
+  schemaVersion: 5
+  subjects: SubjectV5[]
+}
+
+export type AppDataV6 = Omit<AppDataV5, 'schemaVersion' | 'timetables' | 'recurringLessons' | 'overrides'> & {
+  schemaVersion: 6
+  timetables: Timetable[]
+  recurringLessons: (RecurringLesson & { timetableId: string })[]
+  overrides: (ScheduleOverrideV4 & { timetableId: string | null })[]
 }

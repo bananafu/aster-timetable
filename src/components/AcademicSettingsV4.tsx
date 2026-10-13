@@ -12,8 +12,10 @@ import {
   type ClassDraft,
   type TeachingUnitDraft,
 } from '../data/academicSettingsV4'
-import type { AppDataV4, ProjectClass, School, SchoolLevel, SchoolPeriod, TeachingUnit } from '../types'
+import { SCHOOL_LEVELS, type AppDataV4, type ProjectClass, type School, type SchoolLevel, type SchoolPeriod, type Subject, type TeachingUnit } from '../types'
 import { classDisplayName, gradeLabel, gradesForLevel, isGradeValidForLevel } from '../lib/classes'
+import { subjectsForLevel } from '../lib/subjects'
+import { addSubjectForLevel, getSubjectImpact, updateSubject } from '../data/subjectsV5'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const levelLabel: Record<SchoolLevel, string> = { 'junior-high': '國中部', 'senior-high': '高中部', other: '其他' }
@@ -41,13 +43,15 @@ export function AcademicSettingsV4({ data, setData, page = 'schools' }: { data: 
   const firstClassUnit = units[0]
   const [classDraft, setClassDraft] = useState<ClassDraft>({ grade: gradesForLevel(firstClassUnit?.schoolLevel ?? 'other')[0], classNumber: undefined, room: '', teachingUnitId: firstClassUnit?.id ?? '' })
   const [error, setError] = useState('')
+  const [newSubjectName, setNewSubjectName] = useState('')
   const [selectedSchoolId, setSelectedSchoolId] = useState(schools[0]?.id ?? '')
   const selectedSchoolUnits = useMemo(() => units.filter((item) => item.schoolId === selectedSchoolId), [selectedSchoolId, units])
   const [selectedUnitId, setSelectedUnitId] = useState(selectedSchoolUnits[0]?.id ?? '')
-  const selectedUnit = units.find((item) => item.id === selectedUnitId)
+  const selectedUnit = selectedSchoolUnits.find((item) => item.id === selectedUnitId)
+  const visibleSubjects = subjectsForLevel(data.subjects, selectedUnit?.schoolLevel)
   useEffect(() => {
     if (!schools.some((item) => item.id === unitDraft.schoolId)) setUnitDraft((current) => ({ ...current, schoolId: schools[0]?.id ?? '' }))
-    if (!units.some((item) => item.id === classDraft.teachingUnitId)) {
+    if (classDraft.teachingUnitId !== (units[0]?.id ?? '') && !units.some((item) => item.id === classDraft.teachingUnitId)) {
       const nextUnit = units[0]
       setClassDraft((current) => ({ ...current, teachingUnitId: nextUnit?.id ?? '', grade: gradesForLevel(nextUnit?.schoolLevel ?? 'other')[0], classNumber: undefined }))
     }
@@ -79,6 +83,14 @@ export function AcademicSettingsV4({ data, setData, page = 'schools' }: { data: 
     apply(() => addClass(data, projectId, classDraft, uid()), setData, setError)
     setClassDraft((current) => ({ ...current, classNumber: undefined, name: undefined, room: '' }))
   }
+  const changeSubjectColor = (subject: Subject, color: string) => {
+    const impact = getSubjectImpact(data, subject.id)
+    if (!window.confirm(`變更「${subject.name}」的全域顏色？科目庫會同步更新；目前有 ${impact.projectIds.length} 個專案、${impact.references.length} 筆課程或異動引用。`)) return
+    apply(() => updateSubject(data, subject.id, {
+      name: subject.name, shortName: subject.shortName, color,
+      applicableSchoolLevels: [...(subject.applicableSchoolLevels ?? SCHOOL_LEVELS)],
+    }, true), setData, setError)
+  }
 
   const selectors = <div className="academic-context-selectors"><label>任教學校<select aria-label="任教學校" value={selectedSchoolId} onChange={(event) => setSelectedSchoolId(event.target.value)}>{schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}</select></label><label>學制<select aria-label="學制" value={selectedUnitId} onChange={(event) => setSelectedUnitId(event.target.value)}>{selectedSchoolUnits.map((unit) => <option key={unit.id} value={unit.id}>{levelLabel[unit.schoolLevel]}・{unit.name}</option>)}</select></label></div>
 
@@ -106,7 +118,7 @@ export function AcademicSettingsV4({ data, setData, page = 'schools' }: { data: 
       {selectedUnit ? <form className="inline-create class-create" onSubmit={createClass}><ClassIdentityFields draft={{ ...classDraft, teachingUnitId: selectedUnitId }} units={[selectedUnit]} onChange={setClassDraft} prefix="新班級" /><input aria-label="新班級教室" value={classDraft.room ?? ''} onChange={(event) => setClassDraft({ ...classDraft, room: event.target.value })} placeholder="預設教室" /><button type="submit">新增班級</button></form> : <p className="settings-empty">請先建立學制，才能新增班級。</p>}
     </section>
     </>}
-    {page === 'subjects' && <section className="subject-settings"><div><strong>任教科目</strong><p>科目庫由所有課表專案共用；搜尋將於 Phase 4C-3 加入。</p></div>{data.subjects.map((subject) => <div className="subject-setting-row" key={subject.id}><i style={{ background: subject.color }} /><span>{subject.name}</span><input aria-label={`${subject.name}顏色`} type="color" value={subject.color} onChange={(event) => setData((current) => ({ ...current, subjects: current.subjects.map((item) => item.id === subject.id ? { ...item, color: event.target.value, origin: 'user' } : item) }))} /></div>)}</section>}
+    {page === 'subjects' && <section className="subject-settings"><div><strong>任教科目</strong><p>科目庫由所有課表專案共用；目前只顯示所選學制適用的科目。</p></div>{!selectedUnit ? <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p> : <>{visibleSubjects.length === 0 && <p className="settings-empty">目前學制尚無適用科目，可在下方新增。</p>}{visibleSubjects.map((subject) => <div className="subject-setting-row" key={subject.id}><i style={{ background: subject.color }} /><span>{subject.name}</span><input aria-label={`${subject.name}顏色`} type="color" value={subject.color} onChange={(event) => changeSubjectColor(subject, event.target.value)} /></div>)}<form className="inline-create" onSubmit={(event) => { event.preventDefault(); try { setData(addSubjectForLevel(data, newSubjectName, selectedUnit.schoolLevel, uid())); setNewSubjectName(''); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : '科目無法新增。') } }}><input aria-label="新科目名稱" value={newSubjectName} onChange={(event) => setNewSubjectName(event.target.value)} placeholder="新科目名稱" required /><button type="submit">新增科目</button></form></>}</section>}
     {error && <p className="form-error" role="alert">{error}</p>}
   </section>
 }

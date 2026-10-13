@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { migrateV3ToV4 } from './migrationsV4'
+import { migrateV4ToV5 } from './migrationsV5'
 import { initialData } from './seed'
 import { addLessonV4, deleteLessonV4, updateLessonV4, type LessonDraftV4 } from './lessonsV4'
 import { isAppDataV4 } from './validators/v4'
@@ -18,6 +19,29 @@ function setup() {
 }
 
 describe('v4 lesson CRUD', () => {
+  it('v5 data layer rejects a subject outside the teaching unit school level', () => {
+    const { data: old, draft } = setup()
+    const data = migrateV4ToV5(old)
+    data.subjects[0].applicableSchoolLevels = ['senior-high']
+    expect(() => addLessonV4(data, draft, () => 'bad-level')).toThrow('Subject does not apply')
+    data.subjects[0].applicableSchoolLevels = ['other']
+    expect(() => addLessonV4(data, draft, () => 'good-level')).not.toThrow()
+  })
+
+  it('keeps an existing inapplicable subject when only other lesson fields change', () => {
+    const data = migrateV4ToV5(setup().data)
+    const lesson = data.recurringLessons.find((item) => item.id === 'c1')!
+    const unit = data.teachingUnits.find((item) => item.id === lesson.teachingUnitId)!
+    const subject = data.subjects.find((item) => item.id === lesson.subjectId)!
+    subject.applicableSchoolLevels = ['junior-high']
+    const unchangedChoice = { projectId: lesson.projectId, schoolId: unit.schoolId, teachingUnitId: unit.id,
+      subjectId: lesson.subjectId, classId: lesson.classId, day: lesson.day, periodId: lesson.periodId,
+      weekPattern: lesson.weekPattern, room: '新教室' }
+    expect(updateLessonV4(data, lesson.id, unchangedChoice).recurringLessons.find((item) => item.id === lesson.id)).toMatchObject({ subjectId: subject.id, room: '新教室' })
+    const other = data.subjects.find((item) => item.id === 'history')!
+    other.applicableSchoolLevels = ['senior-high']
+    expect(() => updateLessonV4(data, lesson.id, { ...unchangedChoice, subjectId: other.id })).toThrow('Subject does not apply')
+  })
   it('新增課程使用所屬 TeachingUnit 的期間與新 ID', () => {
     const { data, draft, unit } = setup()
     const result = addLessonV4(data, draft, () => 'new-lesson')

@@ -122,6 +122,14 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
       try {
         if (validateRef.current && !validateRef.current(value)) throw new Error('Invalid data structure')
         if (validateUpdateRef.current && !validateUpdateRef.current(pendingBaseRef.current, value)) throw new Error('Unsafe pending data update')
+        const storedRaw = localStorage.getItem(key)
+        if (storedRaw !== lastStoredRawRef.current) {
+          externalRawRef.current = storedRaw
+          blockedRef.current = true
+          setRawBackup(storedRaw)
+          setStatus('conflict')
+          return
+        }
         const raw = JSON.stringify(value)
         localStorage.setItem(key, raw)
         lastStoredRawRef.current = raw

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AppDataV4 } from '../types'
 import { initialData } from './seed'
 import { migrateV3ToV4 } from './migrationsV4'
+import { migrateV4ToV5 } from './migrationsV5'
 import { archiveProject, copyProject, createBlankProject, createProject, deleteProject, mergeProjectView, projectToLegacyView, reactivateProject, renameProject, switchActiveProject } from './projectRuntime'
 import { isAppDataV4 } from './validators/v4'
 
@@ -21,6 +22,37 @@ function twoProjects(): AppDataV4 {
 }
 
 describe('v4 project runtime projection', () => {
+  it('複製專案不建立學制不適用的新課程引用', () => {
+    const data = migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))
+    data.subjects.find((item) => item.id === 'chinese')!.applicableSchoolLevels = ['junior-high']
+    const unit = data.teachingUnits[0]
+    expect(() => copyProject(data, {
+      sourceProjectId: data.projects[0].id, name: '下一學期', academicYear: 116, semester: 'first',
+      units: [{ sourceUnitId: unit.id, startDate: '2027-08-30', endDate: '2028-01-19', anchorDate: '2027-08-30', anchorPattern: 'A' }],
+    }, () => 'new-id')).toThrow('subjects applicable')
+    expect(data.recurringLessons.some((item) => item.projectId === 'new-id')).toBe(false)
+  })
+  it('legacy subject view cannot remove applicability or global subjects', () => {
+    const data = migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))
+    data.subjects[0].applicableSchoolLevels = ['senior-high']
+    const view = projectToLegacyView(data)
+    view.subjects[0] = { ...view.subjects[0], color: '#123456', applicableSchoolLevels: undefined }
+    view.subjects.pop()
+    const merged = mergeProjectView(data, data.activeProjectId!, view)
+    expect(merged.subjects).toHaveLength(data.subjects.length)
+    expect(merged.subjects[0]).toMatchObject({ id: data.subjects[0].id, color: data.subjects[0].color, applicableSchoolLevels: ['senior-high'] })
+  })
+
+  it('legacy project merge cannot assign an inapplicable subject to a course or replacement', () => {
+    const data = migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))
+    data.subjects.find((item) => item.id === 'history')!.applicableSchoolLevels = ['senior-high']
+    const view = projectToLegacyView(data)
+    view.courses[0].subjectId = 'history'
+    expect(() => mergeProjectView(data, data.activeProjectId!, view)).toThrow('Course subject')
+    view.courses[0].subjectId = 'chinese'
+    view.overrides.push({ id: 'legacy-replace', termId: data.teachingUnits[0].id, date: '2026-09-07', periodId: 1, action: 'replace', originalCourseId: 'c1', replacement: { subjectId: 'history', classId: data.classes[0].id } })
+    expect(() => mergeProjectView(data, data.activeProjectId!, view)).toThrow('Override subject')
+  })
   it('建立空白專案使用明確預設，不複製目前專案資料', () => {
     const source = migrateV3ToV4(structuredClone(initialData))
     const ids = ['blank-project', 'blank-school', 'blank-unit']
