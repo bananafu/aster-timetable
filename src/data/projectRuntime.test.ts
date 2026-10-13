@@ -139,4 +139,19 @@ describe('v4 project runtime projection', () => {
     expect(projectToLegacyView(data, data.projects[0].id).overrides.some((item) => item.id === 'orphan')).toBe(false)
     expect(projectToLegacyView(data, 'project-2').overrides.some((item) => item.id === 'orphan')).toBe(false)
   })
+
+  it('legacy view 寫回時保留原生 v4 move override', () => {
+    const data = twoProjects()
+    const projectId = data.projects[0].id
+    const lesson = data.recurringLessons.find((item) => item.projectId === projectId)!
+    data.overrides.push({
+      id: 'native-move', projectId, teachingUnitId: lesson.teachingUnitId, date: '2026-09-07',
+      periodId: lesson.periodId, action: 'move', originalLessonId: lesson.id,
+      target: { date: '2026-09-07', periodId: lesson.periodId },
+    })
+    const view = projectToLegacyView(data, projectId)
+    expect(view.overrides.some((item) => item.id === 'native-move')).toBe(false)
+    const merged = mergeProjectView(data, projectId, view)
+    expect(merged.overrides.find((item) => item.id === 'native-move')).toEqual(data.overrides.find((item) => item.id === 'native-move'))
+  })
 })

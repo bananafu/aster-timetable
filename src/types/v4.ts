@@ -88,9 +88,11 @@ export interface ScheduleOverrideV4 {
   teachingUnitId: string | null
   date: string
   periodId: number
-  action: 'cancel' | 'replace'
+  action: 'cancel' | 'replace' | 'move'
   originalLessonId?: string
   replacement?: { subjectId: string; classId: string; room?: string }
+  target?: { date: string; periodId: number }
+  groupId?: string
   note?: string
   origin?: DataOrigin
 }

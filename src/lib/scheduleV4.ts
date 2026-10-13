@@ -1,7 +1,7 @@
 import { fromDateKey, startOfWeek, toDateKey } from './date'
 import type { AlternatingWeekPattern, AppDataV4, DayOfWeek, TeachingUnit } from '../types'
 
-export type ResolvedLessonStatus = 'regular' | 'replaced' | 'cancelled'
+export type ResolvedLessonStatus = 'regular' | 'replaced' | 'cancelled' | 'moved'
 
 export interface ResolvedLessonV4 {
   id: string
@@ -80,8 +80,9 @@ export function resolveProjectDay(
   const schools = new Map(data.schools.filter((school) => school.projectId === projectId).map((school) => [school.id, school]))
   const subjects = new Map(data.subjects.map((subject) => [subject.id, subject]))
   const classes = new Map(data.classes.filter((item) => item.projectId === projectId).map((item) => [item.id, item]))
-  const overrides = data.overrides.filter((item) => item.projectId === projectId
-    && item.teachingUnitId !== null && unitIds.has(item.teachingUnitId) && item.date === dateKey)
+  const assignedOverrides = data.overrides.filter((item) => item.projectId === projectId
+    && item.teachingUnitId !== null && unitIds.has(item.teachingUnitId))
+  const overrides = assignedOverrides.filter((item) => item.date === dateKey)
 
   const resolved = data.recurringLessons.flatMap<ResolvedLessonV4>((lesson) => {
     if (lesson.projectId !== projectId || !unitIds.has(lesson.teachingUnitId)
@@ -100,6 +101,7 @@ export function resolveProjectDay(
       && lessonAppliesOnDate(dateKey, candidate.day, candidate.weekPattern, unit, date)).length
     const override = overrides.find((item) => item.teachingUnitId === unit.id && item.periodId === lesson.periodId
       && (item.originalLessonId === lesson.id || (!item.originalLessonId && activeSlotLessonCount === 1)))
+    if (override?.action === 'move') return []
     const replacementSubject = override?.action === 'replace' ? subjects.get(override.replacement?.subjectId ?? '') : undefined
     const replacementClass = override?.action === 'replace' ? classes.get(override.replacement?.classId ?? '') : undefined
     const status: ResolvedLessonStatus = override?.action === 'cancel' ? 'cancelled' : override?.action === 'replace' ? 'replaced' : 'regular'
@@ -131,13 +133,37 @@ export function resolveProjectDay(
       note: override?.note,
       hasConflict: false,
     }]
-  }).sort((left, right) => left.startTime.localeCompare(right.startTime)
+  })
+
+  const moved = assignedOverrides.flatMap<ResolvedLessonV4>((override) => {
+    if (override.action !== 'move' || override.target?.date !== dateKey || !override.originalLessonId || !override.teachingUnitId) return []
+    const lesson = data.recurringLessons.find((item) => item.id === override.originalLessonId)
+    const unit = units.find((item) => item.id === override.teachingUnitId)
+    const school = unit ? schools.get(unit.schoolId) : undefined
+    const period = unit?.periods.find((item) => item.id === override.target?.periodId)
+    const subject = lesson ? subjects.get(lesson.subjectId) : undefined
+    const schoolClass = lesson ? classes.get(lesson.classId) : undefined
+    const sourceDate = fromDateKey(override.date)
+    if (!lesson || !unit || !school || !period || !subject || !schoolClass
+      || override.date < lesson.effectiveStart || (lesson.effectiveEnd && override.date > lesson.effectiveEnd)
+      || !lessonAppliesOnDate(override.date, lesson.day, lesson.weekPattern, unit, sourceDate)) return []
+    return [{
+      id: lesson.id, seriesId: lesson.seriesId, date: dateKey, projectId, schoolId: school.id,
+      schoolName: school.name, schoolColor: school.color, teachingUnitId: unit.id, teachingUnitName: unit.name,
+      subjectId: subject.id, subjectName: subject.name, subjectColor: subject.color,
+      classId: schoolClass.id, className: schoolClass.name, periodId: period.id, periodLabel: period.label,
+      startTime: period.startTime, endTime: period.endTime, room: lesson.room ?? schoolClass.room,
+      status: 'moved', overrideId: override.id, note: override.note, hasConflict: false,
+    }]
+  })
+
+  const sorted = [...resolved, ...moved].sort((left, right) => left.startTime.localeCompare(right.startTime)
     || left.endTime.localeCompare(right.endTime)
     || left.schoolName.localeCompare(right.schoolName)
     || left.teachingUnitName.localeCompare(right.teachingUnitName))
 
   const conflicts = new Set<string>()
-  const activeLessons = resolved.filter((item) => item.status !== 'cancelled')
+  const activeLessons = sorted.filter((item) => item.status !== 'cancelled')
   activeLessons.forEach((lesson, index) => {
     activeLessons.slice(index + 1).forEach((candidate) => {
       if (timeIntervalsOverlap(lesson, candidate)) {
@@ -146,7 +172,7 @@ export function resolveProjectDay(
       }
     })
   })
-  return resolved.map((item) => ({ ...item, hasConflict: conflicts.has(item.id) }))
+  return sorted.map((item) => ({ ...item, hasConflict: conflicts.has(item.id) }))
 }
 
 export function resolveProjectWeek(

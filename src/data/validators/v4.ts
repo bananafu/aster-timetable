@@ -113,18 +113,21 @@ function validateAppDataV4(value: unknown): value is AppDataV4 {
   })) return false
 
   if (!data.overrides.every((item) => {
-    const baseValid = date(item.date) && Number.isInteger(item.periodId) && ['cancel', 'replace'].includes(item.action)
-      && optionalText(item.note) && origin(item.origin)
+    const baseValid = date(item.date) && Number.isInteger(item.periodId) && ['cancel', 'replace', 'move'].includes(item.action)
+      && optionalText(item.note) && optionalText(item.groupId) && origin(item.origin)
     if (!baseValid) return false
     if (item.projectId === null || item.teachingUnitId === null) return item.projectId === null && item.teachingUnitId === null
     const unit = units.get(item.teachingUnitId)
     const original = item.originalLessonId ? lessons.get(item.originalLessonId) : undefined
     const replacementClass = item.replacement ? classes.get(item.replacement.classId) : undefined
     return unit?.projectId === item.projectId && date(item.date) && item.date >= unit.startDate && item.date <= unit.endDate
-      && unit.periods.some((period) => period.id === item.periodId) && ['cancel', 'replace'].includes(item.action)
+      && unit.periods.some((period) => period.id === item.periodId) && ['cancel', 'replace', 'move'].includes(item.action)
       && (!item.originalLessonId || (original?.projectId === item.projectId && original.teachingUnitId === item.teachingUnitId))
       && (item.action !== 'replace' || (item.replacement !== undefined && subjects.has(item.replacement.subjectId)
         && replacementClass?.projectId === item.projectId && replacementClass.teachingUnitId === item.teachingUnitId))
+      && (item.action !== 'move' || (item.originalLessonId !== undefined && item.replacement === undefined
+        && item.target !== undefined && date(item.target.date) && item.target.date >= unit.startDate && item.target.date <= unit.endDate
+        && unit.periods.some((period) => period.id === item.target?.periodId)))
   })) return false
 
   return data.migrationWarnings.every((item) => ['class', 'event', 'override', 'lesson'].includes(item.entityType)

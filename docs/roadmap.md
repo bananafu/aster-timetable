@@ -46,11 +46,11 @@
 
 已完成直接寫入 AppData v4 的 LessonEditor、固定課程新增／基本編輯／安全刪除、Project／School／TeachingUnit／Class／period 引用驗證、A/B 週衝突檢查，以及 Dashboard 與跨校課表的統一顯示及編輯入口。舊版 adapter 不再參與固定課程寫入。
 
-### Phase 3B — 單日異動與永久版本切分（待辦）
+### Phase 3B — 單日異動與永久版本切分（完成）
 
-加入永久修改生效日、單日移動／交換／取消及歷史版本檢視。
+已完成單日取消、移動、內容替換與交換，以及自指定日期起永久修改／交換及安全結束。單日移動以原 TeachingUnit 的 period 與實際時間驗證，目標占用時必須選擇交換、明確保留衝堂或取消；所有異動先預覽確認才寫入。固定課程採 effective-dated versioning，生效日前歷史與既有 override 引用均受保護。
 
-驗收：永久修改不改寫歷史；單日異動與固定版本獨立；跨 project / unit 引用被阻擋。
+驗收：永久修改不改寫歷史；單日異動與固定版本獨立；跨 project / unit 引用被阻擋；封存專案唯讀；重新載入後解析一致；完整 test/lint/build 通過。
 
 ## Phase 4 — Schedule interactions（待辦）
 

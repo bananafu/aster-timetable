@@ -10,7 +10,7 @@ interface Props {
   data: AppDataV4
   weekDays: Date[]
   projectId?: string | null
-  onLessonClick?: (lessonId: string) => void
+  onLessonClick?: (lessonId: string, date: string) => void
 }
 
 function minutes(time: string) {
@@ -26,7 +26,7 @@ function isShortBreak(previous: ResolvedLessonV4 | undefined, current: ResolvedL
 
 function LessonCard({ lesson, previous, onClick }: { lesson: ResolvedLessonV4; previous?: ResolvedLessonV4; onClick?: () => void }) {
   const style = { '--subject-color': lesson.subjectColor, '--school-color': lesson.schoolColor } as CSSProperties
-  const statusLabel = lesson.status === 'cancelled' ? '單日取消' : lesson.status === 'replaced' ? '單日替換' : null
+  const statusLabel = lesson.status === 'cancelled' ? '單日取消' : lesson.status === 'replaced' ? '單日替換' : lesson.status === 'moved' ? '單日移動' : null
   return <button type="button"
     className={`multi-lesson-card ${lesson.status} ${lesson.hasConflict ? 'conflict' : ''} ${isShortBreak(previous, lesson) ? 'short-break' : ''}`}
     style={style}
@@ -88,7 +88,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
           <div className="multi-day-lessons">
             {lessons.length === 0
               ? <p className="cross-school-empty">無有效課程</p>
-              : lessons.map((lesson, index) => <LessonCard key={`${lesson.id}-${lesson.overrideId ?? 'fixed'}`} lesson={lesson} previous={lessons[index - 1]} onClick={onLessonClick ? () => onLessonClick(lesson.id) : undefined} />)}
+              : lessons.map((lesson, index) => <LessonCard key={`${lesson.id}-${lesson.overrideId ?? 'fixed'}`} lesson={lesson} previous={lessons[index - 1]} onClick={onLessonClick ? () => onLessonClick(lesson.id, lesson.date) : undefined} />)}
           </div>
         </section>)}
       </div>

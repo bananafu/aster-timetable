@@ -186,7 +186,7 @@ export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.a
     }))
   const events: CalendarEvent[] = data.events.filter((item) => item.projectId === project.id || item.projectId === null)
     .map((item) => ({ id: item.id, termId: item.teachingUnitId ?? null, title: item.title, type: item.type, date: item.date, startTime: item.startTime, endTime: item.endTime, location: item.location, notes: item.notes, color: item.color, origin: item.origin }))
-  const overrides: ScheduleOverride[] = data.overrides.filter((item) => item.projectId === project.id)
+  const overrides: ScheduleOverride[] = data.overrides.filter((item): item is typeof item & { action: 'cancel' | 'replace' } => item.projectId === project.id && item.action !== 'move')
     .map((item) => ({ id: item.id, termId: item.teachingUnitId, date: item.date, periodId: item.periodId, action: item.action, originalCourseId: item.originalLessonId, replacement: item.replacement, note: item.note, origin: item.origin }))
 
   return {
@@ -262,6 +262,7 @@ export function mergeProjectView(data: AppDataV4, projectId: string, view: AppDa
     teachingUnitId: termId,
     originalLessonId: originalCourseId,
   }))
+  const nativeOverrides = data.overrides.filter((item) => item.projectId === projectId && item.action === 'move')
 
   return {
     ...data,
@@ -272,6 +273,6 @@ export function mergeProjectView(data: AppDataV4, projectId: string, view: AppDa
     classes: [...data.classes.filter((item) => item.projectId !== projectId), ...classes],
     recurringLessons: [...data.recurringLessons.filter((item) => item.projectId !== projectId), ...recurringLessons],
     events: [...data.events.filter((item) => item.projectId !== projectId && item.projectId !== null), ...events],
-    overrides: [...data.overrides.filter((item) => item.projectId !== projectId), ...overrides],
+    overrides: [...data.overrides.filter((item) => item.projectId !== projectId), ...nativeOverrides, ...overrides],
   }
 }
