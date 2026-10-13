@@ -74,4 +74,17 @@ describe('v4 lesson CRUD', () => {
     const referenced = { ...added, overrides: [...added.overrides, { id: 'override-new', projectId: draft.projectId, teachingUnitId: draft.teachingUnitId, date: '2026-09-01', periodId: draft.periodId, action: 'cancel' as const, originalLessonId: 'deletable' }] }
     expect(() => deleteLessonV4(referenced, 'deletable')).toThrow('overrides')
   })
+
+  it('已結束的歷史版本不可直接覆寫', () => {
+    const { data } = setup()
+    const historical = data.recurringLessons.find((item) => item.id === 'c1')!
+    historical.effectiveEnd = '2026-09-13'
+    data.recurringLessons.push({ ...historical, id: 'c1-v2', effectiveStart: '2026-09-14', effectiveEnd: '2027-01-20' })
+    const unit = data.teachingUnits.find((item) => item.id === historical.teachingUnitId)!
+    expect(() => updateLessonV4(data, historical.id, {
+      projectId: historical.projectId, schoolId: unit.schoolId, teachingUnitId: unit.id,
+      subjectId: historical.subjectId, classId: historical.classId, day: historical.day,
+      periodId: historical.periodId, weekPattern: historical.weekPattern, room: '不應寫入',
+    })).toThrow('Historical')
+  })
 })

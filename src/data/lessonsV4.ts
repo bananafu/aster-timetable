@@ -76,6 +76,7 @@ export function addLessonV4(data: AppDataV4, draft: LessonDraftV4, createId: () 
 export function updateLessonV4(data: AppDataV4, lessonId: string, draft: LessonDraftV4): AppDataV4 {
   const existing = data.recurringLessons.find((item) => item.id === lessonId)
   if (!existing) throw new Error('Lesson does not exist')
+  if (data.recurringLessons.some((item) => item.seriesId === existing.seriesId && item.effectiveStart > existing.effectiveStart)) throw new Error('Historical lesson versions are read-only')
   const { unit } = validateDraft(data, draft)
   const hasOverrides = data.overrides.some((item) => item.originalLessonId === lessonId)
   const structuralChange = existing.projectId !== draft.projectId || existing.teachingUnitId !== draft.teachingUnitId
