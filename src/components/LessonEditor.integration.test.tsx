@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { permanentlyUpdateLesson } from '../data/lessonChangesV4'
+import { cancelLessonOnDate, moveLessonOnDate, permanentlyUpdateLesson } from '../data/lessonChangesV4'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { initialData } from '../data/seed'
 import { LessonEditor } from './LessonEditor'
@@ -74,5 +74,33 @@ describe('LessonEditor integrated experience', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(setData).not.toHaveBeenCalled()
+  })
+
+  it('顯示並預覽撤銷現有移動，確認後原子移除 override', () => {
+    const moved = moveLessonOnDate(setup(), 'c1', '2026-09-07', { date: '2026-09-07', periodId: 8 }, false, () => 'move-existing')
+    const setData = vi.fn()
+    render(<LessonEditor data={moved} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByLabelText('現有單日異動').textContent).toContain('單日移動')
+    fireEvent.click(screen.getByRole('button', { name: '撤銷異動' }))
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('異動預覽').textContent).toContain('撤銷單日移動')
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    expect((setData.mock.calls[0][0] as ReturnType<typeof setup>).overrides).toHaveLength(0)
+  })
+
+  it('修改既有異動時以新紀錄取代舊紀錄', () => {
+    const cancelled = cancelLessonOnDate(setup(), 'c1', '2026-09-07', () => 'cancel-existing')
+    const setData = vi.fn()
+    render(<LessonEditor data={cancelled} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '修改此異動' }))
+    expect(screen.getByText(/正在改寫既有單日異動/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'move' } })
+    fireEvent.change(screen.getByLabelText('移至節次'), { target: { value: '8' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    const result = setData.mock.calls[0][0] as ReturnType<typeof setup>
+    expect(result.overrides).toHaveLength(1)
+    expect(result.overrides[0]).toMatchObject({ action: 'move', originalLessonId: 'c1', target: { periodId: 8 } })
+    expect(result.overrides[0].id).not.toBe('cancel-existing')
   })
 })

@@ -3,6 +3,7 @@ import type { AppDataV4 } from '../types'
 import { initialData } from './seed'
 import type { LegacyAppDataV1 } from './migrations'
 import { migrateV3ToV4 } from './migrationsV4'
+import { revokeLessonOverride, swapLessonsOnDate } from './lessonChangesV4'
 import { APP_DATA_V1_KEY, APP_DATA_V3_KEY, APP_DATA_V4_KEY, loadAppDataV4, persistLoadedAppDataV4 } from './storageV4'
 
 const initialV4 = () => migrateV3ToV4(structuredClone(initialData))
@@ -89,5 +90,17 @@ describe('AppData v4 storage routing', () => {
     expect(values.get(APP_DATA_V3_KEY)).toBe(originalV3)
     expect(values.get(APP_DATA_V1_KEY)).toBe('{"legacy":true}')
     expect(values.has(APP_DATA_V4_KEY)).toBe(false)
+  })
+
+  it('交換撤銷結果重新載入後保持完整，且不改動舊 key', () => {
+    const swapped = swapLessonsOnDate(initialV4(), 'c1', 'c2', '2026-09-07', (() => { const values = ['group', 'swap-a', 'swap-b']; return () => values.shift()! })())
+    const restored = revokeLessonOverride(swapped, 'swap-a')
+    const originalV3 = JSON.stringify(initialData)
+    const values = new Map([[APP_DATA_V4_KEY, JSON.stringify(restored)], [APP_DATA_V3_KEY, originalV3], [APP_DATA_V1_KEY, '{"legacy":true}']])
+    const loaded = loadAppDataV4({ getItem: (key) => values.get(key) ?? null }, initialV4())
+    expect(loaded.status).toBe('saved')
+    expect(loaded.value.overrides).toHaveLength(0)
+    expect(values.get(APP_DATA_V3_KEY)).toBe(originalV3)
+    expect(values.get(APP_DATA_V1_KEY)).toBe('{"legacy":true}')
   })
 })

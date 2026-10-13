@@ -31,6 +31,18 @@ function validResult(value: AppDataV4) {
   return value
 }
 
+export function revokeLessonOverride(data: AppDataV4, overrideId: string): AppDataV4 {
+  const override = data.overrides.find((item) => item.id === overrideId)
+  if (!override || override.projectId === null) throw new Error('Assigned override does not exist')
+  const project = data.projects.find((item) => item.id === override.projectId)
+  if (!project || project.archivedAt) throw new Error('Archived projects are read-only')
+  const related = override.groupId ? data.overrides.filter((item) => item.groupId === override.groupId) : [override]
+  if (override.groupId && related.length < 2) throw new Error('Grouped override is incomplete and cannot be revoked safely')
+  if (related.some((item) => item.projectId !== override.projectId)) throw new Error('Grouped override crosses project boundaries')
+  const removedIds = new Set(related.map((item) => item.id))
+  return validResult({ ...data, overrides: data.overrides.filter((item) => !removedIds.has(item.id)) })
+}
+
 export function cancelLessonOnDate(data: AppDataV4, lessonId: string, date: string, createId: () => string): AppDataV4 {
   const { lesson } = assertWritableLesson(data, lessonId, date)
   assertNoExistingOverride(data, lessonId, date)

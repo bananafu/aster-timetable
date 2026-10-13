@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveProjectDay } from '../lib/scheduleV4'
 import { initialData } from './seed'
 import { migrateV3ToV4 } from './migrationsV4'
-import { cancelLessonOnDate, endLessonFromDate, moveLessonOnDate, permanentlySwapLessons, permanentlyUpdateLesson, replaceLessonOnDate, swapLessonsOnDate } from './lessonChangesV4'
+import { cancelLessonOnDate, endLessonFromDate, moveLessonOnDate, permanentlySwapLessons, permanentlyUpdateLesson, replaceLessonOnDate, revokeLessonOverride, swapLessonsOnDate } from './lessonChangesV4'
 
 const ids = (...values: string[]) => {
   let index = 0
@@ -81,5 +81,54 @@ describe('v4 lesson changes', () => {
     archived.projects[0].archivedAt = '2026-10-01T00:00:00.000Z'
     archived.activeProjectId = null
     expect(() => cancelLessonOnDate(archived, 'c1', '2026-09-07', ids('blocked'))).toThrow('read-only')
+  })
+
+  it('撤銷取消與內容替換後恢復該日固定課程', () => {
+    const cancelled = cancelLessonOnDate(setup(), 'c1', '2026-09-07', ids('cancel'))
+    const restored = revokeLessonOverride(cancelled, 'cancel')
+    expect(restored.overrides).toHaveLength(0)
+    expect(day(restored, '2026-09-07').find((item) => item.id === 'c1')?.status).toBe('regular')
+    const schoolClass = restored.classes.find((item) => item.name === '二年 3 班')!
+    const replaced = replaceLessonOnDate(restored, 'c1', '2026-09-07', { subjectId: 'history', classId: schoolClass.id }, ids('replace'))
+    expect(day(replaced, '2026-09-07').find((item) => item.id === 'c1')?.status).toBe('replaced')
+    expect(day(revokeLessonOverride(replaced, 'replace'), '2026-09-07').find((item) => item.id === 'c1')).toMatchObject({ status: 'regular', subjectId: 'chinese' })
+  })
+
+  it('撤銷移動後原位置恢復且目標位置消失，重新載入結果一致', () => {
+    const moved = moveLessonOnDate(setup(), 'c1', '2026-09-07', { date: '2026-09-07', periodId: 8 }, false, ids('move'))
+    const restored = revokeLessonOverride(JSON.parse(JSON.stringify(moved)), 'move')
+    expect(day(restored, '2026-09-07').filter((item) => item.id === 'c1')).toEqual([expect.objectContaining({ status: 'regular', periodId: 1 })])
+  })
+
+  it('撤銷交換會以 groupId 原子移除雙方異動', () => {
+    const swapped = swapLessonsOnDate(setup(), 'c1', 'c2', '2026-09-07', ids('group', 'swap-a', 'swap-b'))
+    const restored = revokeLessonOverride(swapped, 'swap-a')
+    expect(restored.overrides.filter((item) => item.groupId === 'group')).toHaveLength(0)
+    expect(day(restored, '2026-09-07').filter((item) => ['c1', 'c2'].includes(item.id)).map((item) => [item.id, item.periodId])).toEqual([['c1', 1], ['c2', 3]])
+  })
+
+  it('改寫既有單日異動時不留下重複 override', () => {
+    const cancelled = cancelLessonOnDate(setup(), 'c1', '2026-09-07', ids('old-cancel'))
+    const clean = revokeLessonOverride(cancelled, 'old-cancel')
+    const rewritten = moveLessonOnDate(clean, 'c1', '2026-09-07', { date: '2026-09-07', periodId: 8 }, false, ids('new-move'))
+    expect(rewritten.overrides.filter((item) => item.originalLessonId === 'c1' && item.date === '2026-09-07').map((item) => item.id)).toEqual(['new-move'])
+  })
+
+  it('版本切分重新指向 override 後仍可安全撤銷', () => {
+    let data = cancelLessonOnDate(setup(), 'c1', '2026-09-21', ids('future-cancel'))
+    const lesson = data.recurringLessons.find((item) => item.id === 'c1')!
+    const unit = data.teachingUnits.find((item) => item.id === lesson.teachingUnitId)!
+    data = permanentlyUpdateLesson(data, 'c1', '2026-09-14', { projectId: lesson.projectId, schoolId: unit.schoolId, teachingUnitId: unit.id, subjectId: lesson.subjectId, classId: lesson.classId, day: lesson.day, periodId: lesson.periodId, weekPattern: lesson.weekPattern }, ids('c1-v2'))
+    expect(data.overrides[0].originalLessonId).toBe('c1-v2')
+    expect(revokeLessonOverride(data, 'future-cancel').overrides).toHaveLength(0)
+  })
+
+  it('封存專案與不完整交換群組不得撤銷', () => {
+    const data = cancelLessonOnDate(setup(), 'c1', '2026-09-07', ids('cancel'))
+    data.projects[0].archivedAt = '2026-10-01T00:00:00.000Z'; data.activeProjectId = null
+    expect(() => revokeLessonOverride(data, 'cancel')).toThrow('read-only')
+    const incomplete = setup()
+    incomplete.overrides.push({ id: 'half-swap', groupId: 'broken', projectId: incomplete.activeProjectId, teachingUnitId: incomplete.recurringLessons[0].teachingUnitId, date: '2026-09-07', periodId: 1, action: 'move', originalLessonId: 'c1', target: { date: '2026-09-07', periodId: 3 } })
+    expect(() => revokeLessonOverride(incomplete, 'half-swap')).toThrow('incomplete')
   })
 })

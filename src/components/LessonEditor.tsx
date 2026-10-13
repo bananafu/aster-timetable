@@ -1,5 +1,5 @@
 import { useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
-import { cancelLessonOnDate, endLessonFromDate, moveLessonOnDate, permanentlySwapLessons, permanentlyUpdateLesson, replaceLessonOnDate, swapLessonsOnDate } from '../data/lessonChangesV4'
+import { cancelLessonOnDate, endLessonFromDate, moveLessonOnDate, permanentlySwapLessons, permanentlyUpdateLesson, replaceLessonOnDate, revokeLessonOverride, swapLessonsOnDate } from '../data/lessonChangesV4'
 import { addLessonV4, deleteLessonV4, updateLessonV4, type LessonDraftV4 } from '../data/lessonsV4'
 import { fromDateKey, toDateKey } from '../lib/date'
 import { resolveProjectDay } from '../lib/scheduleV4'
@@ -56,6 +56,7 @@ export function LessonEditor({ data, setData, lessonId, occurrenceDate, context,
   const [targetPeriodId, setTargetPeriodId] = useState(lesson?.periodId ?? initialUnit?.periods[0]?.id ?? 0)
   const [swapLessonId, setSwapLessonId] = useState('')
   const [allowConflict, setAllowConflict] = useState(false)
+  const [editingOverrideId, setEditingOverrideId] = useState<string | null>(null)
   const [newSubjectName, setNewSubjectName] = useState('')
   const [error, setError] = useState('')
   const [preview, setPreview] = useState<{ data: AppDataV4; summary: string; details: string[]; warnings: string[] } | null>(null)
@@ -66,8 +67,13 @@ export function LessonEditor({ data, setData, lessonId, occurrenceDate, context,
   const unit = data.teachingUnits.find((item) => item.id === teachingUnitId)
   const classes = data.classes.filter((item) => item.projectId === projectId && item.teachingUnitId === teachingUnitId)
   const periods = [...(unit?.periods ?? [])].sort((left, right) => left.order - right.order)
-  const candidates = lesson ? resolveProjectDay(data, lesson.projectId, fromDateKey(changeDate)).filter((item) => item.id !== lesson.id && item.status !== 'cancelled') : []
   const occurrence = lesson && occurrenceDate ? resolveProjectDay(data, lesson.projectId, fromDateKey(occurrenceDate)).find((item) => item.id === lesson.id) : undefined
+  const activeOverride = occurrence?.overrideId ? data.overrides.find((item) => item.id === occurrence.overrideId) : undefined
+  const changeBase = useMemo(() => {
+    if (!editingOverrideId) return data
+    try { return revokeLessonOverride(data, editingOverrideId) } catch { return data }
+  }, [data, editingOverrideId])
+  const candidates = lesson ? resolveProjectDay(changeBase, lesson.projectId, fromDateKey(changeDate)).filter((item) => item.id !== lesson.id && item.status !== 'cancelled') : []
   const lessonUnit = lesson ? data.teachingUnits.find((item) => item.id === lesson.teachingUnitId) : undefined
   const lessonSchool = lessonUnit ? data.schools.find((item) => item.id === lessonUnit.schoolId) : undefined
   const lessonSubject = lesson ? data.subjects.find((item) => item.id === lesson.subjectId) : undefined
@@ -101,20 +107,47 @@ export function LessonEditor({ data, setData, lessonId, occurrenceDate, context,
   const buildChange = () => {
     if (!lesson) throw new Error('Lesson does not exist')
     const original = `${changeDate}・${dayLabel[lesson.day]}・${lessonPeriod?.label ?? lesson.periodId} ${lessonPeriod?.startTime ?? ''}–${lessonPeriod?.endTime ?? ''}`
-    if (mode === 'cancel') return { data: cancelLessonOnDate(data, lesson.id, changeDate, uid), summary: '僅取消指定日期', details: [`原位置：${original}`, '其他日期與固定版本不變'], warnings: [] }
+    if (mode === 'cancel') return { data: cancelLessonOnDate(changeBase, lesson.id, changeDate, uid), summary: '僅取消指定日期', details: [`原位置：${original}`, '其他日期與固定版本不變'], warnings: [] }
     if (mode === 'move') {
       const targetPeriod = lessonUnit?.periods.find((item) => item.id === targetPeriodId)
-      const collisions = targetPeriod ? resolveProjectDay(data, lesson.projectId, fromDateKey(targetDate)).filter((item) => item.status !== 'cancelled' && item.id !== lesson.id && item.startTime < targetPeriod.endTime && targetPeriod.startTime < item.endTime) : []
-      return { data: moveLessonOnDate(data, lesson.id, changeDate, { date: targetDate, periodId: targetPeriodId }, allowConflict, uid), summary: '僅移動指定日期', details: [`原位置：${original}（將留白）`, `目標位置：${targetDate}・${targetPeriod?.label ?? targetPeriodId} ${targetPeriod?.startTime ?? ''}–${targetPeriod?.endTime ?? ''}`], warnings: collisions.map((item) => `可能衝堂：${item.subjectName}・${item.className}（${item.schoolName}）`) }
+      const collisions = targetPeriod ? resolveProjectDay(changeBase, lesson.projectId, fromDateKey(targetDate)).filter((item) => item.status !== 'cancelled' && item.id !== lesson.id && item.startTime < targetPeriod.endTime && targetPeriod.startTime < item.endTime) : []
+      return { data: moveLessonOnDate(changeBase, lesson.id, changeDate, { date: targetDate, periodId: targetPeriodId }, allowConflict, uid), summary: '僅移動指定日期', details: [`原位置：${original}（將留白）`, `目標位置：${targetDate}・${targetPeriod?.label ?? targetPeriodId} ${targetPeriod?.startTime ?? ''}–${targetPeriod?.endTime ?? ''}`], warnings: collisions.map((item) => `可能衝堂：${item.subjectName}・${item.className}（${item.schoolName}）`) }
     }
-    if (mode === 'replace') return { data: replaceLessonOnDate(data, lesson.id, changeDate, { subjectId, classId, room }, uid), summary: '僅替換指定日期內容', details: [`位置不變：${original}`, `替換為：${data.subjects.find((item) => item.id === subjectId)?.name ?? subjectId}・${data.classes.find((item) => item.id === classId)?.name ?? classId}`], warnings: ['School 與 TeachingUnit 身分維持不變'] }
+    if (mode === 'replace') return { data: replaceLessonOnDate(changeBase, lesson.id, changeDate, { subjectId, classId, room }, uid), summary: '僅替換指定日期內容', details: [`位置不變：${original}`, `替換為：${data.subjects.find((item) => item.id === subjectId)?.name ?? subjectId}・${data.classes.find((item) => item.id === classId)?.name ?? classId}`], warnings: ['School 與 TeachingUnit 身分維持不變'] }
     const partner = candidates.find((item) => item.id === swapLessonId)
-    if (mode === 'swap') return { data: swapLessonsOnDate(data, lesson.id, swapLessonId, changeDate, uid), summary: '僅交換指定日期', details: [`課程 A：${original}`, `課程 B：${partner?.startTime ?? ''}–${partner?.endTime ?? ''}・${partner?.subjectName ?? swapLessonId}・${partner?.className ?? ''}`], warnings: partner?.schoolId !== lessonSchool?.id ? ['跨校交換會依雙方實際時間映射各自節次，不會混用 periodId'] : [] }
+    if (mode === 'swap') return { data: swapLessonsOnDate(changeBase, lesson.id, swapLessonId, changeDate, uid), summary: '僅交換指定日期', details: [`課程 A：${original}`, `課程 B：${partner?.startTime ?? ''}–${partner?.endTime ?? ''}・${partner?.subjectName ?? swapLessonId}・${partner?.className ?? ''}`], warnings: partner?.schoolId !== lessonSchool?.id ? ['跨校交換會依雙方實際時間映射各自節次，不會混用 periodId'] : [] }
     const futureOverrides = relatedOverrides.filter((item) => item.date >= changeDate).length
     if (mode === 'permanent') return { data: permanentlyUpdateLesson(data, lesson.id, changeDate, draft, uid), summary: '從指定日期起永久修改', details: [`生效日期：${changeDate}`, `新時段：${dayLabel[day]}・${periods.find((item) => item.id === periodId)?.label ?? periodId}`, '舊版本將在生效日前一日結束'], warnings: futureOverrides ? [`${futureOverrides} 筆生效日後 override 會安全改指向新版本`] : [] }
     if (mode === 'permanent-swap') return { data: permanentlySwapLessons(data, lesson.id, swapLessonId, changeDate, uid), summary: '從指定日期起永久交換', details: [`生效日期：${changeDate}`, `交換對象：${partner?.subjectName ?? swapLessonId}・${partner?.className ?? ''}`], warnings: ['雙方都會建立新版本；生效日前歷史不變', ...(partner?.schoolId !== lessonSchool?.id ? ['跨校交換必須有相同實際起訖時間的安全節次映射'] : [])] }
     if (mode === 'end') return { data: endLessonFromDate(data, lesson.id, changeDate), summary: '從指定日期起結束課程', details: [`結束日期：${changeDate}`, '生效日前的歷史課表仍保留'], warnings: futureOverrides ? [`仍有 ${futureOverrides} 筆未處理 override，操作將被阻止`] : [] }
     throw new Error('Unsupported change')
+  }
+  const beginOverrideEdit = () => {
+    if (!activeOverride) return
+    setEditingOverrideId(activeOverride.id)
+    setChangeDate(activeOverride.date)
+    if (activeOverride.groupId) {
+      const partnerOverride = data.overrides.find((item) => item.groupId === activeOverride.groupId && item.id !== activeOverride.id)
+      setMode('swap'); setSwapLessonId(partnerOverride?.originalLessonId ?? '')
+    } else if (activeOverride.action === 'replace') {
+      setMode('replace'); setSubjectId(activeOverride.replacement?.subjectId ?? lesson?.subjectId ?? '')
+      setClassId(activeOverride.replacement?.classId ?? lesson?.classId ?? ''); setRoom(activeOverride.replacement?.room ?? lesson?.room ?? '')
+    } else if (activeOverride.action === 'move') {
+      setMode('move'); setTargetDate(activeOverride.target?.date ?? activeOverride.date); setTargetPeriodId(activeOverride.target?.periodId ?? activeOverride.periodId)
+    } else setMode('cancel')
+    resetPreview()
+  }
+  const previewOverrideRevoke = () => {
+    if (!activeOverride) return
+    try {
+      const grouped = activeOverride.groupId ? data.overrides.filter((item) => item.groupId === activeOverride.groupId) : [activeOverride]
+      setPreview({
+        data: revokeLessonOverride(data, activeOverride.id), summary: activeOverride.groupId ? '撤銷單日交換' : `撤銷${statusLabel[occurrence?.status ?? 'regular']}`,
+        details: [`受影響日期：${activeOverride.date}`, activeOverride.action === 'move' ? `異動目標：${activeOverride.target?.date}・節次 ${activeOverride.target?.periodId}` : '恢復該日期原本的固定課表'],
+        warnings: activeOverride.groupId ? [`將原子撤銷交換群組中的 ${grouped.length} 筆關聯異動，雙方課程一併恢復`] : [],
+      })
+      setEditingOverrideId(null); setError('')
+    } catch (reason) { setError(messageFor(reason)); setPreview(null) }
   }
   const submit = (event: FormEvent) => {
     event.preventDefault(); setError('')
@@ -144,6 +177,8 @@ export function LessonEditor({ data, setData, lessonId, occurrenceDate, context,
 
   return <Modal title={lesson ? '編輯課程' : '新增固定課程'} subtitle={lesson ? '清楚區分僅此日期與永久版本；異動須預覽確認後才寫入。' : '直接寫入 AppData v4。'} onClose={onClose}><form className="form-grid" onSubmit={submit}>
     {lesson && <><section className="lesson-context full" aria-label="目前課程資訊"><div><span>學校／任教單位</span><strong>{lessonSchool?.name}・{lessonUnit?.name}</strong></div><div><span>科目／班級</span><strong>{occurrence?.subjectName ?? lessonSubject?.name}・{occurrence?.className ?? lessonClass?.name}</strong></div><div><span>日期／週型</span><strong>{occurrenceDate ?? '未指定日期'}・{lesson.weekPattern === 'every' ? '每週' : `${lesson.weekPattern} 週`}</strong></div><div><span>節次／實際時間</span><strong>{occurrence?.periodLabel ?? lessonPeriod?.label}・{occurrence?.startTime ?? lessonPeriod?.startTime}–{occurrence?.endTime ?? lessonPeriod?.endTime}</strong></div><p><span className={`lesson-status ${occurrence?.status ?? 'regular'}`}>{statusLabel[occurrence?.status ?? 'regular']}</span>{occurrence?.note && <em>{occurrence.note}</em>}</p></section>
+    {activeOverride && !historicalVersion && <section className="lesson-override-manager full" aria-label="現有單日異動"><div><span>此日期已有異動</span><strong>{activeOverride.groupId ? '單日交換' : statusLabel[occurrence?.status ?? 'regular']}</strong><small>{activeOverride.date}{activeOverride.target ? ` → ${activeOverride.target.date}・節次 ${activeOverride.target.periodId}` : ''}</small></div><div><button type="button" onClick={beginOverrideEdit}>修改此異動</button><button type="button" className="danger-button" onClick={previewOverrideRevoke}>撤銷異動</button></div></section>}
+    {editingOverrideId && <p className="lesson-editing-override full" role="status">正在改寫既有單日異動；確認後會以新異動取代原紀錄，不會建立重複 override。</p>}
     {historicalVersion ? <p className="lesson-risk-warning full" role="status">目前選取的是已結束的歷史版本，只能查看，不可直接修改或新增異動。</p> : <nav className="lesson-scope-switch full" aria-label="課程編輯範圍"><button type="button" className={scope === 'basic' ? 'active' : ''} aria-pressed={scope === 'basic'} onClick={() => { setMode('basic'); resetPreview() }}>固定版本資料<small>直接修正目前版本</small></button><button type="button" className={scope === 'single' ? 'active' : ''} aria-pressed={scope === 'single'} onClick={() => { setMode('cancel'); resetPreview() }}>僅此日期<small>不影響其他週</small></button><button type="button" className={scope === 'permanent' ? 'active' : ''} aria-pressed={scope === 'permanent'} onClick={() => { setMode('permanent'); resetPreview() }}>從指定日期起<small>建立新歷史版本</small></button></nav>}
     {!historicalVersion && scope !== 'basic' && <label className="full">異動方式<select aria-label="課程異動類型" value={mode} onChange={(event) => { setMode(event.target.value as ChangeMode); resetPreview() }}>{scope === 'single' ? <><option value="cancel">取消課程</option><option value="move">移動課程</option><option value="replace">替換內容</option><option value="swap">交換兩堂課</option></> : <><option value="permanent">永久修改</option><option value="permanent-swap">永久交換</option><option value="end">結束課程</option></>}</select></label>}
     {relatedOverrides.length > 0 && <p className="lesson-risk-warning full" role="status">此版本已有 {relatedOverrides.length} 筆單日異動。新增同日異動、結束課程或版本切分時會驗證引用，無法安全處理便會阻止寫入。</p>}</>}
