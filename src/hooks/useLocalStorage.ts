@@ -17,6 +17,13 @@ export interface StorageControls {
   reset: () => void
 }
 
+export interface StoragePersistence {
+  /** True while the current in-memory value has not completed a storage write. */
+  pending: boolean
+  /** Increments only after this tab successfully writes the current value. */
+  revision: number
+}
+
 export interface StorageLoadResult<T> {
   value: T
   status: StorageStatus
@@ -74,6 +81,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
   const [value, setValueState] = useState<T>(initialLoad.value)
   const [status, setStatus] = useState<StorageStatus>(initialLoad.status)
   const [rawBackup, setRawBackup] = useState<string | null>(initialLoad.rawBackup ?? (initialLoad.status === 'read-error' ? initialLoad.raw : null))
+  const [persistence, setPersistence] = useState<StoragePersistence>({ pending: initialLoad.shouldPersist, revision: 0 })
   const pendingRef = useRef(initialLoad.shouldPersist)
   const pendingBaseRef = useRef(initialLoad.value)
   const blockedRef = useRef(initialLoad.status !== 'saved')
@@ -96,6 +104,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
       }
       if (!pendingRef.current) pendingBaseRef.current = current
       pendingRef.current = true
+      setPersistence((currentPersistence) => ({ ...currentPersistence, pending: true }))
       valueRef.current = resolved
       return resolved
     })
@@ -107,6 +116,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
     setValueState(nextValue)
     valueRef.current = nextValue
     pendingRef.current = false
+    setPersistence((currentPersistence) => ({ ...currentPersistence, pending: false }))
     pendingBaseRef.current = nextValue
     blockedRef.current = false
     lastStoredRawRef.current = raw
@@ -135,6 +145,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
         lastStoredRawRef.current = raw
         pendingRef.current = false
         pendingBaseRef.current = value
+        setPersistence((currentPersistence) => ({ pending: false, revision: currentPersistence.revision + 1 }))
         setRawBackup(null)
         setStatus('saved')
       } catch {
@@ -189,6 +200,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
         lastStoredRawRef.current = raw
         pendingRef.current = false
         pendingBaseRef.current = valueRef.current
+        setPersistence((currentPersistence) => ({ pending: false, revision: currentPersistence.revision + 1 }))
         blockedRef.current = false
         externalRawRef.current = null
         setRawBackup(null)
@@ -208,6 +220,7 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
         lastStoredRawRef.current = raw
         pendingRef.current = false
         pendingBaseRef.current = initialValue
+        setPersistence((currentPersistence) => ({ pending: false, revision: currentPersistence.revision + 1 }))
         blockedRef.current = false
         externalRawRef.current = null
         setRawBackup(null)
@@ -219,5 +232,5 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
     },
   }
 
-  return [value, setValue, status, controls] as const
+  return [value, setValue, status, controls, persistence] as const
 }

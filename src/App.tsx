@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { CalendarClock, CalendarDays, Clock3, MapPin, Plus } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
@@ -6,9 +6,9 @@ import { Modal } from './components/Modal'
 import { MultiSchoolSchedule } from './components/MultiSchoolSchedule'
 import { FirstUse, ProjectLifecycleModal } from './components/ProjectLifecycle'
 import { LessonEditor } from './components/LessonEditor'
-import { TimetableControls, TimetableForm } from './components/TimetableControls'
+import { TimetableControls, TimetableCopyForm, TimetableForm, type TimetableCopyDetails } from './components/TimetableControls'
 import { projectToLegacyView, switchActiveProject } from './data/projectRuntime'
-import { createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
+import { copyTimetable, createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
 import { getSubjectImpact, updateSubject } from './data/subjectsV5'
 import { SCHOOL_LEVELS } from './types'
 import { useAppDataV4 } from './hooks/useAppDataV4'
@@ -18,9 +18,35 @@ import { getNextUpcomingEvent } from './lib/schedule'
 import { classifyEventTerm, getTermForDate } from './lib/academic'
 import { getTodayTeachingSummaryV4, type TodayTeachingSummaryV4 } from './lib/scheduleV4'
 import type { LessonDragIntent } from './lib/lessonDrag'
-import type { AppData, CalendarEvent, ModalKind } from './types'
+import type { AppData, AppDataV4, CalendarEvent, ModalKind, Timetable } from './types'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
+
+type TimetableDialog = {
+  mode: 'create' | 'edit'
+  projectId: string
+  timetableId?: string
+  original?: TimetableDetails
+} | {
+  mode: 'copy'
+  projectId: string
+  timetableId: string
+  source: Timetable
+  sourceFingerprint: string
+  defaultDate: string
+}
+
+function timetableCopySourceFingerprint(data: AppDataV4, projectId: string, timetableId: string): string | null {
+  const project = data.projects.find((item) => item.id === projectId)
+  const timetable = data.timetables?.find((item) => item.id === timetableId && item.projectId === projectId)
+  if (!project || !timetable) return null
+  return JSON.stringify({
+    project,
+    timetable,
+    lessons: data.recurringLessons.filter((item) => item.projectId === projectId && item.timetableId === timetableId),
+    teachingUnits: data.teachingUnits.filter((item) => item.projectId === projectId),
+  })
+}
 
 const EMPTY_LEGACY_DATA: AppData = {
   schemaVersion: 3,
@@ -39,7 +65,7 @@ function downloadRawData(raw: string) {
 }
 
 export default function App() {
-  const [appData, setAppData, storageStatus, storageControls] = useAppDataV4()
+  const [appData, setAppData, storageStatus, storageControls, storagePersistence] = useAppDataV4()
   // Timetable selection is view state; it must never update persisted AppData.
   const [timetableSelection, setTimetableSelection] = useState(() => ({
     projectId: appData.activeProjectId,
@@ -63,8 +89,11 @@ export default function App() {
   const [lessonDragIntent, setLessonDragIntent] = useState<LessonDragIntent | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [historicalProjectId, setHistoricalProjectId] = useState<string | null>(null)
-  const [timetableDialog, setTimetableDialog] = useState<{ mode: 'create' | 'edit'; projectId: string; timetableId?: string; original?: TimetableDetails } | null>(null)
+  const [timetableDialog, setTimetableDialog] = useState<TimetableDialog | null>(null)
   const [timetableError, setTimetableError] = useState('')
+  const [timetableNotice, setTimetableNotice] = useState('')
+  const [pendingTimetableCopy, setPendingTimetableCopy] = useState<{ projectId: string; timetableId: string; startedRevision: number } | null>(null)
+  const copySubmittingRef = useRef(false)
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     setSelectedLessonId(null)
@@ -76,6 +105,36 @@ export default function App() {
     const timer = window.setInterval(() => setNow(new Date()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
+  useEffect(() => {
+    if (!pendingTimetableCopy) return
+    if (storageStatus === 'conflict') {
+      setTimetableError('其他分頁已更新資料，複製尚未儲存。請先處理多分頁衝突。')
+      return
+    }
+    if (storageStatus === 'write-error' || storageStatus === 'read-error') {
+      setTimetableError('資料尚未成功寫入此裝置，複製尚未完成。請先處理儲存問題。')
+      return
+    }
+    if (storageStatus !== 'saved' || storagePersistence.pending) return
+    const persistedCopy = appData.timetables?.find((item) => item.id === pendingTimetableCopy.timetableId && item.projectId === pendingTimetableCopy.projectId)
+    if (!persistedCopy) {
+      copySubmittingRef.current = false
+      setPendingTimetableCopy(null)
+      setTimetableError('已採用其他資料版本，這次複製未完成。請重新確認來源後再試。')
+      return
+    }
+    if (storagePersistence.revision <= pendingTimetableCopy.startedRevision) return
+    setTimetableSelection({ projectId: pendingTimetableCopy.projectId, timetableId: pendingTimetableCopy.timetableId })
+    setSelectedLessonId(null)
+    setSelectedLessonDate(null)
+    setLessonDragIntent(null)
+    setLessonEditorOpen(false)
+    setTimetableDialog(null)
+    setTimetableError('')
+    setTimetableNotice(`已複製並儲存「${persistedCopy.name}」。`)
+    copySubmittingRef.current = false
+    setPendingTimetableCopy(null)
+  }, [appData.timetables, pendingTimetableCopy, storagePersistence, storageStatus])
   const weekDays = useMemo(() => Array.from({ length: 5 }, (_, index) => addDays(weekStart, index)), [weekStart])
   const activeProject = appData.projects.find((project) => project.id === appData.activeProjectId)
   const historicalProject = appData.projects.find((project) => project.id === historicalProjectId && project.archivedAt)
@@ -130,7 +189,7 @@ export default function App() {
   }
 
   const submitTimetable = (details: TimetableDetails) => {
-    if (!timetableDialog || timetableDialog.projectId !== displayProject?.id || historicalProject || storageStatus !== 'saved') {
+    if (!timetableDialog || timetableDialog.mode === 'copy' || timetableDialog.projectId !== displayProject?.id || historicalProject || storageStatus !== 'saved') {
       setTimetableError('目前專案無法修改課表資訊。'); return
     }
     try {
@@ -156,6 +215,43 @@ export default function App() {
     } catch (reason) {
       setTimetableError(reason instanceof Error && reason.message.includes('read-only')
         ? '封存或不存在的專案不可修改課表。' : '課表名稱與授課教師姓名不正確，或課表資料已變更。')
+    }
+  }
+
+  const submitTimetableCopy = (details: TimetableCopyDetails) => {
+    if (copySubmittingRef.current) return
+    if (!timetableDialog || timetableDialog.mode !== 'copy' || timetableDialog.projectId !== displayProject?.id || historicalProject || storageStatus !== 'saved') {
+      setTimetableError('目前專案無法複製課表。')
+      return
+    }
+    const latestFingerprint = timetableCopySourceFingerprint(appData, timetableDialog.projectId, timetableDialog.timetableId)
+    if (!latestFingerprint || latestFingerprint !== timetableDialog.sourceFingerprint) {
+      setTimetableError('來源課表、固定課程或任教單位設定已變更，請關閉後重新開啟複製。')
+      return
+    }
+    try {
+      copySubmittingRef.current = true
+      const next = copyTimetable(appData, {
+        projectId: timetableDialog.projectId,
+        sourceTimetableId: timetableDialog.timetableId,
+        baseDate: details.baseDate,
+        name: details.name,
+        teacherName: details.teacherName,
+      }, uid)
+      const created = next.timetables.find((item) => !appData.timetables?.some((current) => current.id === item.id))
+      if (!created) throw new Error('Copied timetable was not created')
+      setPendingTimetableCopy({ projectId: timetableDialog.projectId, timetableId: created.id, startedRevision: storagePersistence.revision })
+      setTimetableError('')
+      setTimetableNotice('')
+      setAppData(next)
+    } catch (reason) {
+      copySubmittingRef.current = false
+      const message = reason instanceof Error ? reason.message : ''
+      setTimetableError(message.includes('Base date')
+        ? '請輸入真實有效的基準日期。'
+        : message.includes('name') || message.includes('teacher')
+          ? '課表名稱與授課教師姓名不可空白。'
+          : '課表資料已變更或不符合安全規則，未建立副本。')
     }
   }
 
@@ -204,7 +300,14 @@ export default function App() {
           <section className="page-heading">
             <div><p className="eyebrow">{activePage === 'timetable' ? displayProject.name : weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? '我的課表' : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>{historicalProject ? '封存專案僅供查看。' : '所有資料都會自動儲存在這台裝置。'}</p>}</div>
             <div className="page-heading-side">
-              {(activePage === 'timetable' || activePage === 'dashboard') && <TimetableControls timetables={displayTimetables} selected={displayTimetable} canManage={!historicalProject && storageStatus === 'saved'} onSelect={(id) => chooseTimetable(displayProject.id, id)} onCreate={() => { setTimetableError(''); setTimetableDialog({ mode: 'create', projectId: displayProject.id }) }} onEdit={() => { if (!displayTimetable) return; setTimetableError(''); setTimetableDialog({ mode: 'edit', projectId: displayProject.id, timetableId: displayTimetable.id, original: { name: displayTimetable.name, teacherName: displayTimetable.teacherName } }) }} />}
+              {(activePage === 'timetable' || activePage === 'dashboard') && <TimetableControls timetables={displayTimetables} selected={displayTimetable} canManage={!historicalProject && storageStatus === 'saved'} notice={timetableNotice} onSelect={(id) => { setTimetableNotice(''); chooseTimetable(displayProject.id, id) }} onCreate={() => { setTimetableNotice(''); setTimetableError(''); setTimetableDialog({ mode: 'create', projectId: displayProject.id }) }} onCopy={() => {
+                if (!displayTimetable) return
+                const sourceFingerprint = timetableCopySourceFingerprint(appData, displayProject.id, displayTimetable.id)
+                if (!sourceFingerprint) return
+                setTimetableNotice('')
+                setTimetableError('')
+                setTimetableDialog({ mode: 'copy', projectId: displayProject.id, timetableId: displayTimetable.id, source: displayTimetable, sourceFingerprint, defaultDate: toDateKey(new Date()) })
+              }} onEdit={() => { if (!displayTimetable) return; setTimetableNotice(''); setTimetableError(''); setTimetableDialog({ mode: 'edit', projectId: displayProject.id, timetableId: displayTimetable.id, original: { name: displayTimetable.name, teacherName: displayTimetable.teacherName } }) }} />}
               <div className="week-pill">{activePage === 'timetable' ? <><span>多校檢視</span><strong>實際時間</strong></> : <><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></>}</div>
             </div>
           </section>
@@ -230,7 +333,7 @@ export default function App() {
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
       {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} onClose={() => setModal(null)} onViewArchived={viewArchivedProject} />}</>}
-      {timetableDialog && <TimetableForm key={`${timetableDialog.mode}:${timetableDialog.timetableId ?? timetableDialog.projectId}`} mode={timetableDialog.mode} timetable={appData.timetables?.find((item) => item.id === timetableDialog.timetableId && item.projectId === timetableDialog.projectId)} error={timetableError} onSubmit={submitTimetable} onClose={() => { setTimetableDialog(null); setTimetableError('') }} />}
+      {timetableDialog?.mode === 'copy' ? <TimetableCopyForm key={`copy:${timetableDialog.timetableId}`} source={timetableDialog.source} defaultDate={timetableDialog.defaultDate} error={timetableError} submitting={Boolean(pendingTimetableCopy)} onSubmit={submitTimetableCopy} onClose={() => { if (pendingTimetableCopy) return; setTimetableDialog(null); setTimetableError('') }} /> : timetableDialog && <TimetableForm key={`${timetableDialog.mode}:${timetableDialog.timetableId ?? timetableDialog.projectId}`} mode={timetableDialog.mode} timetable={appData.timetables?.find((item) => item.id === timetableDialog.timetableId && item.projectId === timetableDialog.projectId)} error={timetableError} onSubmit={submitTimetable} onClose={() => { setTimetableDialog(null); setTimetableError('') }} />}
       {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor key={activeTimetable?.id ?? activeProject?.id} data={appData} setData={setAppData} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} dragIntent={lessonDragIntent} onOpenSettings={() => { setLessonEditorOpen(false); setModal('settings') }} onClose={() => setLessonEditorOpen(false)} onSaved={(projectId) => { if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
     </div>
   )
