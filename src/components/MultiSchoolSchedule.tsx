@@ -3,9 +3,14 @@ import { AlertTriangle, MapPin } from 'lucide-react'
 import { dayNames, formatShortDate, toDateKey } from '../lib/date'
 import { createLessonDragIntent, type LessonDragIntent } from '../lib/lessonDrag'
 import { resolveProjectWeek, type ResolvedLessonV4 } from '../lib/scheduleV4'
-import type { AppDataV4 } from '../types'
+import type { AppDataV4, TeachingUnit } from '../types'
 
 type ScheduleScope = 'all' | 'school'
+const unitLabel = (unit: TeachingUnit, units: TeachingUnit[]) => {
+  const peers = units.filter((item) => item.schoolId === unit.schoolId && item.schoolLevel === unit.schoolLevel)
+  const base = unit.schoolLevel === 'junior-high' ? '國中部' : unit.schoolLevel === 'senior-high' ? '高中部' : unit.name
+  return peers.length > 1 ? `${base}（${unit.name}）` : base
+}
 
 interface Props {
   data: AppDataV4
@@ -105,7 +110,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
       </div>
       {scope === 'school' && <div className="school-schedule-filters">
         <label>學校<select aria-label="選擇學校" value={schoolId} onChange={(event) => { setSchoolId(event.target.value); setUnitId('all') }}>{schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}</select></label>
-        <label>任教單位<select aria-label="篩選任教單位" value={unitId} onChange={(event) => setUnitId(event.target.value)}><option value="all">全部單位</option>{schoolUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
+        <label>學制<select aria-label="篩選學制" value={unitId} onChange={(event) => setUnitId(event.target.value)}><option value="all">全部學制</option>{schoolUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitLabel(unit, units)}</option>)}</select></label>
       </div>}
       {conflictCount > 0 && <p className="schedule-conflict-summary" role="status"><AlertTriangle size={14} />本週有 {conflictCount} 堂課涉及時間衝突</p>}
     </div>

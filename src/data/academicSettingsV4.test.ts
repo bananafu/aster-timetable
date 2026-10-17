@@ -42,6 +42,16 @@ describe('v4 academic settings', () => {
     expect(isAppDataV4(result)).toBe(true)
   })
 
+  it('拒絕新增或改成同校重複學制，且不改寫既有資料', () => {
+    const data = source(); const schoolId = data.schools[0].id
+    const withJunior = addTeachingUnit(data, schoolId, { name: '國中部', schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'junior-unit')
+    const withBoth = addTeachingUnit(withJunior, schoolId, { name: '高中部', schoolLevel: 'senior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'senior-unit')
+
+    expect(() => addTeachingUnit(withBoth, schoolId, { name: '另一個國中部', schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: false, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'duplicate-unit')).toThrow('同一學校不可重複建立相同學制')
+    expect(() => updateTeachingUnit(withBoth, 'senior-unit', { ...withBoth.teachingUnits.find((item) => item.id === 'senior-unit')!, name: '高中部', schoolLevel: 'junior-high' })).toThrow('同一學校不可重複建立相同學制')
+    expect(withBoth.teachingUnits.map((item) => item.id)).toEqual(withJunior.teachingUnits.map((item) => item.id).concat('senior-unit'))
+  })
+
   it('建立 709、812、103 班級並保留穩定 ID', () => {
     const data = source(); const projectId = data.activeProjectId!; const schoolId = data.schools[0].id
     let result = addTeachingUnit(data, schoolId, { name: '國中部', schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'junior-unit')

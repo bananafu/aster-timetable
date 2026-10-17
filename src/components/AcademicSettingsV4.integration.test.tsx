@@ -9,6 +9,41 @@ import { AcademicSettingsV4 } from './AcademicSettingsV4'
 afterEach(cleanup)
 
 describe('AcademicSettingsV4 class roster', () => {
+  it('新增國中高中學制不要求識別名稱，並使用一致的預設名稱', () => {
+    const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+    expect(screen.queryByLabelText('學制識別名稱')).toBeNull()
+    expect(screen.queryByLabelText('自訂學制名稱')).toBeNull()
+    fireEvent.change(screen.getByLabelText('新增學制'), { target: { value: 'junior-high' } })
+    fireEvent.change(screen.getByLabelText('新學制起始日'), { target: { value: '2027-02-01' } })
+    fireEvent.change(screen.getByLabelText('新學制結束日'), { target: { value: '2027-06-30' } })
+    fireEvent.click(screen.getByRole('button', { name: '新增學制設定' }))
+    expect(setData.mock.calls[0][0].teachingUnits.at(-1)).toMatchObject({ schoolLevel: 'junior-high', name: '國中部' })
+  })
+
+  it('other 要求自訂名稱，同校重複學制則安全拒絕', () => {
+    const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+    fireEvent.change(screen.getByLabelText('新增學制'), { target: { value: 'other' } })
+    expect(screen.getByLabelText('自訂學制名稱')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('自訂學制名稱'), { target: { value: '雙語實驗課程' } })
+    fireEvent.change(screen.getByLabelText('新學制起始日'), { target: { value: '2027-02-01' } })
+    fireEvent.change(screen.getByLabelText('新學制結束日'), { target: { value: '2027-06-30' } })
+    fireEvent.click(screen.getByRole('button', { name: '新增學制設定' }))
+    expect(setData.mock.calls[0][0].teachingUnits.at(-1)).toMatchObject({ schoolLevel: 'other', name: '雙語實驗課程' })
+
+    cleanup(); setData.mockClear()
+    render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+    fireEvent.change(screen.getByLabelText('新增學制'), { target: { value: 'senior-high' } })
+    fireEvent.change(screen.getByLabelText('新學制起始日'), { target: { value: '2027-02-01' } })
+    fireEvent.change(screen.getByLabelText('新學制結束日'), { target: { value: '2027-06-30' } })
+    fireEvent.click(screen.getByRole('button', { name: '新增學制設定' }))
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('未新增重複資料')
+  })
+
   it('依所選學校與學制顯示科目，新增科目預設目前學制', () => {
     const data = migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))
     data.teachingUnits[0].schoolLevel = 'senior-high'
@@ -24,7 +59,7 @@ describe('AcademicSettingsV4 class roster', () => {
     expect(screen.getByText('高中科目')).toBeTruthy()
     expect(screen.getByText('共用科目')).toBeTruthy()
     expect(screen.queryByText('國中科目')).toBeNull()
-    fireEvent.change(screen.getByLabelText('任教學校'), { target: { value: 'school-j' } })
+    fireEvent.change(screen.getByLabelText('學校'), { target: { value: 'school-j' } })
     expect(screen.getByText('國中科目')).toBeTruthy()
     expect(screen.queryByText('高中科目')).toBeNull()
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '新科目' } })
@@ -82,7 +117,7 @@ describe('AcademicSettingsV4 class roster', () => {
     fireEvent.change(screen.getAllByLabelText(`${data.teachingUnits[0].name}開始時間`)[0], { target: { value: '10:00' } })
     expect((screen.getAllByLabelText(`${data.teachingUnits[0].name}結束時間`)[0] as HTMLSelectElement).value).toBe(originalEnd)
     expect(screen.getByText('結束時間必須晚於開始時間，請修正後再儲存。')).toBeTruthy()
-    expect((screen.getByRole('button', { name: '儲存任教單位' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '儲存學制設定' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('保留既有非 5 分鐘時間並顯示修正警告，不會在載入時寫入', () => {
@@ -94,7 +129,7 @@ describe('AcademicSettingsV4 class roster', () => {
     expect(setData).not.toHaveBeenCalled()
     fireEvent.change(screen.getAllByLabelText(`${data.teachingUnits[0].name}開始時間`)[0], { target: { value: '08:10' } })
     fireEvent.change(screen.getAllByLabelText(`${data.teachingUnits[0].name}結束時間`)[0], { target: { value: '09:00' } })
-    fireEvent.click(screen.getByRole('button', { name: '儲存任教單位' }))
+    fireEvent.click(screen.getByRole('button', { name: '儲存學制設定' }))
     expect(setData).toHaveBeenCalledOnce()
     expect(setData.mock.calls[0][0].teachingUnits[0].periods[0]).toMatchObject({ id: data.teachingUnits[0].periods[0].id, startTime: '08:10', endTime: '09:00' })
   })

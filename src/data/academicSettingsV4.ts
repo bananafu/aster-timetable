@@ -71,6 +71,7 @@ export function addTeachingUnit(data: AppDataV4, schoolId: string, draft: Omit<T
   const school = data.schools.find((item) => item.id === schoolId)
   const periods = draft.periods ?? createDefaultPeriods(draft.schoolLevel)
   if (!school || data.teachingUnits.some((item) => item.id === id)) throw new Error('找不到所屬學校或任教單位 ID 重複。')
+  if (data.teachingUnits.some((item) => item.schoolId === schoolId && item.schoolLevel === draft.schoolLevel)) throw new Error('同一學校不可重複建立相同學制。')
   validateTeachingUnitDraft({ ...draft, periods })
   return { ...data, teachingUnits: [...data.teachingUnits, { id, projectId: school.projectId, schoolId, timezone: 'Asia/Taipei', ...draft, name: draft.name.trim(), periods: periods.map((item) => ({ ...item })), weekCycle: { ...draft.weekCycle } }] }
 }
@@ -84,6 +85,7 @@ function validateTeachingUnitDraft(draft: TeachingUnitDraft) {
 export function updateTeachingUnit(data: AppDataV4, unitId: string, draft: TeachingUnitDraft): AppDataV4 {
   const unit = data.teachingUnits.find((item) => item.id === unitId)
   if (!unit) throw new Error('找不到任教單位。')
+  if (data.teachingUnits.some((item) => item.id !== unitId && item.schoolId === unit.schoolId && item.schoolLevel === draft.schoolLevel)) throw new Error('同一學校不可重複建立相同學制。')
   validateTeachingUnitDraft(draft)
   const referencedPeriodIds = new Set([
     ...data.recurringLessons.filter((item) => item.teachingUnitId === unitId).map((item) => item.periodId),

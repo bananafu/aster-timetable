@@ -15,6 +15,12 @@ type ChangeMode = 'basic' | 'cancel' | 'move' | 'replace' | 'swap' | 'permanent'
 type ChangeScope = 'basic' | 'single' | 'permanent'
 const dayLabel: Record<DayOfWeek, string> = { 1: '週一', 2: '週二', 3: '週三', 4: '週四', 5: '週五' }
 const statusLabel = { regular: '固定課程', cancelled: '單日取消', replaced: '單日替換', moved: '單日移動' } as const
+const levelLabel = { 'junior-high': '國中部', 'senior-high': '高中部', other: '其他' } as const
+const hasDuplicateLevel = (unit: AppDataV4['teachingUnits'][number], units: AppDataV4['teachingUnits']) => units.filter((item) => item.schoolId === unit.schoolId && item.schoolLevel === unit.schoolLevel).length > 1
+const unitLabel = (unit: AppDataV4['teachingUnits'][number], units: AppDataV4['teachingUnits']) => {
+  if (!hasDuplicateLevel(unit, units)) return unit.schoolLevel === 'other' ? unit.name : levelLabel[unit.schoolLevel]
+  return `${unit.schoolLevel === 'other' ? unit.name : levelLabel[unit.schoolLevel]}（重複設定，請先處理）`
+}
 
 export interface LessonEditorContext { projectId?: string; teachingUnitId?: string; day?: DayOfWeek; periodId?: number }
 interface Props {
@@ -34,7 +40,7 @@ function messageFor(error: unknown) {
   if (!(error instanceof Error)) return '無法儲存課程，請確認欄位內容。'
   if (error.message.startsWith('請先')) return error.message
   if (error.message.includes('occupied')) return '目標時間已有課程。請改用交換、勾選保留衝堂，或取消操作。'
-  if (error.message.includes('matching real-time')) return '跨校交換需要雙方任教單位都有完全相同起訖時間的節次。'
+  if (error.message.includes('matching real-time')) return '跨校交換需要雙方學制設定都有完全相同起訖時間的節次。'
   if (error.message.includes('already has an override')) return '這堂課在指定日期已有異動，請先處理既有異動。'
   if (error.message.includes('does not occur') || error.message.includes('outside')) return '指定日期沒有這堂課，請選擇實際上課日期。'
   if (error.message.includes('conflict')) return '異動會造成課程版本衝突，請調整日期、節次或輪週。'
@@ -50,8 +56,11 @@ function messageFor(error: unknown) {
 export function LessonEditor({ data, setData, timetableId: selectedTimetableId, lessonId, occurrenceDate, dragIntent, context, onOpenSettings, onClose, onSaved }: Props) {
   const lesson = lessonId ? data.recurringLessons.find((item) => item.id === lessonId) : undefined
   const initialProjectId = lesson?.projectId ?? context?.projectId ?? data.activeProjectId ?? data.projects.find((item) => !item.archivedAt)?.id ?? ''
-  const initialUnit = data.teachingUnits.find((item) => item.id === (lesson?.teachingUnitId ?? context?.teachingUnitId)) ?? data.teachingUnits.find((item) => item.projectId === initialProjectId)
-  const initialSchoolId = initialUnit?.schoolId ?? data.schools.find((item) => item.projectId === initialProjectId)?.id ?? ''
+  const requestedInitialUnit = data.teachingUnits.find((item) => item.id === (lesson?.teachingUnitId ?? context?.teachingUnitId))
+  const fallbackSchoolId = data.schools.find((item) => item.projectId === initialProjectId)?.id ?? ''
+  const fallbackInitialUnit = data.teachingUnits.find((item) => item.projectId === initialProjectId && item.schoolId === fallbackSchoolId && !hasDuplicateLevel(item, data.teachingUnits))
+  const initialUnit = requestedInitialUnit ?? fallbackInitialUnit
+  const initialSchoolId = initialUnit?.schoolId ?? fallbackSchoolId
   const [projectId, setProjectId] = useState(initialProjectId)
   const [timetableId, setTimetableId] = useState(() => selectedTimetableId
     ?? (data.timetables?.filter((item) => item.projectId === initialProjectId).length === 1
@@ -78,6 +87,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
   const projects = data.projects.filter((item) => !item.archivedAt)
   const schools = useMemo(() => data.schools.filter((item) => item.projectId === projectId), [data.schools, projectId])
   const units = useMemo(() => data.teachingUnits.filter((item) => item.projectId === projectId && item.schoolId === schoolId), [data.teachingUnits, projectId, schoolId])
+  const ambiguousLevels = [...new Set(units.filter((item) => hasDuplicateLevel(item, data.teachingUnits)).map((item) => levelLabel[item.schoolLevel]))]
   const unit = data.teachingUnits.find((item) => item.id === teachingUnitId)
   const availableSubjects = subjectsForLevel(data.subjects, unit?.schoolLevel)
   const selectedSubjectValid = Boolean(unit && availableSubjects.some((item) => item.id === subjectId))
@@ -109,7 +119,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
 
   const selectProject = (nextProjectId: string) => {
     const nextSchool = data.schools.find((item) => item.projectId === nextProjectId)
-    const nextUnit = data.teachingUnits.find((item) => item.projectId === nextProjectId && item.schoolId === nextSchool?.id)
+    const nextUnit = data.teachingUnits.find((item) => item.projectId === nextProjectId && item.schoolId === nextSchool?.id && !hasDuplicateLevel(item, data.teachingUnits))
     setProjectId(nextProjectId); setSchoolId(nextSchool?.id ?? ''); setTeachingUnitId(nextUnit?.id ?? '')
     const nextTimetables = data.timetables?.filter((item) => item.projectId === nextProjectId) ?? []
     setTimetableId(nextTimetables.length === 1 ? nextTimetables[0].id : undefined)
@@ -119,7 +129,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
     setPeriodId(0); setTargetPeriodId(0); setWeekPattern('every'); resetPreview()
   }
   const selectSchool = (nextSchoolId: string) => {
-    const nextUnit = data.teachingUnits.find((item) => item.projectId === projectId && item.schoolId === nextSchoolId)
+    const nextUnit = data.teachingUnits.find((item) => item.projectId === projectId && item.schoolId === nextSchoolId && !hasDuplicateLevel(item, data.teachingUnits))
     setSchoolId(nextSchoolId); setTeachingUnitId(nextUnit?.id ?? ''); setClassId('')
     if (!nextUnit || !data.subjects.some((item) => item.id === subjectId && subjectAppliesToLevel(item, nextUnit.schoolLevel))) setSubjectId('')
     setPeriodId(0); setTargetPeriodId(0); setWeekPattern('every'); resetPreview()
@@ -231,12 +241,13 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
     {needsContent && <>
       <label className="full">課表專案<select aria-label="課程專案" value={projectId} onChange={(event) => selectProject(event.target.value)} disabled={Boolean(lesson)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
       <label>學校<select aria-label="課程學校" value={schoolId} onChange={(event) => selectSchool(event.target.value)} disabled={mode === 'replace'}>{schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}</select></label>
-      <label>學制<select aria-label="課程學制" value={teachingUnitId} onChange={(event) => selectUnit(event.target.value)} disabled={mode === 'replace'}><option value="">請選擇學制</option>{units.map((item) => <option key={item.id} value={item.id}>{item.schoolLevel === 'junior-high' ? '國中部' : item.schoolLevel === 'senior-high' ? '高中部' : item.name}</option>)}</select></label>
+      <label>學制<select aria-label="課程學制" value={teachingUnitId} onChange={(event) => selectUnit(event.target.value)} disabled={mode === 'replace'}><option value="">請選擇學制</option>{units.map((item) => <option key={item.id} value={item.id} disabled={hasDuplicateLevel(item, data.teachingUnits) && item.id !== lesson?.teachingUnitId}>{unitLabel(item, data.teachingUnits)}</option>)}</select></label>
+      {ambiguousLevels.length > 0 && <p className="form-warning full" role="alert">同一學校有重複的{ambiguousLevels.join('、')}設定；不會自動選取或重新指派，請先在專案設定確認舊資料。</p>}
       {!unit ? <p className="lesson-setup-empty">請先選擇學校與學制，才能選擇或新增科目。</p> : <>{availableSubjects.length > 0 && <label>科目<select aria-label="課程科目" value={selectedSubjectValid ? subjectId : ''} onChange={(event) => { setSubjectId(event.target.value); resetPreview() }}><option value="">請選擇科目</option>{availableSubjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select></label>}{!selectedSubjectValid && subjectId && <p className="lesson-setup-empty">既有科目不適用目前學制；原課程仍保留，可修改其他欄位。若要更換科目，請選擇適用科目。</p>}{availableSubjects.length === 0 && <p className="lesson-setup-empty">目前學制尚無適用科目，可建立科目或前往專案設定。</p>}{availableSubjects.length === 0 && <div className="lesson-subject-create"><label>新科目<input aria-label="新科目名稱" value={newSubjectName} onChange={(event) => setNewSubjectName(event.target.value)} /></label><button type="button" onClick={addSubject}>建立科目</button>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}</>}
       <label>班級<select aria-label="課程班級" value={classId} onChange={(event) => { setClassId(event.target.value); resetPreview() }} disabled={!unit || classes.length === 0}><option value="">請選擇班級</option>{classes.map((item) => <option key={item.id} value={item.id}>{classDisplayName(item)}</option>)}</select></label>
       {mode !== 'replace' && <><label>星期<select aria-label="課程星期" value={day} onChange={(event) => { setDay(Number(event.target.value) as DayOfWeek); resetPreview() }}>{[1,2,3,4,5].map((value) => <option key={value} value={value}>週{'一二三四五'[value - 1]}</option>)}</select></label><label>節次<select aria-label="課程節次" value={periodId} onChange={(event) => { setPeriodId(Number(event.target.value)); resetPreview() }} disabled={!unit || periods.length === 0}><option value={0}>請選擇節次</option>{periods.map((period) => <option key={period.id} value={period.id}>{period.label}（{period.startTime}–{period.endTime}）</option>)}</select></label><label>輪週<select aria-label="課程輪週" value={weekPattern} onChange={(event) => { setWeekPattern(event.target.value as WeekPattern); resetPreview() }}><option value="every">每週</option>{unit?.weekCycle.enabled && <><option value="A">A 週</option><option value="B">B 週</option></>}</select></label></>}
       <label>教室<input value={room} onChange={(event) => { setRoom(event.target.value); resetPreview() }} placeholder="依班級預設" /></label>
-      {missingSetup && <div className="lesson-setup-empty full" role="status"><strong>尚未完成課程基本資料</strong><p>{!unit ? '所選學校尚未建立學制。' : classes.length === 0 ? '此學制尚未建立班級名單。' : '此學制尚未建立節次時間表。'}</p>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}
+      {missingSetup && <div className="lesson-setup-empty full" role="status"><strong>尚未完成課程基本資料</strong><p>{!unit ? ambiguousLevels.length > 0 ? '所選學校有重複學制設定，無法安全預選。' : '所選學校尚未建立學制。' : classes.length === 0 ? '此學制尚未建立班級名單。' : '此學制尚未建立節次時間表。'}</p>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}
     </>}
     {preview && <section className="lesson-change-preview full" role="status" aria-label="異動預覽"><header><strong>異動預覽・{preview.summary}</strong><span>尚未寫入</span></header>{preview.details.map((item) => <p key={item}>{item}</p>)}{preview.warnings.map((item) => <p className="warning" key={item}>{item}</p>)}<small>確認後才會寫入 AppData v4；取消可安全放棄此次預覽。</small></section>}
     {lesson && <details className="lesson-version-history full"><summary>課程版本歷史（{lessonVersions.length}）</summary><p>歷史版本僅供檢視，不可直接回寫。</p><ol>{lessonVersions.map((version) => { const versionUnit = data.teachingUnits.find((item) => item.id === version.teachingUnitId); const versionPeriod = versionUnit?.periods.find((item) => item.id === version.periodId); const versionClass = data.classes.find((item) => item.id === version.classId); return <li key={version.id} className={version.id === lesson.id ? 'current' : ''}><div><strong>{version.effectiveStart} — {version.effectiveEnd ?? '持續中'}</strong>{version.id === lesson.id && <em>目前選取</em>}</div><span>{data.subjects.find((item) => item.id === version.subjectId)?.name}・{versionClass ? classDisplayName(versionClass) : ''}</span><small>{dayLabel[version.day]}・{versionPeriod?.label}・{versionPeriod?.startTime}–{versionPeriod?.endTime}・{version.weekPattern === 'every' ? '每週' : `${version.weekPattern} 週`}</small></li> })}</ol></details>}

@@ -30,6 +30,79 @@ describe('App v4 runtime', () => {
   beforeEach(() => { vi.useFakeTimers(); removeAppKeys() })
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); removeAppKeys() })
 
+  it('Topbar 新增直接開啟新專案表單，課表面板才開啟選擇視窗，取消與 Escape 不寫入資料', () => {
+    const data = copyReadyData()
+    const raw = JSON.stringify(data)
+    localStorage.setItem(APP_DATA_V6_KEY, raw)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    expect(screen.getByRole('dialog', { name: '專案設定' })).toBeTruthy()
+    expect(screen.getByText('建立新專案')).toBeTruthy()
+    expect(screen.getByLabelText('專案名稱')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '專案設定' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    expect(screen.getByRole('dialog', { name: '新增' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /建立空白課表/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
+    expect(screen.getByRole('dialog', { name: '新增固定課程' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.getByRole('dialog', { name: '新增' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    act(() => vi.advanceTimersByTime(200))
+    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(raw)
+  })
+
+  it('Topbar 新專案表單沿用既有 Project 建立流程並建立必要關聯', () => {
+    const data = copyReadyData()
+    localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(data))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    fireEvent.change(screen.getByLabelText('專案名稱'), { target: { value: '下一學期' } })
+    fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '王老師' } })
+    fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
+    act(() => vi.advanceTimersByTime(200))
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!)
+    expect(stored.projects).toHaveLength(data.projects.length + 1)
+    expect(stored.schools).toHaveLength(data.schools.length + 1)
+    expect(stored.teachingUnits).toHaveLength(data.teachingUnits.length + 1)
+    expect(stored.timetables).toHaveLength(data.timetables.length + 1)
+    expect(stored.projects.at(-1)).toMatchObject({ name: '下一學期' })
+    expect(stored.timetables.at(-1)).toMatchObject({ teacherName: '王老師' })
+  })
+
+  it('待補教師不可由統一入口新增固定課程，但仍可建立新的空白課表', () => {
+    const data = migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(initialData)))
+    localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(data))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    expect((screen.getByRole('button', { name: /新增固定課程/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('目前課表的授課教師姓名尚待補齊。')).toBeTruthy()
+    expect((screen.getByRole('button', { name: /建立空白課表/ }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('同校同學制的既有設定保留個別 ID 與識別名稱，不會被合併或重新指派', () => {
+    const data = copyReadyData()
+    const sourceUnit = data.teachingUnits[0]
+    data.teachingUnits.push({ ...structuredClone(sourceUnit), id: 'same-level-unit', name: '高中第二組' })
+    const raw = JSON.stringify(data)
+    localStorage.setItem(APP_DATA_V6_KEY, raw)
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
+    const level = screen.getByLabelText('課程學制') as HTMLSelectElement
+    expect(level.value).toBe('')
+    expect([...level.options].filter((option) => option.value).map((option) => [option.value, option.text, option.disabled])).toEqual([
+      [sourceUnit.id, `${sourceUnit.name}（重複設定，請先處理）`, true],
+      ['same-level-unit', '高中第二組（重複設定，請先處理）', true],
+    ])
+    expect(screen.getByRole('alert').textContent).toContain('不會自動選取或重新指派')
+    act(() => vi.advanceTimersByTime(200))
+    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(raw)
+  })
+
   it('多課表載入時自動選取本專案課表，共用事件仍可安全新增', () => {
     const data = migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(initialData)))
     data.timetables.push({ id: 'teacher-b', projectId: data.projects[0].id, name: 'B 課表', teacherName: '林老師' })
@@ -60,11 +133,12 @@ describe('App v4 runtime', () => {
     const selector = screen.getByLabelText('教師課表') as HTMLSelectElement
     expect(selector.value).toBe(data.timetables[0].id)
     const addTeacher = (name: string, teacherName: string) => {
-      fireEvent.click(screen.getByRole('button', { name: '新增空白課表' }))
+      fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+      fireEvent.click(screen.getByRole('button', { name: /建立空白課表/ }))
       fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: name } })
       fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: teacherName } })
       fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
-      expect(screen.queryByRole('dialog', { name: '新增空白課表' })).toBeNull()
+      expect(screen.queryByRole('dialog', { name: '建立空白課表' })).toBeNull()
       return selector.value
     }
     const secondId = addTeacher('數學課表', '林老師')
@@ -79,6 +153,7 @@ describe('App v4 runtime', () => {
     act(() => vi.advanceTimersByTime(200))
     const saved = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!)
     expect(saved.projects).toEqual(data.projects)
+    expect(saved.schools).toEqual(data.schools)
     expect(saved.teachingUnits).toEqual(data.teachingUnits)
     expect(saved.recurringLessons).toEqual(data.recurringLessons)
     expect(saved.overrides).toEqual(data.overrides)
@@ -132,9 +207,9 @@ describe('App v4 runtime', () => {
     expect((screen.getByLabelText('教師課表') as HTMLSelectElement).value).toBe(source.timetables[0].id)
     fireEvent.change(screen.getByLabelText('教師課表'), { target: { value: 'teacher-b' } })
     expect(screen.getByText('林老師')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: '新增空白課表' })).toBeNull()
     expect(screen.queryByRole('button', { name: '編輯課表資訊' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '新增固定課程' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '新增' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '新增課程或課表' })).toBeNull()
   })
 
   it('切到新教師後 Topbar 新增與拖曳異動仍寫入該課表', () => {
@@ -144,7 +219,8 @@ describe('App v4 runtime', () => {
     localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(multi))
     render(<App />)
     fireEvent.change(screen.getByLabelText('教師課表'), { target: { value: 'teacher-b' } })
-    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
     fireEvent.click(screen.getByRole('button', { name: '儲存' }))
     act(() => vi.advanceTimersByTime(200))
     const afterLesson = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!)
@@ -178,7 +254,8 @@ describe('App v4 runtime', () => {
       if (key === APP_DATA_V6_KEY) throw new Error('quota')
       return original.call(this, key, value)
     })
-    fireEvent.click(screen.getByRole('button', { name: '新增空白課表' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: /建立空白課表/ }))
     fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '未儲存課表' } })
     fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '林老師' } })
     fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
@@ -192,7 +269,8 @@ describe('App v4 runtime', () => {
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V6_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '新增空白課表' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: /建立空白課表/ }))
     fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '本分頁課表' } })
     fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '林老師' } })
     fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
@@ -405,7 +483,7 @@ describe('App v4 runtime', () => {
 
   it('首次使用不自動建立範例，預覽範例也不污染正式資料', () => {
     render(<App />)
-    expect(screen.getByRole('button', { name: '建立空白課表' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '建立第一個課表專案' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '查看範例' }))
     expect(screen.getByText('唯讀範例')).toBeTruthy()
     act(() => vi.advanceTimersByTime(200))
@@ -421,7 +499,7 @@ describe('App v4 runtime', () => {
     localStorage.setItem(APP_DATA_V4_KEY, JSON.stringify(migrated))
     const oldV3 = localStorage.getItem(APP_DATA_V3_KEY)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '建立空白課表' }))
+    fireEvent.click(screen.getByRole('button', { name: '建立第一個課表專案' }))
     fireEvent.change(screen.getByLabelText('專案名稱'), { target: { value: '我的新課表' } })
     fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '陳老師' } })
     fireEvent.click(screen.getByRole('button', { name: '建立並開始' }))
@@ -465,7 +543,11 @@ describe('App v4 runtime', () => {
     const data = migrateV3ToV4(initialData)
     localStorage.setItem(APP_DATA_V4_KEY, JSON.stringify(data))
     const first = render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    fireEvent.click(screen.getByRole('button', { name: '編輯課表資訊' }))
+    fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '林老師' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存課表資訊' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
     fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '5' } })
     fireEvent.change(screen.getByLabelText('課程節次'), { target: { value: '8' } })
     fireEvent.change(screen.getByLabelText('課程輪週'), { target: { value: 'B' } })

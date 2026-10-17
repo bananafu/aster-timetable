@@ -15,6 +15,21 @@ function setup() {
 }
 
 describe('LessonEditor integrated experience', () => {
+  it('唯一的國中高中學制只顯示學制名稱，other 使用原自訂名稱', () => {
+    const data = migrateV4ToV5(setup())
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    data.teachingUnits[0].name = '不應顯示的舊名稱'
+    const otherSchool = { id: 'other-school', projectId: data.activeProjectId!, name: '實驗校', color: '#718B6C' }
+    data.schools.push(otherSchool)
+    data.teachingUnits.push({ ...structuredClone(data.teachingUnits[0]), id: 'other-unit', schoolId: otherSchool.id, schoolLevel: 'other', name: '雙語實驗課程' })
+    render(<LessonEditor data={data} setData={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const level = screen.getByLabelText('課程學制') as HTMLSelectElement
+    expect([...level.options].map((option) => option.text)).toContain('高中部')
+    expect([...level.options].map((option) => option.text)).not.toContain('高中部・不應顯示的舊名稱')
+    fireEvent.change(screen.getByLabelText('課程學校'), { target: { value: otherSchool.id } })
+    expect([...level.options].map((option) => option.text)).toContain('雙語實驗課程')
+  })
+
   it('學制切換後清除不適用科目，空狀態可建立目前學制科目', () => {
     const base = migrateV4ToV5(setup())
     base.teachingUnits[0].schoolLevel = 'senior-high'
