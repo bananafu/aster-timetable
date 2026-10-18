@@ -9,6 +9,7 @@ import { subjectAppliesToLevel, subjectsForLevel } from '../lib/subjects'
 import { addSubjectForLevel } from '../data/subjectsV5'
 import type { AppDataV4, DayOfWeek, WeekPattern } from '../types'
 import { Modal } from './Modal'
+import { SubjectCombobox } from './SubjectCombobox'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 type ChangeMode = 'basic' | 'cancel' | 'move' | 'replace' | 'swap' | 'permanent' | 'permanent-swap' | 'end'
@@ -67,7 +68,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
       ? data.timetables?.find((item) => item.projectId === initialProjectId)?.id : undefined))
   const [schoolId, setSchoolId] = useState(initialSchoolId)
   const [teachingUnitId, setTeachingUnitId] = useState(initialUnit?.id ?? '')
-  const [subjectId, setSubjectId] = useState(lesson?.subjectId ?? subjectsForLevel(data.subjects, initialUnit?.schoolLevel)[0]?.id ?? '')
+  const [subjectId, setSubjectId] = useState(lesson?.subjectId ?? '')
   const [classId, setClassId] = useState(lesson?.classId ?? data.classes.find((item) => item.teachingUnitId === initialUnit?.id)?.id ?? '')
   const [day, setDay] = useState<DayOfWeek>(lesson?.day ?? context?.day ?? 1)
   const [periodId, setPeriodId] = useState(lesson?.periodId ?? context?.periodId ?? initialUnit?.periods[0]?.id ?? 0)
@@ -81,6 +82,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
   const [allowConflict, setAllowConflict] = useState(false)
   const [editingOverrideId, setEditingOverrideId] = useState<string | null>(null)
   const [newSubjectName, setNewSubjectName] = useState('')
+  const [showSubjectCreate, setShowSubjectCreate] = useState(false)
   const [error, setError] = useState('')
   const [preview, setPreview] = useState<{ data: AppDataV4; source: AppDataV4; summary: string; details: string[]; warnings: string[] } | null>(null)
 
@@ -195,6 +197,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
       if (lesson && (lesson.projectId !== projectId || (data.schemaVersion === 6 && lesson.timetableId !== timetableId))) throw new Error('Lesson does not belong to the selected timetable')
       if (!lesson || mode === 'basic') {
         if (!unit) throw new Error('請先選擇學校中的學制。')
+        if (!selectedSubjectValid && !preservedLegacySubject) throw new Error('請先選擇有效科目。')
         if (!classes.length || !classId) throw new Error('請先前往專案設定建立班級名單，再選擇班級。')
         if (!periods.length || !periodId) throw new Error('目前學制尚未設定可用節次，請先前往專案設定。')
         const next = lesson ? updateLessonV4(data, lesson.id, draft) : addLessonV4(data, draft, uid)
@@ -219,7 +222,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
     try {
       const id = uid()
       const next = addSubjectForLevel(data, newSubjectName, unit.schoolLevel, id)
-      setData(next); setSubjectId(id); setNewSubjectName(''); setError('')
+      setData(next); setSubjectId(id); setNewSubjectName(''); setShowSubjectCreate(false); setError('')
     } catch (reason) { setError(reason instanceof Error ? reason.message : '科目無法新增。') }
   }
   const needsContent = !historicalVersion && (mode === 'basic' || mode === 'replace' || mode === 'permanent')
@@ -243,7 +246,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
       <label>學校<select aria-label="課程學校" value={schoolId} onChange={(event) => selectSchool(event.target.value)} disabled={mode === 'replace'}>{schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}</select></label>
       <label>學制<select aria-label="課程學制" value={teachingUnitId} onChange={(event) => selectUnit(event.target.value)} disabled={mode === 'replace'}><option value="">請選擇學制</option>{units.map((item) => <option key={item.id} value={item.id} disabled={hasDuplicateLevel(item, data.teachingUnits) && item.id !== lesson?.teachingUnitId}>{unitLabel(item, data.teachingUnits)}</option>)}</select></label>
       {ambiguousLevels.length > 0 && <p className="form-warning full" role="alert">同一學校有重複的{ambiguousLevels.join('、')}設定；不會自動選取或重新指派，請先在專案設定確認舊資料。</p>}
-      {!unit ? <p className="lesson-setup-empty">請先選擇學校與學制，才能選擇或新增科目。</p> : <>{availableSubjects.length > 0 && <label>科目<select aria-label="課程科目" value={selectedSubjectValid ? subjectId : ''} onChange={(event) => { setSubjectId(event.target.value); resetPreview() }}><option value="">請選擇科目</option>{availableSubjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select></label>}{!selectedSubjectValid && subjectId && <p className="lesson-setup-empty">既有科目不適用目前學制；原課程仍保留，可修改其他欄位。若要更換科目，請選擇適用科目。</p>}{availableSubjects.length === 0 && <p className="lesson-setup-empty">目前學制尚無適用科目，可建立科目或前往專案設定。</p>}{availableSubjects.length === 0 && <div className="lesson-subject-create"><label>新科目<input aria-label="新科目名稱" value={newSubjectName} onChange={(event) => setNewSubjectName(event.target.value)} /></label><button type="button" onClick={addSubject}>建立科目</button>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}</>}
+      {!unit ? <p className="lesson-setup-empty">請先選擇學校與學制，才能選擇或新增科目。</p> : <><SubjectCombobox subjects={data.subjects} schoolLevel={unit.schoolLevel} value={subjectId} onChange={(nextSubjectId) => { setSubjectId(nextSubjectId); resetPreview() }} onCreateRequest={() => setShowSubjectCreate(true)} />{!selectedSubjectValid && subjectId && <p className="lesson-setup-empty">既有科目不適用目前學制；原課程仍保留，可修改其他欄位。若要更換科目，請選擇適用科目。</p>}{availableSubjects.length === 0 && <p className="lesson-setup-empty">目前學制尚無適用科目，可建立科目或前往專案設定。</p>}{showSubjectCreate && <div className="lesson-subject-create"><label>新科目<input aria-label="新科目名稱" value={newSubjectName} onChange={(event) => setNewSubjectName(event.target.value)} /></label><button type="button" onClick={addSubject}>建立科目</button>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}</>}
       <label>班級<select aria-label="課程班級" value={classId} onChange={(event) => { setClassId(event.target.value); resetPreview() }} disabled={!unit || classes.length === 0}><option value="">請選擇班級</option>{classes.map((item) => <option key={item.id} value={item.id}>{classDisplayName(item)}</option>)}</select></label>
       {mode !== 'replace' && <><label>星期<select aria-label="課程星期" value={day} onChange={(event) => { setDay(Number(event.target.value) as DayOfWeek); resetPreview() }}>{[1,2,3,4,5].map((value) => <option key={value} value={value}>週{'一二三四五'[value - 1]}</option>)}</select></label><label>節次<select aria-label="課程節次" value={periodId} onChange={(event) => { setPeriodId(Number(event.target.value)); resetPreview() }} disabled={!unit || periods.length === 0}><option value={0}>請選擇節次</option>{periods.map((period) => <option key={period.id} value={period.id}>{period.label}（{period.startTime}–{period.endTime}）</option>)}</select></label><label>輪週<select aria-label="課程輪週" value={weekPattern} onChange={(event) => { setWeekPattern(event.target.value as WeekPattern); resetPreview() }}><option value="every">每週</option>{unit?.weekCycle.enabled && <><option value="A">A 週</option><option value="B">B 週</option></>}</select></label></>}
       <label>教室<input value={room} onChange={(event) => { setRoom(event.target.value); resetPreview() }} placeholder="依班級預設" /></label>

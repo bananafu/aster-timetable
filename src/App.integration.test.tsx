@@ -21,6 +21,14 @@ function removeAppKeys() {
   localStorage.removeItem(APP_DATA_V1_KEY)
 }
 
+function chooseLessonSubject(name = '國文') {
+  fireEvent.focus(screen.getByLabelText('課程科目'))
+  const option = [...screen.getByRole('listbox', { name: '可選科目' }).querySelectorAll<HTMLElement>('[role=option]')]
+    .find((item) => item.textContent?.includes(name))
+  if (!option) throw new Error(`Missing subject option: ${name}`)
+  fireEvent.click(option)
+}
+
 function copyReadyData() {
   const data = migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData))))
   return updateTimetable(data, data.timetables[0].id, { name: '原課表', teacherName: '林老師' })
@@ -221,6 +229,7 @@ describe('App v4 runtime', () => {
     fireEvent.change(screen.getByLabelText('教師課表'), { target: { value: 'teacher-b' } })
     fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
     fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
+    chooseLessonSubject()
     fireEvent.click(screen.getByRole('button', { name: '儲存' }))
     act(() => vi.advanceTimersByTime(200))
     const afterLesson = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!)
@@ -548,6 +557,7 @@ describe('App v4 runtime', () => {
     fireEvent.click(screen.getByRole('button', { name: '儲存課表資訊' }))
     fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
     fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
+    chooseLessonSubject()
     fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '5' } })
     fireEvent.change(screen.getByLabelText('課程節次'), { target: { value: '8' } })
     fireEvent.change(screen.getByLabelText('課程輪週'), { target: { value: 'B' } })

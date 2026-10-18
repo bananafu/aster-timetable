@@ -370,7 +370,7 @@ export default function App() {
       </main>
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
-      {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} initialPage={projectLifecycleInitialPage} onClose={() => { setModal(null); setProjectLifecycleInitialPage('root') }} onViewArchived={viewArchivedProject} />}</>}
+      {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} initialPage={projectLifecycleInitialPage} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onClose={() => { setModal(null); setProjectLifecycleInitialPage('root') }} onViewArchived={viewArchivedProject} />}</>}
       {addChoiceOpen && <AddChoiceDialog canAddLesson={canAddLesson} addLessonReason={addLessonUnavailableReason} canCreateTimetable={canCreateTimetable} createTimetableReason={createTimetableUnavailableReason} onAddLesson={() => {
         if (!canAddLesson) return
         setAddChoiceOpen(false)

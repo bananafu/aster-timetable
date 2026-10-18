@@ -38,11 +38,13 @@ describe('LessonEditor integrated experience', () => {
     base.teachingUnits.push(unit)
     const setData = vi.fn()
     render(<LessonEditor data={base} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />)
-    expect((screen.getByLabelText('課程科目') as HTMLSelectElement).value).toBe(base.subjects[0].id)
+    expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('')
     fireEvent.change(screen.getByLabelText('課程學制'), { target: { value: 'unit-j' } })
-    expect(screen.queryByLabelText('課程科目')).toBeNull()
+    expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('')
     expect(screen.getByText('目前學制尚無適用科目，可建立科目或前往專案設定。')).toBeTruthy()
     expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.focus(screen.getByLabelText('課程科目'))
+    fireEvent.click(screen.getByRole('button', { name: '新增自訂科目' }))
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '國中科目' } })
     fireEvent.click(screen.getByRole('button', { name: '建立科目' }))
     expect(setData.mock.calls[0][0].subjects.at(-1)).toMatchObject({ name: '國中科目', applicableSchoolLevels: ['junior-high'] })
@@ -51,11 +53,67 @@ describe('LessonEditor integrated experience', () => {
   it('既有不適用科目仍顯示課程脈絡，且不會靜默改選', () => {
     const data = migrateV4ToV5(setup())
     data.subjects.find((item) => item.id === 'chinese')!.applicableSchoolLevels = ['junior-high']
-    render(<LessonEditor data={data} setData={vi.fn()} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
     expect(screen.getByLabelText('目前課程資訊').textContent).toContain('國文')
     expect(screen.getByText('既有科目不適用目前學制；原課程仍保留，可修改其他欄位。若要更換科目，請選擇適用科目。')).toBeTruthy()
-    expect((screen.getByLabelText('課程科目') as HTMLSelectElement).value).toBe('')
+    expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('國文')
     expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '保留原科目' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+    expect((setData.mock.calls[0][0] as typeof data).recurringLessons.find((item) => item.id === 'c1'))
+      .toMatchObject({ subjectId: 'chinese', room: '保留原科目' })
+  })
+
+  it('新增課程科目初始為空，選取後以既有 Subject ID 儲存', () => {
+    const data = setup()
+    const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const subject = screen.getByLabelText('課程科目') as HTMLInputElement
+    expect(subject.value).toBe('')
+    expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.focus(subject)
+    fireEvent.click(screen.getByText('歷史').closest('[role=option]')!)
+    fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText('課程節次'), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+
+    const result = setData.mock.calls[0][0] as ReturnType<typeof setup>
+    expect(result.recurringLessons.at(-1)?.subjectId).toBe('history')
+  })
+
+  it('新增自訂科目失敗時保留已選科目與其他課程欄位', () => {
+    const data = setup()
+    const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const subject = screen.getByLabelText('課程科目') as HTMLInputElement
+    fireEvent.focus(subject)
+    fireEvent.click(screen.getByText('歷史').closest('[role=option]')!)
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '專科教室' } })
+
+    fireEvent.click(subject)
+    fireEvent.click(screen.getByRole('button', { name: '新增自訂科目' }))
+    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '國文' } })
+    fireEvent.click(screen.getByRole('button', { name: '建立科目' }))
+
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('科目「國文」已存在')
+    expect(subject.value).toBe('歷史')
+    expect((screen.getByPlaceholderText('依班級預設') as HTMLInputElement).value).toBe('專科教室')
+  })
+
+  it('有既有科目時仍可透過次要入口安全建立自訂科目', () => {
+    const data = setup()
+    const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.focus(screen.getByLabelText('課程科目'))
+    fireEvent.click(screen.getByRole('button', { name: '新增自訂科目' }))
+    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '閱讀策略' } })
+    fireEvent.click(screen.getByRole('button', { name: '建立科目' }))
+    expect(setData.mock.calls[0][0].subjects.at(-1)).toMatchObject({
+      name: '閱讀策略', shortName: '閱讀', applicableSchoolLevels: [data.teachingUnits[0].schoolLevel],
+    })
   })
 
   it('未選學制時不顯示全域科目選單或新增入口', () => {
@@ -65,6 +123,27 @@ describe('LessonEditor integrated experience', () => {
     expect(screen.getByText('請先選擇學校與學制，才能選擇或新增科目。')).toBeTruthy()
     expect(screen.queryByLabelText('課程科目')).toBeNull()
     expect(screen.queryByRole('button', { name: '建立科目' })).toBeNull()
+  })
+
+  it('切換學制時保留仍適用的舊版科目，並清除不適用科目', () => {
+    const data = setup()
+    const firstUnit = data.teachingUnits[0]
+    firstUnit.schoolLevel = 'senior-high'
+    data.teachingUnits.push({ ...structuredClone(firstUnit), id: 'junior-unit', schoolLevel: 'junior-high' })
+    data.subjects.push({ id: 'senior-only', name: '高中限定', shortName: '高限', color: '#123456', applicableSchoolLevels: ['senior-high'] })
+    render(<LessonEditor data={data} setData={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const input = screen.getByLabelText('課程科目') as HTMLInputElement
+
+    fireEvent.focus(input)
+    fireEvent.click(screen.getByText('歷史').closest('[role=option]')!)
+    fireEvent.change(screen.getByLabelText('課程學制'), { target: { value: 'junior-unit' } })
+    expect(input.value).toBe('歷史')
+
+    fireEvent.change(screen.getByLabelText('課程學制'), { target: { value: firstUnit.id } })
+    fireEvent.click(input)
+    fireEvent.click(screen.getByText('高中限定').closest('[role=option]')!)
+    fireEvent.change(screen.getByLabelText('課程學制'), { target: { value: 'junior-unit' } })
+    expect(input.value).toBe('')
   })
   it('顯示點擊日期的完整課程脈絡與 A/B 狀態', () => {
     const data = setup()
@@ -119,6 +198,18 @@ describe('LessonEditor integrated experience', () => {
     expect(screen.getByRole('button', { name: '關閉' })).toBeTruthy()
   })
 
+  it('資料層仍阻止封存 Project 的課程寫入', () => {
+    const data = setup()
+    data.projects[0].archivedAt = '2026-10-01T00:00:00.000Z'
+    data.activeProjectId = null
+    const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '不可寫入' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('封存專案為唯讀')
+  })
+
   it('Escape 可安全取消編輯器且不寫入', () => {
     const data = setup()
     const setData = vi.fn()
@@ -127,6 +218,19 @@ describe('LessonEditor integrated experience', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(setData).not.toHaveBeenCalled()
+  })
+
+  it('科目選單開啟時 Escape 只關閉選單，不會連帶關閉編輯器', () => {
+    const onClose = vi.fn()
+    render(<LessonEditor data={setup()} setData={vi.fn()} onClose={onClose} onSaved={vi.fn()} />)
+    const subject = screen.getByLabelText('課程科目')
+    fireEvent.focus(subject)
+    expect(subject.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.keyDown(subject, { key: 'Escape' })
+    expect(subject.getAttribute('aria-expanded')).toBe('false')
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 
   it('顯示並預覽撤銷現有移動，確認後原子移除 override', () => {
@@ -203,6 +307,9 @@ describe('LessonEditor integrated experience', () => {
     expect((screen.getByLabelText('課程節次') as HTMLSelectElement).value).toBe('0')
     expect(screen.getByRole('option', { name: '709' })).toBeTruthy()
     expect(screen.queryByRole('option', { name: '二年 1 班' })).toBeNull()
+    const subjectInput = screen.getByLabelText('課程科目') as HTMLInputElement
+    fireEvent.focus(subjectInput)
+    fireEvent.click(screen.getByText('歷史').closest('[role=option]')!)
     fireEvent.change(screen.getByLabelText('課程班級'), { target: { value: 'class-709' } })
     fireEvent.change(screen.getByLabelText('課程節次'), { target: { value: '1' } })
 
@@ -210,6 +317,7 @@ describe('LessonEditor integrated experience', () => {
     expect((screen.getByLabelText('課程學制') as HTMLSelectElement).value).toBe('school-2-senior')
     expect((screen.getByLabelText('課程班級') as HTMLSelectElement).value).toBe('')
     expect((screen.getByLabelText('課程節次') as HTMLSelectElement).value).toBe('0')
+    expect(subjectInput.value).toBe('歷史')
     expect(screen.getByRole('option', { name: '103' })).toBeTruthy()
     expect(screen.queryByRole('option', { name: '709' })).toBeNull()
   })

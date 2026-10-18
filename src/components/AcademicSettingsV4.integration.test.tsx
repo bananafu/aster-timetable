@@ -9,6 +9,60 @@ import { AcademicSettingsV4 } from './AcademicSettingsV4'
 afterEach(cleanup)
 
 describe('AcademicSettingsV4 class roster', () => {
+  it('以 School.color 顯示所有學校卡片與各自學制日期，且管理頁不再顯示頂部選擇器', () => {
+    const data = migrateV3ToV4(structuredClone(initialData))
+    const setData = vi.fn()
+    const originalSchool = data.schools[0]
+    const originalUnit = data.teachingUnits[0]
+    data.schools.push({ ...originalSchool, id: 'second-school', name: '第二學校', color: '#345678' })
+    data.teachingUnits.push({ ...originalUnit, id: 'second-unit', schoolId: 'second-school', name: '國中部', schoolLevel: 'junior-high', startDate: '2027-02-01', endDate: '2027-06-30' })
+
+    render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+
+    expect(screen.queryByLabelText('學校')).toBeNull()
+    expect(screen.queryByLabelText('目前學制')).toBeNull()
+    expect((screen.getByLabelText(`${originalSchool.name}學校識別色`) as HTMLInputElement).value).toBe(originalSchool.color.toLowerCase())
+    expect((screen.getByTestId('school-card-second-school') as HTMLElement).style.borderLeftColor).toBe('rgb(52, 86, 120)')
+    expect((screen.getByLabelText('second-unit起始日') as HTMLInputElement).value).toBe('2027-02-01')
+    expect((screen.getByLabelText('second-unit結束日') as HTMLInputElement).value).toBe('2027-06-30')
+    fireEvent.change(screen.getByLabelText('第二學校學校名稱'), { target: { value: '第二學校（更新）' } })
+    fireEvent.change(screen.getByLabelText('第二學校學校識別色'), { target: { value: '#456789' } })
+    fireEvent.click(screen.getAllByRole('button', { name: '儲存學校' })[1])
+    expect(setData.mock.calls[0][0].schools.find((school: typeof originalSchool) => school.id === 'second-school')).toMatchObject({ name: '第二學校（更新）', color: '#456789' })
+  })
+
+  it('從學校卡片更新指定學制日期與 A/B 設定，並原樣保留節次與 ID', () => {
+    const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
+    const unit = data.teachingUnits[0]
+    const originalPeriods = structuredClone(unit.periods)
+    render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+
+    fireEvent.change(screen.getByLabelText(`${unit.id}起始日`), { target: { value: '2026-01-01' } })
+    fireEvent.change(screen.getByLabelText(`${unit.id}結束日`), { target: { value: '2027-12-31' } })
+    fireEvent.change(screen.getByLabelText(`${unit.id}基準日期`), { target: { value: '2026-01-05' } })
+    fireEvent.change(screen.getByLabelText(`${unit.id}基準週`), { target: { value: 'B' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存學制設定' }))
+
+    const updated = setData.mock.calls[0][0].teachingUnits.find((item: typeof unit) => item.id === unit.id)
+    expect(updated).toMatchObject({ id: unit.id, startDate: '2026-01-01', endDate: '2027-12-31', weekCycle: { anchorDate: '2026-01-05', anchorPattern: 'B' } })
+    expect(updated.periods).toEqual(originalPeriods)
+  })
+
+  it('逐筆顯示舊資料中的重複學制與 ID，不自動選取或寫入', () => {
+    const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
+    const unit = data.teachingUnits[0]
+    data.teachingUnits.push({ ...unit, id: 'duplicate-unit', name: `${unit.name}舊設定` })
+
+    render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+
+    expect(screen.getByTestId(`teaching-unit-${unit.id}`)).toBeTruthy()
+    expect(screen.getByTestId('teaching-unit-duplicate-unit')).toBeTruthy()
+    expect(screen.getByText('TeachingUnit ID duplicate-unit')).toBeTruthy()
+    expect(screen.getAllByText('重複學制資料')).toHaveLength(2)
+    expect((screen.getAllByRole('button', { name: '儲存學制設定' })[0] as HTMLButtonElement).disabled).toBe(true)
+    expect(setData).not.toHaveBeenCalled()
+  })
+
   it('新增國中高中學制不要求識別名稱，並使用一致的預設名稱', () => {
     const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
     data.teachingUnits[0].schoolLevel = 'senior-high'
@@ -110,6 +164,25 @@ describe('AcademicSettingsV4 class roster', () => {
     expect(end.value).toBe('10:00')
   })
 
+  it('課堂時間表只有頂部一組選擇器，切換後依正確 TeachingUnit ID 儲存節次', () => {
+    const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
+    const firstUnit = data.teachingUnits[0]
+    const secondUnit = { ...firstUnit, id: 'second-unit', name: '國中部', schoolLevel: 'junior-high' as const, periods: firstUnit.periods.map((period) => ({ ...period })) }
+    data.teachingUnits.push(secondUnit)
+    render(<AcademicSettingsV4 data={data} setData={setData} page="periods" />)
+
+    expect(screen.getAllByLabelText('目前學制')).toHaveLength(1)
+    expect(screen.queryByText('起始日')).toBeNull()
+    expect(screen.queryByText('啟用 A/B 週')).toBeNull()
+    fireEvent.change(screen.getByLabelText('目前學制'), { target: { value: secondUnit.id } })
+    fireEvent.change(screen.getAllByLabelText(`${secondUnit.name}開始時間`)[0], { target: { value: '08:15' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存課堂時間' }))
+
+    const result = setData.mock.calls[0][0]
+    expect(result.teachingUnits.find((item: typeof firstUnit) => item.id === firstUnit.id).periods).toEqual(firstUnit.periods)
+    expect(result.teachingUnits.find((item: typeof firstUnit) => item.id === secondUnit.id).periods[0].startTime).toBe('08:15')
+  })
+
   it('既有節次不假定為預設時長，開始時間造成無效範圍時保留結束時間並阻止儲存', () => {
     const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
     const originalEnd = data.teachingUnits[0].periods[0].endTime
@@ -117,7 +190,7 @@ describe('AcademicSettingsV4 class roster', () => {
     fireEvent.change(screen.getAllByLabelText(`${data.teachingUnits[0].name}開始時間`)[0], { target: { value: '10:00' } })
     expect((screen.getAllByLabelText(`${data.teachingUnits[0].name}結束時間`)[0] as HTMLSelectElement).value).toBe(originalEnd)
     expect(screen.getByText('結束時間必須晚於開始時間，請修正後再儲存。')).toBeTruthy()
-    expect((screen.getByRole('button', { name: '儲存學制設定' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '儲存課堂時間' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('保留既有非 5 分鐘時間並顯示修正警告，不會在載入時寫入', () => {
@@ -129,7 +202,7 @@ describe('AcademicSettingsV4 class roster', () => {
     expect(setData).not.toHaveBeenCalled()
     fireEvent.change(screen.getAllByLabelText(`${data.teachingUnits[0].name}開始時間`)[0], { target: { value: '08:10' } })
     fireEvent.change(screen.getAllByLabelText(`${data.teachingUnits[0].name}結束時間`)[0], { target: { value: '09:00' } })
-    fireEvent.click(screen.getByRole('button', { name: '儲存學制設定' }))
+    fireEvent.click(screen.getByRole('button', { name: '儲存課堂時間' }))
     expect(setData).toHaveBeenCalledOnce()
     expect(setData.mock.calls[0][0].teachingUnits[0].periods[0]).toMatchObject({ id: data.teachingUnits[0].periods[0].id, startTime: '08:10', endTime: '09:00' })
   })

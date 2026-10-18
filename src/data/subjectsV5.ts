@@ -1,5 +1,6 @@
 import { SCHOOL_LEVELS, type AppDataV4, type SchoolLevel, type Subject } from '../types'
 import { subjectsForLevel } from '../lib/subjects'
+import { normalizeSubjectText } from '../lib/subjectSearch'
 import { isSafeAppDataV4Update } from './validators/v4'
 import { isSafeAppDataV5Update } from './validators/v5'
 import { isSafeAppDataV6Update } from './validators/v6'
@@ -37,7 +38,7 @@ export class SubjectManagementError extends Error {
 }
 
 const fail = (message: string): never => { throw new SubjectManagementError('invalid', message) }
-const nameKey = (value: string) => value.trim().normalize('NFC').toLocaleLowerCase('zh-TW')
+const nameKey = normalizeSubjectText
 
 function normalizeDraft(draft: SubjectDraft): SubjectDraft {
   const name = draft.name.trim().normalize('NFC')
