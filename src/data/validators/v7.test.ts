@@ -17,6 +17,33 @@ const oneOff = (data: AppDataV7): OneOffLesson => ({
 const withOneOff = () => { const data = base(); data.oneOffLessons.push(oneOff(data)); return data }
 
 describe('AppData v7 one-off validation', () => {
+  it('allows a v7 project with no timetable and still rejects each orphaned lesson type', () => {
+    const data = base()
+    const empty = { ...data, timetables: [], recurringLessons: [], overrides: [], oneOffLessons: [] }
+    expect(isCompatibleAppDataV7(empty)).toBe(true)
+    expect(isSafeAppDataV7Update(data, empty)).toBe(true)
+    expect(isCompatibleAppDataV7({ ...empty, recurringLessons: data.recurringLessons })).toBe(false)
+    const lesson = data.recurringLessons[0]
+    const override = { id: 'orphan-override', projectId: lesson.projectId, timetableId: lesson.timetableId,
+      teachingUnitId: lesson.teachingUnitId, date: '2026-09-07', periodId: lesson.periodId,
+      action: 'cancel' as const, originalLessonId: lesson.id }
+    expect(isCompatibleAppDataV7({ ...empty, overrides: [override] })).toBe(false)
+    expect(isCompatibleAppDataV7({ ...empty, oneOffLessons: [oneOff(data)] })).toBe(false)
+  })
+
+  it('permits an empty project beside a normal project without weakening timetable scope', () => {
+    const data = base()
+    const secondProject = { ...data.projects[0], id: 'empty-project', name: '空專案' }
+    const mixed = { ...data, projects: [...data.projects, secondProject] }
+    expect(isCompatibleAppDataV7(mixed)).toBe(true)
+    expect(isCompatibleAppDataV7({ ...mixed, recurringLessons: [
+      ...mixed.recurringLessons, { ...mixed.recurringLessons[0], id: 'cross-project-lesson', seriesId: 'cross-project-lesson', projectId: secondProject.id },
+    ] })).toBe(false)
+    expect(isCompatibleAppDataV7({ ...mixed, timetables: [
+      ...mixed.timetables, { ...mixed.timetables[0], id: 'invalid-owner', projectId: 'missing-project' },
+    ] })).toBe(false)
+  })
+
   it('requires the v7 collection even when no one-off lessons exist', () => {
     const data = base()
     expect(isCompatibleAppDataV7(data)).toBe(true)

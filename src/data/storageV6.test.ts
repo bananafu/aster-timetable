@@ -66,6 +66,7 @@ describe('AppData v6 data foundation', () => {
     const v6 = ready()
     expect(isCompatibleAppDataV6(v6)).toBe(true)
     expect(isCompatibleAppDataV6({ ...v6, timetables: [] })).toBe(false)
+    expect(isCompatibleAppDataV6({ ...v6, timetables: [], recurringLessons: [], overrides: [] })).toBe(false)
     expect(isCompatibleAppDataV6({ ...v6, timetables: [...v6.timetables, { ...v6.timetables[0] }] })).toBe(false)
     expect(isCompatibleAppDataV6({ ...v6, recurringLessons: [{ ...v6.recurringLessons[0], timetableId: 'missing' }, ...v6.recurringLessons.slice(1)] })).toBe(false)
     expect(isCompatibleAppDataV6({ ...v6, timetables: [{ ...v6.timetables[0], projectId: 'missing' }] })).toBe(false)

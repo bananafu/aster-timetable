@@ -18,6 +18,18 @@ const storage = (values: Map<string, string>) => ({
 })
 
 describe('v6 to v7 migration and storage', () => {
+  it('persists and reloads a valid v7 empty project without recreating a timetable', () => {
+    const migrated = migrateV6ToV7(source())
+    const empty = { ...migrated, timetables: [], recurringLessons: [], overrides: [], oneOffLessons: [] }
+    const values = new Map<string, string>()
+    persistAppDataV7(storage(values), empty)
+    const result = loadAppDataV7(storage(values), createInitialAppDataV7())
+    expect(result).toMatchObject({ status: 'saved', source: 'v7', shouldPersist: false })
+    expect(result.value).toEqual(empty)
+    expect(result.value.projects).toEqual(migrated.projects)
+    expect(result.value.timetables).toEqual([])
+  })
+
   it('preserves all v6 entities and IDs, initializes an empty collection deterministically', () => {
     const v6 = source()
     const snapshot = structuredClone(v6)

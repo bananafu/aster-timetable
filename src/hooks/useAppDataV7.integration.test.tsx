@@ -21,6 +21,7 @@ function Harness() {
     <output data-testid="source">{controls.conflictSource ?? ''}</output>
     <output data-testid="name">{data.projects[0]?.name}</output>
     <output data-testid="one-off-count">{data.oneOffLessons?.length ?? 0}</output>
+    <output data-testid="timetable-count">{data.timetables?.length ?? 0}</output>
     <output data-testid="pending">{String(persistence.pending)}</output>
     <output data-testid="revision">{persistence.revision}</output>
     <button onClick={() => setData((current) => ({ ...current, projects: current.projects.map((project) => ({ ...project, name: '本頁變更' })) }))}>rename</button>
@@ -42,6 +43,21 @@ function Harness() {
 describe('v7 runtime and older-tab protection', () => {
   beforeEach(() => { vi.useFakeTimers(); localStorage.clear() })
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); localStorage.clear() })
+
+  it('loads an existing v7 empty project without creating a timetable on refresh', () => {
+    const migrated = migrateV6ToV7(source())
+    const empty = { ...migrated, timetables: [], recurringLessons: [], overrides: [] }
+    const raw = JSON.stringify(empty)
+    localStorage.setItem(APP_DATA_V7_KEY, raw)
+    const view = render(<Harness />)
+    expect(screen.getByTestId('status').textContent).toBe('saved')
+    expect(screen.getByTestId('timetable-count').textContent).toBe('0')
+    view.unmount()
+    render(<Harness />)
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.getByTestId('timetable-count').textContent).toBe('0')
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+  })
 
   it('migrates v6 once without overwriting its key', () => {
     const rawV6 = JSON.stringify(source())

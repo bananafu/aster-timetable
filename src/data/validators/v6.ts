@@ -1,12 +1,12 @@
-import type { AppDataV4, AppDataV6 } from '../../types'
+import type { AppDataV4, AppDataV6, AppDataV7 } from '../../types'
 import { isCompatibleAppDataV5 } from './v5'
 
 const named = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
 
-export function isCompatibleAppDataV6(value: unknown): value is AppDataV6 {
+function hasCompatibleTimetableData(value: unknown, version: 6 | 7, requireTimetablePerProject: boolean): boolean {
   try {
-    if (!value || typeof value !== 'object' || !('schemaVersion' in value) || value.schemaVersion !== 6) return false
-    const data = value as AppDataV6
+    if (!value || typeof value !== 'object' || !('schemaVersion' in value) || value.schemaVersion !== version) return false
+    const data = value as AppDataV6 | AppDataV7
     if (!isCompatibleAppDataV5({ ...data, schemaVersion: 5 }) || !Array.isArray(data.timetables)) return false
     const projects = new Set(data.projects.map((item) => item.id))
     const timetableIds = new Set<string>()
@@ -18,7 +18,8 @@ export function isCompatibleAppDataV6(value: unknown): value is AppDataV6 {
       if (!pending && !confirmed) return false
       timetableIds.add(timetable.id)
     }
-    if (data.projects.some((project) => !data.timetables.some((timetable) => timetable.projectId === project.id))) return false
+    if (requireTimetablePerProject
+      && data.projects.some((project) => !data.timetables.some((timetable) => timetable.projectId === project.id))) return false
     const timetableById = new Map(data.timetables.map((item) => [item.id, item]))
     const lessons = new Map(data.recurringLessons.map((item) => [item.id, item]))
     const series = new Map<string, string>()
@@ -51,8 +52,13 @@ export function isCompatibleAppDataV6(value: unknown): value is AppDataV6 {
   }
 }
 
-export function isSafeAppDataV6Update(current: AppDataV4, next: AppDataV4): boolean {
-  if (!isCompatibleAppDataV6(next)) return false
+export const isCompatibleAppDataV6 = (value: unknown): value is AppDataV6 => hasCompatibleTimetableData(value, 6, true)
+
+/** Reuses all v6 timetable/reference checks, except v7 permits a project with no timetable. */
+export const hasCompatibleV7TimetableData = (value: unknown): boolean => hasCompatibleTimetableData(value, 7, false)
+
+function hasSafeTimetableUpdate(current: AppDataV4, next: AppDataV4, version: 6 | 7, requireTimetablePerProject: boolean): boolean {
+  if (!hasCompatibleTimetableData(next, version, requireTimetablePerProject)) return false
   return next.teachingUnits.every((unit) => unit.periods.every((period) => {
     const fiveMinute = (time: string) => Number(time.slice(3)) % 5 === 0
     if (fiveMinute(period.startTime) && fiveMinute(period.endTime)) return true
@@ -61,3 +67,6 @@ export function isSafeAppDataV6Update(current: AppDataV4, next: AppDataV4): bool
     return original !== undefined && original.startTime === period.startTime && original.endTime === period.endTime
   }))
 }
+
+export const isSafeAppDataV6Update = (current: AppDataV4, next: AppDataV4): boolean => hasSafeTimetableUpdate(current, next, 6, true)
+export const hasSafeV7TimetableUpdate = (current: AppDataV4, next: AppDataV4): boolean => hasSafeTimetableUpdate(current, next, 7, false)

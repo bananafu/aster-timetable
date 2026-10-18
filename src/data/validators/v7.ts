@@ -1,5 +1,5 @@
 import type { AppDataV4, AppDataV7, OneOffLesson } from '../../types'
-import { isCompatibleAppDataV6, isSafeAppDataV6Update } from './v6'
+import { hasCompatibleV7TimetableData, hasSafeV7TimetableUpdate } from './v6'
 
 type UnknownRecord = Record<string, unknown>
 const record = (value: unknown): value is UnknownRecord => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -34,7 +34,7 @@ function validOneOffShape(value: unknown): value is OneOffLesson {
 export function isCompatibleAppDataV7(value: unknown): value is AppDataV7 {
   try {
     if (!record(value) || value.schemaVersion !== 7 || !Array.isArray(value.oneOffLessons)
-      || !isCompatibleAppDataV6({ ...value, schemaVersion: 6 })) return false
+      || !hasCompatibleV7TimetableData(value)) return false
     const data = value as unknown as AppDataV7
     const projects = new Set(data.projects.map((item) => item.id))
     const timetables = new Map(data.timetables.map((item) => [item.id, item]))
@@ -72,7 +72,7 @@ export function isCompatibleAppDataV7(value: unknown): value is AppDataV7 {
 }
 
 export function isSafeAppDataV7Update(current: AppDataV4, next: AppDataV4): boolean {
-  if (!isCompatibleAppDataV7(next) || !isSafeAppDataV6Update(current, { ...next, schemaVersion: 6 })) return false
+  if (!isCompatibleAppDataV7(next) || !hasSafeV7TimetableUpdate(current, next)) return false
   if ((current.oneOffLessons ?? []).some((lesson) => {
     if (lesson.time.mode !== 'period') return false
     const retained = next.oneOffLessons.find((item) => item.id === lesson.id)
