@@ -7,8 +7,8 @@ interface Value { count: number }
 const validate = (value: unknown): value is Value => Boolean(value && typeof value === 'object' && typeof (value as {count?:unknown}).count === 'number')
 
 function Harness() {
-  const [value,setValue,status,controls]=useLocalStorage<Value>('hook-test',{count:0},{validate})
-  return <div><output data-testid="value">{value.count}</output><output data-testid="status">{status}</output><button onClick={()=>setValue((current)=>({count:current.count+1}))}>local</button><button onClick={controls.acceptExternal}>accept</button><button onClick={controls.keepLocal}>keep</button></div>
+  const [value,setValue,status,controls,persistence]=useLocalStorage<Value>('hook-test',{count:0},{validate})
+  return <div><output data-testid="value">{value.count}</output><output data-testid="status">{status}</output><output data-testid="persistence">{String(persistence.pending)}:{persistence.revision}</output><button onClick={()=>setValue((current)=>({count:current.count+1}))}>local</button><button onClick={controls.acceptExternal}>accept</button><button onClick={controls.keepLocal}>keep</button></div>
 }
 
 function externalUpdate(raw: string) {
@@ -38,6 +38,26 @@ describe('useLocalStorage multi-tab integration',()=>{
     expect(screen.getByTestId('status').textContent).toBe('conflict')
     expect(screen.getByTestId('value').textContent).toBe('2')
     expect(setItem).not.toHaveBeenCalled()
+    expect(localStorage.getItem('hook-test')).toBe('{"count":9}')
+  })
+
+  it('reports pending work until this tab completes the delayed write',()=>{
+    render(<Harness />)
+    expect(screen.getByTestId('persistence').textContent).toBe('false:0')
+    fireEvent.click(screen.getByText('local'))
+    expect(screen.getByTestId('persistence').textContent).toBe('true:0')
+    act(()=>vi.advanceTimersByTime(149))
+    expect(screen.getByTestId('persistence').textContent).toBe('true:0')
+    act(()=>vi.advanceTimersByTime(1))
+    expect(screen.getByTestId('persistence').textContent).toBe('false:1')
+  })
+
+  it('detects an external write before saving even if its storage event was missed',()=>{
+    render(<Harness />)
+    fireEvent.click(screen.getByText('local'))
+    localStorage.setItem('hook-test','{"count":9}')
+    act(()=>vi.advanceTimersByTime(500))
+    expect(screen.getByTestId('status').textContent).toBe('conflict')
     expect(localStorage.getItem('hook-test')).toBe('{"count":9}')
   })
 
