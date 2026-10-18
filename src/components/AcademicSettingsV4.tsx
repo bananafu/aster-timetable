@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import {
   addClass,
-  addSchool,
-  addTeachingUnit,
   removeClass,
   removeSchool,
   removeTeachingUnit,
@@ -19,6 +17,7 @@ import { addSubjectForLevel, getSubjectImpact, updateSubject } from '../data/sub
 import type { StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
 import { SubjectCatalogInstaller } from './SubjectCatalogInstaller'
 import { previewSubjectCatalogInstall, type CatalogSchoolLevel } from '../data/subjectCatalogInstall'
+import { addTeachingUnitToSchool, createSchoolWithTeachingUnit, type NewTeachingUnitInput } from '../data/schoolUnitCreation'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const levelLabel: Record<SchoolLevel, string> = { 'junior-high': '國中部', 'senior-high': '高中部', other: '其他' }
@@ -30,6 +29,7 @@ const unitLabel = (unit: TeachingUnit, units: TeachingUnit[]) => {
   return `${base}（重複設定 ${index}：${unit.name}）`
 }
 export type AcademicSettingsPage = 'schools' | 'periods' | 'classes' | 'subjects'
+type CreationSubmission = { kind: 'school' | 'unit'; schoolId: string; unitId: string; level: SchoolLevel; label: string; revision: number }
 
 const timeOptions = Array.from({ length: 24 * 12 }, (_, index) => `${String(Math.floor(index / 12)).padStart(2, '0')}:${String((index % 12) * 5).padStart(2, '0')}`)
 const isFiveMinuteTime = (value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value) && Number(value.slice(3)) % 5 === 0
@@ -48,8 +48,13 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
   const schools = data.schools.filter((item) => item.projectId === projectId)
   const units = data.teachingUnits.filter((item) => item.projectId === projectId)
   const classes = data.classes.filter((item) => item.projectId === projectId)
-  const [schoolDraft, setSchoolDraft] = useState({ name: '', color: '#718B6C' })
+  const [schoolDraft, setSchoolDraft] = useState({ name: '', color: '#718B6C', schoolLevel: 'senior-high' as SchoolLevel, unitName: '', startDate: '', endDate: '' })
   const [unitDraft, setUnitDraft] = useState({ schoolId: schools[0]?.id ?? '', name: '', schoolLevel: 'senior-high' as SchoolLevel, startDate: '', endDate: '' })
+  const [showSchoolForm, setShowSchoolForm] = useState(true)
+  const [showUnitForm, setShowUnitForm] = useState(true)
+  const [creationSubmission, setCreationSubmission] = useState<CreationSubmission | null>(null)
+  const [creationResult, setCreationResult] = useState('')
+  const creatingRef = useRef(false)
   const firstClassUnit = units[0]
   const [classDraft, setClassDraft] = useState<ClassDraft>({ grade: gradesForLevel(firstClassUnit?.schoolLevel ?? 'other')[0], classNumber: undefined, room: '', teachingUnitId: firstClassUnit?.id ?? '' })
   const [error, setError] = useState('')
@@ -62,6 +67,38 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
   const [selectedUnitId, setSelectedUnitId] = useState(selectedSchoolHasDuplicates ? '' : selectedSchoolUnits[0]?.id ?? '')
   const selectedUnit = selectedSchoolUnits.find((item) => item.id === selectedUnitId)
   const visibleSubjects = subjectsForLevel(data.subjects, selectedUnit?.schoolLevel)
+  const activeProject = data.projects.find((item) => item.id === projectId)
+  const editable = !readOnly && Boolean(activeProject && !activeProject.archivedAt)
+  const creationReady = editable && storageStatus === 'saved' && !storagePersistence.pending && !creationSubmission
+  useEffect(() => {
+    if (!creationSubmission) return
+    const fail = (message: string) => {
+      creatingRef.current = false
+      setCreationSubmission(null)
+      setError(message)
+    }
+    if (storageStatus === 'conflict') { fail('其他分頁已更新資料；本次建立未確認儲存。請先處理跨分頁衝突後重試。'); return }
+    if (storageStatus === 'write-error' || storageStatus === 'read-error') { fail('學校與學制寫入失敗；輸入內容已保留，請先處理儲存問題。'); return }
+    if (storageStatus !== 'saved' || storagePersistence.pending || storagePersistence.revision <= creationSubmission.revision) return
+    const school = data.schools.find((item) => item.id === creationSubmission.schoolId && item.projectId === projectId)
+    const unit = data.teachingUnits.find((item) => item.id === creationSubmission.unitId && item.schoolId === school?.id && item.projectId === projectId)
+    if (!school || !unit) { fail('儲存期間資料已變更，請重新檢查學校與學制。'); return }
+    creatingRef.current = false
+    setCreationSubmission(null)
+    setError('')
+    setCreationResult(`已建立「${creationSubmission.label}」，可在上方卡片查看並編輯。`)
+    if (creationSubmission.kind === 'school') {
+      setShowSchoolForm(false)
+      setSchoolDraft({ name: '', color: '#718B6C', schoolLevel: 'senior-high', unitName: '', startDate: '', endDate: '' })
+      setUnitDraft((current) => ({ ...current, schoolId: school.id }))
+    } else {
+      setShowUnitForm(false)
+      setUnitDraft((current) => ({ ...current, name: '', startDate: '', endDate: '' }))
+    }
+    const level = creationSubmission.level
+    const counts = level === 'other' ? null : previewSubjectCatalogInstall(data, [level]).counts
+    setSubjectOnboarding(counts && counts['safe-to-add'] + counts['needs-review'] > 0 && level !== 'other' ? { unitId: unit.id, level, viewing: false } : null)
+  }, [creationSubmission, data, projectId, storagePersistence.pending, storagePersistence.revision, storageStatus])
   useEffect(() => {
     if (!schools.some((item) => item.id === unitDraft.schoolId)) setUnitDraft((current) => ({ ...current, schoolId: schools[0]?.id ?? '' }))
     if (classDraft.teachingUnitId !== (units[0]?.id ?? '') && !units.some((item) => item.id === classDraft.teachingUnitId)) {
@@ -83,30 +120,42 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
     }
   }, [classDraft.teachingUnitId, selectedUnitId, units])
 
-  const createSchool = (event: FormEvent) => {
+  const createFromForm = (kind: 'school' | 'unit', event: FormEvent) => {
     event.preventDefault()
-    apply(() => addSchool(data, projectId, schoolDraft, uid()), setData, setError)
-    setSchoolDraft({ name: '', color: '#718B6C' })
-  }
-  const createUnit = (event: FormEvent) => {
-    event.preventDefault()
-    const activeProject = data.projects.find((item) => item.id === projectId)
-    if (readOnly || !activeProject || activeProject.archivedAt) { setError('封存或唯讀專案不可新增學制。'); return }
-    if (units.some((item) => item.schoolId === unitDraft.schoolId && item.schoolLevel === unitDraft.schoolLevel)) {
-      setError(`所選學校已有${levelLabel[unitDraft.schoolLevel]}設定，未新增重複資料。`)
-      return
-    }
-    const name = unitDraft.schoolLevel === 'other' ? unitDraft.name.trim() : levelLabel[unitDraft.schoolLevel]
-    if (!name) { setError('其他學制需要可辨識的自訂名稱。'); return }
+    if (creatingRef.current) return
+    if (!creationReady) { setError(!editable ? '封存或唯讀專案不可建立學校與學制。' : '資料尚未完成儲存，請稍後再試。'); return }
+    const schoolId = kind === 'school' ? uid() : unitDraft.schoolId
+    const unitId = uid()
+    const draft = kind === 'school' ? schoolDraft : unitDraft
+    const unit: NewTeachingUnitInput = { schoolLevel: draft.schoolLevel, name: kind === 'school' ? schoolDraft.unitName : unitDraft.name, startDate: draft.startDate, endDate: draft.endDate }
+    const label = kind === 'school' ? `${schoolDraft.name.trim()}・${draft.schoolLevel === 'other' ? unit.name?.trim() : levelLabel[draft.schoolLevel]}`
+      : `${schools.find((item) => item.id === schoolId)?.name ?? '學校'}・${draft.schoolLevel === 'other' ? unit.name?.trim() : levelLabel[draft.schoolLevel]}`
+    const context = { projectId, readOnly }
+    const operation = (current: AppDataV4) => kind === 'school'
+      ? createSchoolWithTeachingUnit(current, context, { name: schoolDraft.name, color: schoolDraft.color }, unit, { schoolId, teachingUnitId: unitId })
+      : addTeachingUnitToSchool(current, context, schoolId, unit, unitId)
     try {
-      const unitId = uid()
-      const next = addTeachingUnit(data, unitDraft.schoolId, { name, schoolLevel: unitDraft.schoolLevel, startDate: unitDraft.startDate, endDate: unitDraft.endDate, weekCycle: { enabled: true, anchorDate: unitDraft.startDate, anchorPattern: 'A' } }, unitId)
-      const level = unitDraft.schoolLevel
-      const counts = level === 'other' ? null : previewSubjectCatalogInstall(next, [level]).counts
-      setData(next)
+      operation(data)
+      creatingRef.current = true
       setError('')
-      setSubjectOnboarding(counts && counts['safe-to-add'] + counts['needs-review'] > 0 && level !== 'other' ? { unitId, level, viewing: false } : null)
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '學制無法新增。') }
+      setCreationResult('')
+      setCreationSubmission({ kind, schoolId, unitId, level: unit.schoolLevel, label, revision: storagePersistence.revision })
+      setData((current) => {
+        try { return operation(current) }
+        catch (reason) {
+          queueMicrotask(() => {
+            creatingRef.current = false
+            setCreationSubmission((pending) => pending?.unitId === unitId ? null : pending)
+            setError(reason instanceof Error ? reason.message : '資料已變更，請檢查後重試。')
+          })
+          return current
+        }
+      })
+    } catch (reason) {
+      creatingRef.current = false
+      setCreationSubmission(null)
+      setError(reason instanceof Error ? reason.message : '學校與學制無法建立。')
+    }
   }
   const createClass = (event: FormEvent) => {
     event.preventDefault()
@@ -128,17 +177,29 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
     {page !== 'schools' && selectors}
     {page === 'schools' && <>
     <header><strong>學校與學制</strong><p>學校識別色由同校各學制共用；學期日期與輪週規則由學制獨立管理。</p></header>
-    <div className="school-card-list">{schools.map((school) => <SchoolEditor key={school.id} school={school} units={units.filter((unit) => unit.schoolId === school.id)} data={data} setData={setData} setError={setError} />)}</div>
-    <section className="settings-create-section"><div><strong>新增學校</strong><p>先建立學校，再於下方分步新增學制設定。</p></div><form className="inline-create" onSubmit={createSchool}><input aria-label="新學校名稱" value={schoolDraft.name} onChange={(event) => setSchoolDraft({ ...schoolDraft, name: event.target.value })} placeholder="新增學校名稱" required /><input aria-label="新學校識別色" type="color" value={schoolDraft.color} onChange={(event) => setSchoolDraft({ ...schoolDraft, color: event.target.value })} /><button type="submit">新增學校</button></form></section>
-    <form className="form-grid settings-subform" onSubmit={createUnit}>
-      <div className="full"><strong>新增學制設定</strong><p>國中預設 45 分鐘，高中預設 50 分鐘；同一學校不能重複建立相同學制。</p></div>
-      <label>所屬學校<select value={unitDraft.schoolId} onChange={(event) => setUnitDraft({ ...unitDraft, schoolId: event.target.value })}>{schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}</select></label>
-      <label>學制<select aria-label="新增學制" value={unitDraft.schoolLevel} onChange={(event) => setUnitDraft({ ...unitDraft, schoolLevel: event.target.value as SchoolLevel })}>{Object.entries(levelLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      {unitDraft.schoolLevel === 'other' && <label className="full">自訂學制名稱<input value={unitDraft.name} onChange={(event) => setUnitDraft({ ...unitDraft, name: event.target.value })} placeholder="例如：實驗課程" required /></label>}
-      <label>起始日<input aria-label="新學制起始日" type="date" value={unitDraft.startDate} onChange={(event) => setUnitDraft({ ...unitDraft, startDate: event.target.value })} required /></label>
-      <label>結束日<input aria-label="新學制結束日" type="date" value={unitDraft.endDate} onChange={(event) => setUnitDraft({ ...unitDraft, endDate: event.target.value })} required /></label>
-      <div className="form-actions full"><button type="submit" className="primary-button" disabled={!schools.length || readOnly || Boolean(data.projects.find((item) => item.id === projectId)?.archivedAt)}>新增學制設定</button></div>
-    </form>
+    <div className="school-card-list">{schools.map((school) => <SchoolEditor key={school.id} school={school} units={units.filter((unit) => unit.schoolId === school.id)} data={data} setData={setData} setError={setError} readOnly={!editable} />)}</div>
+    {creationResult && <p className="settings-create-result" role="status">{creationResult}</p>}
+    <section className="settings-create-section"><div className="settings-create-heading"><div><strong>新增學校與第一個學制</strong><p>單次建立學校與學制設定；不會建立新的專案或教師課表。</p></div><button type="button" onClick={() => setShowSchoolForm((current) => !current)} disabled={!editable || Boolean(creationSubmission)} aria-expanded={showSchoolForm}>{showSchoolForm ? '收合' : '新增學校與學制'}</button></div>
+    {showSchoolForm && <form className="form-grid settings-subform" onSubmit={(event) => createFromForm('school', event)}>
+      <label className="full">學校名稱<input aria-label="新學校名稱" value={schoolDraft.name} onChange={(event) => setSchoolDraft({ ...schoolDraft, name: event.target.value })} disabled={!editable || Boolean(creationSubmission)} required /></label>
+      <label>學校識別色<input aria-label="新學校識別色" type="color" value={schoolDraft.color} onChange={(event) => setSchoolDraft({ ...schoolDraft, color: event.target.value })} disabled={!editable || Boolean(creationSubmission)} /></label>
+      <label>第一個學制<select aria-label="新學校第一個學制" value={schoolDraft.schoolLevel} onChange={(event) => setSchoolDraft({ ...schoolDraft, schoolLevel: event.target.value as SchoolLevel })} disabled={!editable || Boolean(creationSubmission)}>{Object.entries(levelLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      {schoolDraft.schoolLevel === 'other' && <label className="full">自訂學制名稱<input aria-label="新學校自訂學制名稱" value={schoolDraft.unitName} onChange={(event) => setSchoolDraft({ ...schoolDraft, unitName: event.target.value })} disabled={!editable || Boolean(creationSubmission)} required /></label>}
+      <label>起始日<input aria-label="新學校學制起始日" type="date" value={schoolDraft.startDate} onChange={(event) => setSchoolDraft({ ...schoolDraft, startDate: event.target.value })} disabled={!editable || Boolean(creationSubmission)} required /></label>
+      <label>結束日<input aria-label="新學校學制結束日" type="date" value={schoolDraft.endDate} onChange={(event) => setSchoolDraft({ ...schoolDraft, endDate: event.target.value })} disabled={!editable || Boolean(creationSubmission)} required /></label>
+      <p className="settings-create-preview full">{schoolDraft.name.trim() || '學校'}・{schoolDraft.schoolLevel === 'other' ? schoolDraft.unitName.trim() || '其他學制' : levelLabel[schoolDraft.schoolLevel]}。節次預設{schoolDraft.schoolLevel === 'junior-high' ? '每節 45 分鐘' : schoolDraft.schoolLevel === 'senior-high' ? '每節 50 分鐘' : '沿用既有其他學制設定'}；建立後可在課堂時間表調整 5 分鐘刻度的起訖時間。</p>
+      <div className="form-actions full"><button type="submit" className="primary-button" disabled={!creationReady}>{creationSubmission?.kind === 'school' ? '儲存中…' : '建立學校與學制'}</button></div>
+    </form>}</section>
+    <section className="settings-create-section"><div className="settings-create-heading"><div><strong>既有學校新增學制</strong><p>沿用所選學校的識別色；同一學校不能重複建立相同學制。</p></div><button type="button" onClick={() => setShowUnitForm((current) => !current)} disabled={!editable || Boolean(creationSubmission)} aria-expanded={showUnitForm}>{showUnitForm ? '收合' : '新增學制'}</button></div>
+    {showUnitForm && <form className="form-grid settings-subform" onSubmit={(event) => createFromForm('unit', event)}>
+      <label>所屬學校<select value={unitDraft.schoolId} onChange={(event) => setUnitDraft({ ...unitDraft, schoolId: event.target.value })} disabled={!editable || Boolean(creationSubmission)}>{schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}</select></label>
+      <label>學制<select aria-label="新增學制" value={unitDraft.schoolLevel} onChange={(event) => setUnitDraft({ ...unitDraft, schoolLevel: event.target.value as SchoolLevel })} disabled={!editable || Boolean(creationSubmission)}>{Object.entries(levelLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      {unitDraft.schoolLevel === 'other' && <label className="full">自訂學制名稱<input value={unitDraft.name} onChange={(event) => setUnitDraft({ ...unitDraft, name: event.target.value })} placeholder="例如：實驗課程" disabled={!editable || Boolean(creationSubmission)} required /></label>}
+      <label>起始日<input aria-label="新學制起始日" type="date" value={unitDraft.startDate} onChange={(event) => setUnitDraft({ ...unitDraft, startDate: event.target.value })} disabled={!editable || Boolean(creationSubmission)} required /></label>
+      <label>結束日<input aria-label="新學制結束日" type="date" value={unitDraft.endDate} onChange={(event) => setUnitDraft({ ...unitDraft, endDate: event.target.value })} disabled={!editable || Boolean(creationSubmission)} required /></label>
+      <p className="settings-create-preview full">{schools.find((item) => item.id === unitDraft.schoolId)?.name ?? '學校'}・{unitDraft.schoolLevel === 'other' ? unitDraft.name.trim() || '其他學制' : levelLabel[unitDraft.schoolLevel]}。節次預設{unitDraft.schoolLevel === 'junior-high' ? '每節 45 分鐘' : unitDraft.schoolLevel === 'senior-high' ? '每節 50 分鐘' : '沿用既有其他學制設定'}。</p>
+      <div className="form-actions full"><button type="submit" className="primary-button" disabled={!schools.length || !creationReady}>{creationSubmission?.kind === 'unit' ? '儲存中…' : '新增學制設定'}</button></div>
+    </form>}</section>
     {subjectOnboarding && units.some((unit) => unit.id === subjectOnboarding.unitId) && !readOnly && !data.projects.find((item) => item.id === projectId)?.archivedAt && <section className="subject-onboarding" aria-label="預設科目引導">
       <div><strong>要檢視{levelLabel[subjectOnboarding.level]}的預設科目嗎？</strong><p>科目庫由所有專案共用。只會在確認後新增安全項目；既有科目與待確認衝突不會自動修改。</p></div>
       {!subjectOnboarding.viewing && <div className="subject-onboarding-actions"><button type="button" className="primary-button" onClick={() => setSubjectOnboarding({ ...subjectOnboarding, viewing: true })}>檢視並補齊</button><button type="button" onClick={() => setSubjectOnboarding(null)}>稍後再說</button></div>}
@@ -158,35 +219,36 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
   </section>
 }
 
-function SchoolEditor({ school, units, data, setData, setError }: { school: School; units: TeachingUnit[]; data: AppDataV4; setData: Dispatch<SetStateAction<AppDataV4>>; setError: (value: string) => void }) {
+function SchoolEditor({ school, units, data, setData, setError, readOnly }: { school: School; units: TeachingUnit[]; data: AppDataV4; setData: Dispatch<SetStateAction<AppDataV4>>; setError: (value: string) => void; readOnly: boolean }) {
   const [draft, setDraft] = useState({ name: school.name, color: school.color })
   useEffect(() => setDraft({ name: school.name, color: school.color }), [school])
   const duplicateLevels = new Set(units.filter((unit) => units.some((item) => item.id !== unit.id && item.schoolLevel === unit.schoolLevel)).map((unit) => unit.schoolLevel))
   return <article className="school-editor" style={{ borderLeftColor: school.color }} data-testid={`school-card-${school.id}`}>
-    <form className="school-editor-heading" onSubmit={(event) => { event.preventDefault(); apply(() => updateSchool(data, school.id, draft), setData, setError) }}><input aria-label={`${school.name}學校名稱`} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required /><label className="school-color-field"><span>識別色</span><input aria-label={`${school.name}學校識別色`} type="color" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></label><button type="submit">儲存學校</button><button type="button" className="danger-outline" onClick={() => { if (window.confirm(`確定刪除「${school.name}」？`)) apply(() => removeSchool(data, school.id), setData, setError) }}>刪除</button></form>
-    <div className="school-unit-list">{units.length > 0 ? units.map((unit) => <TeachingUnitSettingsEditor key={unit.id} unit={unit} duplicate={duplicateLevels.has(unit.schoolLevel)} data={data} setData={setData} setError={setError} />) : <p className="settings-empty">尚未建立學制設定。</p>}</div>
+    <form className="school-editor-heading" onSubmit={(event) => { event.preventDefault(); if (!readOnly) apply(() => updateSchool(data, school.id, draft), setData, setError) }}><input aria-label={`${school.name}學校名稱`} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required disabled={readOnly} /><label className="school-color-field"><span>識別色</span><input aria-label={`${school.name}學校識別色`} type="color" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} disabled={readOnly} /></label><button type="submit" disabled={readOnly}>儲存學校</button><button type="button" className="danger-outline" disabled={readOnly} onClick={() => { if (window.confirm(`確定刪除「${school.name}」？`)) apply(() => removeSchool(data, school.id), setData, setError) }}>刪除</button></form>
+    <div className="school-unit-list">{units.length > 0 ? units.map((unit) => <TeachingUnitSettingsEditor key={unit.id} unit={unit} duplicate={duplicateLevels.has(unit.schoolLevel)} data={data} setData={setData} setError={setError} readOnly={readOnly} />) : <p className="settings-empty">尚未建立學制設定。</p>}</div>
   </article>
 }
 
-function TeachingUnitSettingsEditor({ unit, duplicate, data, setData, setError }: { unit: TeachingUnit; duplicate: boolean; data: AppDataV4; setData: Dispatch<SetStateAction<AppDataV4>>; setError: (value: string) => void }) {
+function TeachingUnitSettingsEditor({ unit, duplicate, data, setData, setError, readOnly }: { unit: TeachingUnit; duplicate: boolean; data: AppDataV4; setData: Dispatch<SetStateAction<AppDataV4>>; setError: (value: string) => void; readOnly: boolean }) {
   const [draft, setDraft] = useState<TeachingUnitDraft>(() => ({ name: unit.name, schoolLevel: unit.schoolLevel, startDate: unit.startDate, endDate: unit.endDate, periods: unit.periods.map((item) => ({ ...item })), weekCycle: { ...unit.weekCycle } }))
   useEffect(() => setDraft({ name: unit.name, schoolLevel: unit.schoolLevel, startDate: unit.startDate, endDate: unit.endDate, periods: unit.periods.map((item) => ({ ...item })), weekCycle: { ...unit.weekCycle } }), [unit])
   const label = unit.schoolLevel === 'other' ? unit.name : levelLabel[unit.schoolLevel]
   return <form className="teaching-unit-settings" data-testid={`teaching-unit-${unit.id}`} onSubmit={(event) => {
     event.preventDefault()
+    if (readOnly) return
     if (draft.schoolLevel === 'other' && !draft.name.trim()) { setError('其他學制需要可辨識的自訂名稱。'); return }
     apply(() => updateTeachingUnit(data, unit.id, draft), setData, setError)
   }}>
     <div className="teaching-unit-heading"><div><strong>{label}</strong><small>TeachingUnit ID {unit.id}</small></div>{duplicate && <span className="duplicate-unit-badge">重複學制資料</span>}</div>
     {duplicate && <p className="form-warning">此校有多筆相同學制。資料已逐筆保留；既有更新函式無法安全修改重複項目，本階段不會自動合併、刪除、改 ID 或代選其中一筆。</p>}
     <div className="unit-editor-grid">
-      {draft.schoolLevel === 'other' && <label>自訂學制名稱<input aria-label={`${unit.id}自訂學制名稱`} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required disabled={duplicate} /></label>}
+      {draft.schoolLevel === 'other' && <label>自訂學制名稱<input aria-label={`${unit.id}自訂學制名稱`} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required disabled={duplicate || readOnly} /></label>}
       <label>學制<span className="readonly-field">{levelLabel[draft.schoolLevel]}</span></label>
-      <label>起始日<input aria-label={`${unit.id}起始日`} type="date" value={draft.startDate} onChange={(event) => setDraft({ ...draft, startDate: event.target.value })} required disabled={duplicate} /></label>
-      <label>結束日<input aria-label={`${unit.id}結束日`} type="date" value={draft.endDate} onChange={(event) => setDraft({ ...draft, endDate: event.target.value })} required disabled={duplicate} /></label>
+      <label>起始日<input aria-label={`${unit.id}起始日`} type="date" value={draft.startDate} onChange={(event) => setDraft({ ...draft, startDate: event.target.value })} required disabled={duplicate || readOnly} /></label>
+      <label>結束日<input aria-label={`${unit.id}結束日`} type="date" value={draft.endDate} onChange={(event) => setDraft({ ...draft, endDate: event.target.value })} required disabled={duplicate || readOnly} /></label>
     </div>
-    <div className="week-cycle-editor"><label><input aria-label={`${unit.id}啟用 A/B 週`} type="checkbox" checked={draft.weekCycle.enabled} onChange={(event) => setDraft({ ...draft, weekCycle: { ...draft.weekCycle, enabled: event.target.checked } })} disabled={duplicate} />啟用 A/B 週</label><label>基準日期<input aria-label={`${unit.id}基準日期`} type="date" value={draft.weekCycle.anchorDate} onChange={(event) => setDraft({ ...draft, weekCycle: { ...draft.weekCycle, anchorDate: event.target.value } })} disabled={duplicate} /></label><label>基準週<select aria-label={`${unit.id}基準週`} value={draft.weekCycle.anchorPattern} onChange={(event) => setDraft({ ...draft, weekCycle: { ...draft.weekCycle, anchorPattern: event.target.value as 'A' | 'B' } })} disabled={duplicate}><option value="A">A 週</option><option value="B">B 週</option></select></label></div>
-    <div className="unit-actions"><button type="submit" className="primary-button" disabled={duplicate}>儲存學制設定</button><button type="button" className="danger-outline" onClick={() => { if (window.confirm(`確定刪除「${unit.name}」？`)) apply(() => removeTeachingUnit(data, unit.id), setData, setError) }}>刪除學制</button></div>
+    <div className="week-cycle-editor"><label><input aria-label={`${unit.id}啟用 A/B 週`} type="checkbox" checked={draft.weekCycle.enabled} onChange={(event) => setDraft({ ...draft, weekCycle: { ...draft.weekCycle, enabled: event.target.checked } })} disabled={duplicate || readOnly} />啟用 A/B 週</label><label>基準日期<input aria-label={`${unit.id}基準日期`} type="date" value={draft.weekCycle.anchorDate} onChange={(event) => setDraft({ ...draft, weekCycle: { ...draft.weekCycle, anchorDate: event.target.value } })} disabled={duplicate || readOnly} /></label><label>基準週<select aria-label={`${unit.id}基準週`} value={draft.weekCycle.anchorPattern} onChange={(event) => setDraft({ ...draft, weekCycle: { ...draft.weekCycle, anchorPattern: event.target.value as 'A' | 'B' } })} disabled={duplicate || readOnly}><option value="A">A 週</option><option value="B">B 週</option></select></label></div>
+    <div className="unit-actions"><button type="submit" className="primary-button" disabled={duplicate || readOnly}>儲存學制設定</button><button type="button" className="danger-outline" disabled={readOnly} onClick={() => { if (window.confirm(`確定刪除「${unit.name}」？`)) apply(() => removeTeachingUnit(data, unit.id), setData, setError) }}>刪除學制</button></div>
   </form>
 }
 

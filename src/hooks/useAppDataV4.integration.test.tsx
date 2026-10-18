@@ -21,6 +21,7 @@ function Harness() {
     <output data-testid="first-period">{data.teachingUnits[0] ? `${data.teachingUnits[0].periods[0].id}:${data.teachingUnits[0].periods[0].startTime}-${data.teachingUnits[0].periods[0].endTime}` : ''}</output>
     <button onClick={() => setData((current) => ({ ...current, projects: current.projects.map((item) => item.id === current.activeProjectId ? { ...item, name: '本頁版本' } : item) }))}>rename</button>
     <button onClick={() => setData((current) => addSchool(current, current.activeProjectId!, { name: '第二所學校', color: '#718B6C' }, 'persisted-school'))}>add school</button>
+    <button onClick={() => setData((current) => current)}>no-op update</button>
     <button onClick={() => setData((current) => ({ ...current, teachingUnits: current.teachingUnits.map((unit, index) => index === 0 ? { ...unit, periods: [...unit.periods, { id: 999, order: 999, label: '異常節次', startTime: '09:03', endTime: '09:58' }] } : unit) }))}>add invalid period</button>
     <button onClick={() => setData((current) => ({ ...current, teachingUnits: current.teachingUnits.map((unit, index) => index === 0 ? { ...unit, periods: unit.periods.map((period, periodIndex) => periodIndex === 0 ? { ...period, startTime: '08:03' } : period) } : unit) }))}>change valid period invalid</button>
     <button onClick={controls.acceptExternal}>accept</button>
@@ -44,6 +45,17 @@ function removeAppKeys() {
 describe('useAppDataV4 runtime integration', () => {
   beforeEach(() => { vi.useFakeTimers(); removeAppKeys() })
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); removeAppKeys() })
+
+  it('同一份 AppData 的 no-op updater 不啟動寫入', () => {
+    const current = migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData))))
+    localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(current))
+    const write = vi.spyOn(Storage.prototype, 'setItem')
+    render(<Harness />)
+    fireEvent.click(screen.getByText('no-op update'))
+    act(() => vi.advanceTimersByTime(500))
+    expect(screen.getByTestId('status').textContent).toBe('saved')
+    expect(write).not.toHaveBeenCalled()
+  })
 
   it('首次載入安全遷移 v3、只寫入 v4，重新掛載後讀取 v4', () => {
     const rawV3 = JSON.stringify(initialData)

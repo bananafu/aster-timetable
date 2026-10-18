@@ -151,3 +151,9 @@ input[type="date"], input[type="time"], .week-controls, .period-label, .day-head
 @media (max-width: 760px) { .lesson-setup-empty { align-items: stretch; flex-direction: column; }.lesson-setup-empty button { min-height: 44px; } }
 @media (max-width: 760px) { .academic-context-selectors { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .page-heading { flex-direction: column; align-items: stretch; }.page-heading-side, .timetable-controls { justify-items: stretch; }.timetable-control-row { justify-content: flex-start; }.timetable-control-row label { flex: 1 1 100%; }.timetable-control-row select { width: 100%; max-width: none; }.week-pill { justify-self: start; }.timetable-teacher { justify-content: space-between; } }
+.settings-create-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.settings-create-heading button { flex: 0 0 auto; min-height: 34px; padding: 5px 10px; color: var(--color-focus); background: transparent; border: var(--border); border-radius: var(--radius-sm); cursor: pointer; font-size: 11px; }
+.settings-create-section .settings-subform { padding-bottom: 0; border-bottom: 0; }
+.settings-create-preview { margin: 0; color: var(--color-text-secondary); font-size: 11px; line-height: 1.6; }
+.settings-create-result { margin: 0; padding: 10px 12px; color: var(--color-accent); background: var(--color-primary-soft); border-left: 3px solid var(--color-primary); font-size: 11px; line-height: 1.5; }
+@media (max-width: 560px) { .settings-create-heading { flex-direction: column; }.settings-create-heading button { align-self: flex-start; } }

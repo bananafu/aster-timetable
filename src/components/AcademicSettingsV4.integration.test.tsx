@@ -73,7 +73,7 @@ describe('AcademicSettingsV4 class roster', () => {
     fireEvent.change(screen.getByLabelText('新學制起始日'), { target: { value: '2027-02-01' } })
     fireEvent.change(screen.getByLabelText('新學制結束日'), { target: { value: '2027-06-30' } })
     fireEvent.click(screen.getByRole('button', { name: '新增學制設定' }))
-    expect(setData.mock.calls[0][0].teachingUnits.at(-1)).toMatchObject({ schoolLevel: 'junior-high', name: '國中部' })
+    expect(setData.mock.calls[0][0](data).teachingUnits.at(-1)).toMatchObject({ schoolLevel: 'junior-high', name: '國中部' })
   })
 
   it('other 要求自訂名稱，同校重複學制則安全拒絕', () => {
@@ -86,7 +86,7 @@ describe('AcademicSettingsV4 class roster', () => {
     fireEvent.change(screen.getByLabelText('新學制起始日'), { target: { value: '2027-02-01' } })
     fireEvent.change(screen.getByLabelText('新學制結束日'), { target: { value: '2027-06-30' } })
     fireEvent.click(screen.getByRole('button', { name: '新增學制設定' }))
-    expect(setData.mock.calls[0][0].teachingUnits.at(-1)).toMatchObject({ schoolLevel: 'other', name: '雙語實驗課程' })
+    expect(setData.mock.calls[0][0](data).teachingUnits.at(-1)).toMatchObject({ schoolLevel: 'other', name: '雙語實驗課程' })
 
     cleanup(); setData.mockClear()
     render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
@@ -95,7 +95,7 @@ describe('AcademicSettingsV4 class roster', () => {
     fireEvent.change(screen.getByLabelText('新學制結束日'), { target: { value: '2027-06-30' } })
     fireEvent.click(screen.getByRole('button', { name: '新增學制設定' }))
     expect(setData).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toContain('未新增重複資料')
+    expect(screen.getByRole('alert').textContent).toContain('同一學校不可重複建立相同學制')
   })
 
   it('依所選學校與學制顯示科目，新增科目預設目前學制', () => {

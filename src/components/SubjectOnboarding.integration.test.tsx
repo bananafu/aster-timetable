@@ -25,12 +25,14 @@ function withSecondSchool(data: AppDataV4) {
 
 function Harness({ initial, readOnly = false, showLesson = false }: { initial: AppDataV4; readOnly?: boolean; showLesson?: boolean }) {
   const [data, setData] = useState(initial)
+  const [revision, setRevision] = useState(0)
   const [page, setPage] = useState<'schools' | 'subjects'>('schools')
+  const updateData: typeof setData = (next) => { setData(next); setRevision((current) => current + 1) }
   return <>
     <button onClick={() => setPage(page === 'schools' ? 'subjects' : 'schools')}>切換設定頁</button>
     <output data-testid="unit-count">{data.teachingUnits.length}</output>
     <output data-testid="subject-count">{data.subjects.length}</output>
-    <AcademicSettingsV4 data={data} setData={setData} page={page} readOnly={readOnly} />
+    <AcademicSettingsV4 data={data} setData={updateData} page={page} readOnly={readOnly} storagePersistence={{ pending: false, revision }} />
     {showLesson && <LessonEditor data={data} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />}
   </>
 }
@@ -68,7 +70,7 @@ describe('new TeachingUnit subject onboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: '切換設定頁' }))
     fireEvent.click(screen.getByRole('button', { name: '切換設定頁' }))
     expect(screen.queryByLabelText('預設科目引導')).toBeNull()
-    expect(screen.getByRole('button', { name: '新增學制設定' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '新增學制' })).toBeTruthy()
   })
 
   it('preselects senior-high in the existing installer and leaves optional subjects unchecked', () => {
@@ -125,7 +127,7 @@ describe('new TeachingUnit subject onboarding', () => {
   it('does not prompt or change data when a duplicate level is rejected', () => {
     render(<Harness initial={setup()} />)
     createUnit('senior-high')
-    expect(screen.getByRole('alert').textContent).toContain('未新增重複資料')
+    expect(screen.getByRole('alert').textContent).toContain('同一學校不可重複建立相同學制')
     expect(screen.getByTestId('unit-count').textContent).toBe('1')
     expect(screen.queryByLabelText('預設科目引導')).toBeNull()
   })
@@ -135,9 +137,9 @@ describe('new TeachingUnit subject onboarding', () => {
     localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(setup()))
     render(<StoredHarness />)
     createUnit('junior-high')
-    fireEvent.click(screen.getByRole('button', { name: '檢視並補齊' }))
-    expect((screen.getByRole('button', { name: /確認安裝安全項目/ }) as HTMLButtonElement).disabled).toBe(true)
     act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(screen.getByRole('button', { name: '檢視並補齊' }))
+    expect((screen.getByRole('button', { name: /確認安裝安全項目/ }) as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: /確認安裝安全項目/ }))
     act(() => vi.advanceTimersByTime(200))
     expect(screen.getByTestId('storage-status').textContent).toBe('saved')
