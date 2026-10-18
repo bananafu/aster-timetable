@@ -73,10 +73,22 @@ export function isCompatibleAppDataV7(value: unknown): value is AppDataV7 {
 
 export function isSafeAppDataV7Update(current: AppDataV4, next: AppDataV4): boolean {
   if (!isCompatibleAppDataV7(next) || !isSafeAppDataV6Update(current, { ...next, schemaVersion: 6 })) return false
+  if ((current.oneOffLessons ?? []).some((lesson) => {
+    if (lesson.time.mode !== 'period') return false
+    const retained = next.oneOffLessons.find((item) => item.id === lesson.id)
+    if (!retained || retained.teachingUnitId !== lesson.teachingUnitId || retained.time.mode !== 'period'
+      || retained.time.periodId !== lesson.time.periodId) return false
+    const before = current.teachingUnits.find((unit) => unit.id === lesson.teachingUnitId)
+      ?.periods.find((period) => period.id === lesson.time.periodId)
+    const after = next.teachingUnits.find((unit) => unit.id === lesson.teachingUnitId)
+      ?.periods.find((period) => period.id === lesson.time.periodId)
+    return before && after && (before.startTime !== after.startTime || before.endTime !== after.endTime)
+  })) return false
   const archivedIds = new Set([
     ...current.projects.filter((project) => project.archivedAt).map((project) => project.id),
     ...next.projects.filter((project) => project.archivedAt).map((project) => project.id),
   ])
-  return [...archivedIds].every((projectId) => JSON.stringify(current.oneOffLessons?.filter((item) => item.projectId === projectId) ?? [])
-    === JSON.stringify(next.oneOffLessons.filter((item) => item.projectId === projectId)))
+  return [...archivedIds].every((projectId) => !next.projects.some((project) => project.id === projectId)
+    || JSON.stringify(current.oneOffLessons?.filter((item) => item.projectId === projectId) ?? [])
+      === JSON.stringify(next.oneOffLessons.filter((item) => item.projectId === projectId)))
 }

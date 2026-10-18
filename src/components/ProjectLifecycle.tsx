@@ -89,8 +89,9 @@ export function ProjectLifecycleModal({ data, setData, initialPage = 'root', onC
       lessons: data.recurringLessons.filter((item) => item.projectId === projectId).length,
       events: data.events.filter((item) => item.projectId === projectId).length,
       overrides: data.overrides.filter((item) => item.projectId === projectId).length,
+      oneOffs: (data.oneOffLessons ?? []).filter((item) => item.projectId === projectId).length,
     }
-    if (!window.confirm(`永久刪除「${project.name}」？\n將刪除 ${counts.timetables} 份教師課表、${counts.schools} 所學校、${counts.units} 個學制設定、${counts.classes} 個班級、${counts.lessons} 筆固定課程、${counts.events} 筆事件及 ${counts.overrides} 筆異動。\n其他專案與全域科目不受影響。`)) return
+    if (!window.confirm(`永久刪除「${project.name}」？\n將刪除 ${counts.timetables} 份教師課表、${counts.schools} 所學校、${counts.units} 個學制設定、${counts.classes} 個班級、${counts.lessons} 筆固定課程、${counts.oneOffs} 筆單日課程、${counts.events} 筆事件及 ${counts.overrides} 筆異動。\n其他專案與全域科目不受影響。`)) return
     setData((current) => deleteProject(current, projectId))
   }
 

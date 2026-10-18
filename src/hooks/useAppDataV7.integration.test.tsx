@@ -8,17 +8,31 @@ import { migrateV5ToV6 } from '../data/migrationsV6'
 import { migrateV6ToV7 } from '../data/migrationsV7'
 import { APP_DATA_V6_KEY } from '../data/storageV6'
 import { APP_DATA_V7_KEY } from '../data/storageV7'
+import { createOneOffLesson } from '../data/oneOffLessonsV7'
+import { isCompatibleAppDataV7 } from '../data/validators/v7'
 import { useAppDataV4 } from './useAppDataV4'
 
 const source = () => migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData))))
 
 function Harness() {
-  const [data, setData, status, controls] = useAppDataV4()
+  const [data, setData, status, controls, persistence] = useAppDataV4()
   return <>
     <output data-testid="status">{status}</output>
     <output data-testid="source">{controls.conflictSource ?? ''}</output>
     <output data-testid="name">{data.projects[0]?.name}</output>
+    <output data-testid="one-off-count">{data.oneOffLessons?.length ?? 0}</output>
+    <output data-testid="pending">{String(persistence.pending)}</output>
+    <output data-testid="revision">{persistence.revision}</output>
     <button onClick={() => setData((current) => ({ ...current, projects: current.projects.map((project) => ({ ...project, name: '本頁變更' })) }))}>rename</button>
+    <button onClick={() => setData((current) => {
+      if (!isCompatibleAppDataV7(current)) return current
+      return createOneOffLesson(current, {
+        projectId: current.projects[0].id, timetableId: current.timetables[0].id,
+        teachingUnitId: current.teachingUnits[0].id, classId: current.classes[0].id,
+        subjectId: current.subjects[0].id, date: '2026-09-06', purpose: 'extra',
+        time: { mode: 'custom', startTime: '09:30', endTime: '11:00' },
+      }, () => '00000000-0000-4000-8000-000000000001')
+    })}>add one-off</button>
     <button onClick={() => setData((current) => ({ ...current, oneOffLessons: [{ id: 'broken' } as never] }))}>invalid one-off</button>
     <button onClick={controls.acceptExternal}>accept</button>
     <button onClick={controls.keepLocal}>keep</button>
@@ -83,6 +97,48 @@ describe('v7 runtime and older-tab protection', () => {
     fireEvent.click(screen.getByText('invalid one-off'))
     act(() => vi.advanceTimersByTime(200))
     expect(screen.getByTestId('status').textContent).toBe('write-error')
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(rawV7)
+  })
+
+  it('uses one functional update and reports completion only after persistence', () => {
+    const rawV7 = JSON.stringify(migrateV6ToV7(source()))
+    localStorage.setItem(APP_DATA_V7_KEY, rawV7)
+    render(<Harness />)
+    fireEvent.click(screen.getByText('add one-off'))
+    expect(screen.getByTestId('one-off-count').textContent).toBe('1')
+    expect(screen.getByTestId('pending').textContent).toBe('true')
+    expect(screen.getByTestId('revision').textContent).toBe('0')
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(rawV7)
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.getByTestId('status').textContent).toBe('saved')
+    expect(screen.getByTestId('pending').textContent).toBe('false')
+    expect(screen.getByTestId('revision').textContent).toBe('1')
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).oneOffLessons).toHaveLength(1)
+  })
+
+  it('does not persist a pending one-off over an external tab update or a failed storage write', () => {
+    const rawV7 = JSON.stringify(migrateV6ToV7(source()))
+    localStorage.setItem(APP_DATA_V7_KEY, rawV7)
+    render(<Harness />)
+    fireEvent.click(screen.getByText('add one-off'))
+    const external = JSON.stringify({ ...JSON.parse(rawV7), projects: [{ ...JSON.parse(rawV7).projects[0], name: '外部分頁' }] })
+    localStorage.setItem(APP_DATA_V7_KEY, external)
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue: rawV7, newValue: external, storageArea: localStorage })))
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.getByTestId('status').textContent).toBe('conflict')
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(external)
+    expect(screen.getByTestId('revision').textContent).toBe('0')
+  })
+
+  it('retains the old stored document when a one-off write fails', () => {
+    const rawV7 = JSON.stringify(migrateV6ToV7(source()))
+    localStorage.setItem(APP_DATA_V7_KEY, rawV7)
+    render(<Harness />)
+    fireEvent.click(screen.getByText('add one-off'))
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Quota exceeded') })
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.getByTestId('status').textContent).toBe('write-error')
+    expect(screen.getByTestId('revision').textContent).toBe('0')
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(rawV7)
   })
 })

@@ -149,6 +149,7 @@ export function deleteProject(data: AppDataV4, projectId: string): AppDataV4 {
     ...data.recurringLessons.filter((item) => item.projectId === projectId).map((item) => item.id),
     ...data.events.filter((item) => item.projectId === projectId).map((item) => item.id),
     ...data.overrides.filter((item) => item.projectId === projectId).map((item) => item.id),
+    ...(data.oneOffLessons ?? []).filter((item) => item.projectId === projectId).map((item) => item.id),
   ])
   const remainingProjects = data.projects.filter((item) => item.id !== projectId)
   const nextActive = data.activeProjectId === projectId
@@ -165,6 +166,7 @@ export function deleteProject(data: AppDataV4, projectId: string): AppDataV4 {
     recurringLessons: data.recurringLessons.filter((item) => item.projectId !== projectId),
     events: data.events.filter((item) => item.projectId !== projectId),
     overrides: data.overrides.filter((item) => item.projectId !== projectId),
+    ...(data.schemaVersion === 7 && { oneOffLessons: data.oneOffLessons?.filter((item) => item.projectId !== projectId) }),
     migrationWarnings: data.migrationWarnings.filter((item) => !entityIds.has(item.entityId)),
   }
 }

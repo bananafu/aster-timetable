@@ -14,7 +14,7 @@ export interface SubjectDraft {
 }
 
 export interface SubjectReference {
-  kind: 'lesson' | 'override'
+  kind: 'lesson' | 'override' | 'one-off'
   id: string
   projectId: string | null
   teachingUnitId: string | null
@@ -95,6 +95,15 @@ export function analyzeSubjectReferences(data: AppDataV4, subjectId: string): Su
       archived: Boolean(override.projectId && projects.get(override.projectId)?.archivedAt), historical: false,
     })
   }
+  for (const lesson of data.oneOffLessons ?? []) {
+    if (lesson.subjectId !== subjectId) continue
+    const unit = units.get(lesson.teachingUnitId)
+    references.push({
+      kind: 'one-off', id: lesson.id, projectId: lesson.projectId, teachingUnitId: lesson.teachingUnitId,
+      schoolLevel: unit?.projectId === lesson.projectId ? unit.schoolLevel : null,
+      archived: Boolean(projects.get(lesson.projectId)?.archivedAt), historical: false,
+    })
+  }
   return references
 }
 
@@ -129,7 +138,7 @@ export function updateSubject(data: AppDataV4, subjectId: string, draft: Subject
   const oldLevels = impact.subject.applicableSchoolLevels ?? [...SCHOOL_LEVELS]
   const removed = oldLevels.filter((level) => !normalized.applicableSchoolLevels.includes(level))
   const blockedReferences = removed.length ? impact.references.filter((item) => item.schoolLevel === null || removed.includes(item.schoolLevel)) : []
-  if (blockedReferences.length) throw new SubjectManagementError('level-in-use', '此學制仍有固定課程、歷史版本或替換異動引用，無法移除。', { impact, blockedReferences })
+  if (blockedReferences.length) throw new SubjectManagementError('level-in-use', '此學制仍有固定課程、歷史版本、替換異動或單日課程引用，無法移除。', { impact, blockedReferences })
   const changesGlobalDisplay = normalized.name !== impact.subject.name || normalized.shortName !== impact.subject.shortName || normalized.color !== impact.subject.color
   if (!confirmed && (changesGlobalDisplay || removed.length > 0)) throw new SubjectManagementError('confirmation-required', '此變更會影響全域科目或適用學制，請先確認。', { impact })
   return assertResult(data, { ...data, subjects: data.subjects.map((item) => item.id === subjectId ? { ...item, ...normalized, origin: 'user' } : item) })
@@ -137,7 +146,7 @@ export function updateSubject(data: AppDataV4, subjectId: string, draft: Subject
 
 export function deleteSubject(data: AppDataV4, subjectId: string, confirmed = false): AppDataV4 {
   const impact = getSubjectImpact(data, subjectId)
-  if (impact.references.length) throw new SubjectManagementError('referenced', '科目仍被固定課程、歷史版本或替換異動引用，無法刪除。', { impact, blockedReferences: impact.references })
+  if (impact.references.length) throw new SubjectManagementError('referenced', '科目仍被固定課程、歷史版本、替換異動或單日課程引用，無法刪除。', { impact, blockedReferences: impact.references })
   if (!confirmed) throw new SubjectManagementError('confirmation-required', '刪除科目前請明確確認。', { impact })
   return assertResult(data, { ...data, subjects: data.subjects.filter((item) => item.id !== subjectId) })
 }

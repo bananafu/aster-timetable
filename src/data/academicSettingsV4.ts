@@ -1,5 +1,6 @@
 import type { AppDataV4, SchoolLevel, SchoolPeriod, TeachingUnit } from '../types'
 import { formatClassCode, isGradeValidForLevel } from '../lib/classes'
+import { subjectAppliesToLevel } from '../lib/subjects'
 
 export interface SchoolDraft { name: string; color: string }
 export interface TeachingUnitDraft {
@@ -90,8 +91,23 @@ export function updateTeachingUnit(data: AppDataV4, unitId: string, draft: Teach
   const referencedPeriodIds = new Set([
     ...data.recurringLessons.filter((item) => item.teachingUnitId === unitId).map((item) => item.periodId),
     ...data.overrides.filter((item) => item.teachingUnitId === unitId).map((item) => item.periodId),
+    ...(data.oneOffLessons ?? []).filter((item) => item.teachingUnitId === unitId && item.time.mode === 'period').map((item) => item.time.periodId!),
   ])
-  if ([...referencedPeriodIds].some((id) => !draft.periods.some((period) => period.id === id))) throw new Error('無法移除仍被課程或異動引用的節次。')
+  if ([...referencedPeriodIds].some((id) => !draft.periods.some((period) => period.id === id))) throw new Error('無法移除仍被課程或異動引用的節次（包含單日課程）。')
+  const oneOffs = (data.oneOffLessons ?? []).filter((item) => item.teachingUnitId === unitId)
+  if (oneOffs.some((item) => item.date < draft.startDate || item.date > draft.endDate)) throw new Error('日期範圍會排除既有單日課程，無法儲存。')
+  if (oneOffs.some((item) => {
+    const subject = data.subjects.find((candidate) => candidate.id === item.subjectId)
+    return !subject || !subjectAppliesToLevel(subject, draft.schoolLevel)
+  })) {
+    throw new Error('新學制不適用既有單日課程的科目，無法儲存。')
+  }
+  if (oneOffs.some((item) => {
+    if (item.time.mode !== 'period') return false
+    const original = unit.periods.find((period) => period.id === item.time.periodId)
+    const next = draft.periods.find((period) => period.id === item.time.periodId)
+    return original && next && (original.startTime !== next.startTime || original.endTime !== next.endTime)
+  })) throw new Error('節次仍被單日課程引用，無法更改其起訖時間。')
   if (!draft.weekCycle.enabled && data.recurringLessons.some((item) => item.teachingUnitId === unitId && item.weekPattern !== 'every')) throw new Error('仍有 A/B 週課程，無法停用輪週。')
   if (data.recurringLessons.some((item) => item.teachingUnitId === unitId && (item.effectiveStart < draft.startDate || (item.effectiveEnd ?? item.effectiveStart) > draft.endDate))) throw new Error('日期範圍會排除既有固定課程版本，無法儲存。')
   if (data.overrides.some((item) => item.teachingUnitId === unitId && (item.date < draft.startDate || item.date > draft.endDate))) throw new Error('日期範圍會排除既有單日異動，無法儲存。')
@@ -108,7 +124,8 @@ export function removeTeachingUnit(data: AppDataV4, unitId: string): AppDataV4 {
   if (data.classes.some((item) => item.teachingUnitId === unitId)
     || data.recurringLessons.some((item) => item.teachingUnitId === unitId)
     || data.events.some((item) => item.teachingUnitId === unitId)
-    || data.overrides.some((item) => item.teachingUnitId === unitId)) throw new Error('任教單位仍被班級、課程、事件或異動引用，無法刪除。')
+    || data.overrides.some((item) => item.teachingUnitId === unitId)
+    || (data.oneOffLessons ?? []).some((item) => item.teachingUnitId === unitId)) throw new Error('任教單位仍被班級、課程、事件、異動或單日課程引用，無法刪除。')
   if (data.teachingUnits.filter((item) => item.projectId === unit.projectId).length <= 1) throw new Error('專案至少需要保留一個任教單位。')
   return { ...data, teachingUnits: data.teachingUnits.filter((item) => item.id !== unitId) }
 }
@@ -133,7 +150,8 @@ export function updateClass(data: AppDataV4, classId: string, draft: ClassDraft)
   if (!structured && !draft.name?.trim()) throw new Error('班級名稱不得為空白。')
   if (structured && data.classes.some((item) => item.id !== classId && item.teachingUnitId === unit.id && item.grade === draft.grade && item.classNumber === draft.classNumber)) throw new Error('此學制已存在相同年級與班號。')
   if (schoolClass.teachingUnitId !== unit.id && (data.recurringLessons.some((item) => item.classId === classId)
-    || data.overrides.some((item) => item.replacement?.classId === classId))) throw new Error('班級已有課程或異動引用，無法直接移至其他任教單位。')
+    || data.overrides.some((item) => item.replacement?.classId === classId)
+    || (data.oneOffLessons ?? []).some((item) => item.classId === classId))) throw new Error('班級已有課程或異動引用（含單日課程），無法直接移至其他任教單位。')
   const name = structured ? formatClassCode(draft.grade!, draft.classNumber!) : draft.name!.trim()
   return { ...data, classes: data.classes.map((item) => item.id === classId ? { ...item, teachingUnitId: unit.id, name, grade: draft.grade, classNumber: draft.classNumber, room: draft.room?.trim() || undefined, origin: 'user' } : item) }
 }
@@ -141,6 +159,7 @@ export function updateClass(data: AppDataV4, classId: string, draft: ClassDraft)
 export function removeClass(data: AppDataV4, classId: string): AppDataV4 {
   if (!data.classes.some((item) => item.id === classId)) throw new Error('找不到班級。')
   if (data.recurringLessons.some((item) => item.classId === classId)
-    || data.overrides.some((item) => item.replacement?.classId === classId)) throw new Error('班級仍被課程或異動引用，無法刪除。')
+    || data.overrides.some((item) => item.replacement?.classId === classId)
+    || (data.oneOffLessons ?? []).some((item) => item.classId === classId)) throw new Error('班級仍被課程、異動或單日課程引用，無法刪除。')
   return { ...data, classes: data.classes.filter((item) => item.id !== classId) }
 }
