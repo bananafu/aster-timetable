@@ -44,7 +44,7 @@ export function revokeLessonOverride(data: AppDataV4, overrideId: string, select
   if (!project || project.archivedAt) throw new Error('Archived projects are read-only')
   const related = override.groupId ? data.overrides.filter((item) => item.groupId === override.groupId) : [override]
   if (override.groupId && related.length < 2) throw new Error('Grouped override is incomplete and cannot be revoked safely')
-  if (related.some((item) => item.projectId !== override.projectId || (data.schemaVersion === 6 && item.timetableId !== timetableId))) throw new Error('Grouped override crosses timetable boundaries')
+  if (related.some((item) => item.projectId !== override.projectId || (data.schemaVersion >= 6 && item.timetableId !== timetableId))) throw new Error('Grouped override crosses timetable boundaries')
   const removedIds = new Set(related.map((item) => item.id))
   return validResult({ ...data, overrides: data.overrides.filter((item) => !removedIds.has(item.id)) })
 }
@@ -93,7 +93,7 @@ export function swapLessonOccurrences(data: AppDataV4, firstId: string, firstDat
   if (firstId === secondId) throw new Error('Two different lessons are required')
   const first = assertWritableLesson(data, firstId, firstDate, timetableId).lesson
   const second = assertWritableLesson(data, secondId, secondDate, timetableId).lesson
-  if (first.projectId !== second.projectId || (data.schemaVersion === 6 && first.timetableId !== second.timetableId)) throw new Error('Lessons must belong to the same timetable')
+  if (first.projectId !== second.projectId || (data.schemaVersion >= 6 && first.timetableId !== second.timetableId)) throw new Error('Lessons must belong to the same timetable')
   assertNoExistingOverride(data, firstId, firstDate); assertNoExistingOverride(data, secondId, secondDate)
   const firstSlot = resolveProjectDay(data, first.projectId, fromDateKey(firstDate), { timetableId: first.timetableId }).find((item) => item.id === firstId)!
   const secondSlot = resolveProjectDay(data, first.projectId, fromDateKey(secondDate), { timetableId: first.timetableId }).find((item) => item.id === secondId)!
@@ -117,14 +117,14 @@ function prepareSplit(data: AppDataV4, lesson: RecurringLesson, date: string, dr
   const unit = data.teachingUnits.find((item) => item.id === draft.teachingUnitId)
   const school = data.schools.find((item) => item.id === draft.schoolId)
   const schoolClass = data.classes.find((item) => item.id === draft.classId)
-  if (!project || project.archivedAt || draft.projectId !== lesson.projectId || (data.schemaVersion === 6 && draft.timetableId !== lesson.timetableId)) throw new Error('Project or timetable is read-only or cannot be changed')
+  if (!project || project.archivedAt || draft.projectId !== lesson.projectId || (data.schemaVersion >= 6 && draft.timetableId !== lesson.timetableId)) throw new Error('Project or timetable is read-only or cannot be changed')
   if (draft.teachingUnitId !== lesson.teachingUnitId) throw new Error('Permanent changes cannot move a lesson across teaching units')
   if (!unit || unit.projectId !== project.id || school?.id !== unit.schoolId || schoolClass?.teachingUnitId !== unit.id || schoolClass.projectId !== project.id) throw new Error('Permanent change has invalid project references')
   if (!unit.periods.some((item) => item.id === draft.periodId) || !subjectChoiceAllowed(data.subjects.find((item) => item.id === draft.subjectId), unit.schoolLevel, unit.id, lesson)) throw new Error('Permanent change has invalid period or subject')
   if ((!unit.weekCycle.enabled && draft.weekPattern !== 'every') || date < unit.startDate || date > unit.endDate || date < lesson.effectiveStart || (lesson.effectiveEnd && date > lesson.effectiveEnd)) throw new Error('Permanent effective date is invalid')
   const next: RecurringLesson = { ...lesson, id: newId, projectId: draft.projectId, teachingUnitId: draft.teachingUnitId, subjectId: draft.subjectId, classId: draft.classId, day: draft.day, periodId: draft.periodId, weekPattern: draft.weekPattern, effectiveStart: date, effectiveEnd: lesson.effectiveEnd, room: draft.room?.trim() || undefined, origin: 'user' }
   const conflict = data.recurringLessons.some((item) => !excludedIds.has(item.id) && item.projectId === next.projectId && item.teachingUnitId === next.teachingUnitId
-    && (data.schemaVersion !== 6 || item.timetableId === next.timetableId)
+    && (data.schemaVersion < 6 || item.timetableId === next.timetableId)
     && item.day === next.day && item.periodId === next.periodId && weekOverlap(item.weekPattern, next.weekPattern)
     && item.effectiveStart <= (next.effectiveEnd ?? '9999-12-31') && next.effectiveStart <= (item.effectiveEnd ?? '9999-12-31'))
   if (conflict) throw new Error('Permanent change conflicts with another lesson version')
@@ -141,7 +141,7 @@ function applySplits(data: AppDataV4, splits: Array<{ current: RecurringLesson; 
   })
   const overrides = data.overrides.map((item) => {
     const split = splits.find((candidate) => candidate.current.id === item.originalLessonId && item.date >= candidate.date
-      && (data.schemaVersion !== 6 || item.timetableId === candidate.current.timetableId))
+      && (data.schemaVersion < 6 || item.timetableId === candidate.current.timetableId))
     return split ? { ...item, originalLessonId: nextIds.get(split.current.id) } : item
   })
   return validResult({ ...data, recurringLessons: lessons, overrides })
@@ -157,7 +157,7 @@ export function permanentlySwapLessons(data: AppDataV4, firstId: string, secondI
   if (firstId === secondId) throw new Error('Two different lessons are required')
   const first = assertWritableLesson(data, firstId, date, timetableId).lesson
   const second = assertWritableLesson(data, secondId, date, timetableId).lesson
-  if (first.projectId !== second.projectId || (data.schemaVersion === 6 && first.timetableId !== second.timetableId)) throw new Error('Lessons must belong to the same timetable')
+  if (first.projectId !== second.projectId || (data.schemaVersion >= 6 && first.timetableId !== second.timetableId)) throw new Error('Lessons must belong to the same timetable')
   const firstUnit = data.teachingUnits.find((item) => item.id === first.teachingUnitId)!
   const secondUnit = data.teachingUnits.find((item) => item.id === second.teachingUnitId)!
   const firstPeriod = firstUnit.periods.find((item) => item.id === first.periodId)!

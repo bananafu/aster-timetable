@@ -86,7 +86,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
   const fullWeekDays = useMemo(() => weekDays[0]
     ? Array.from({ length: 7 }, (_, index) => addDays(weekDays[0], index - 1)) : [], [weekDays])
   const fullSchedule = useMemo(
-    () => projectId && (data.schemaVersion !== 6 || timetableId)
+    () => projectId && (data.schemaVersion < 6 || timetableId)
       ? resolveProjectWeek(data, projectId, fullWeekDays, scope === 'school'
         ? { timetableId, schoolId, teachingUnitId: unitId === 'all' ? undefined : unitId }
         : { timetableId }) : [],
@@ -106,7 +106,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
   }
 
   if (!projectId) return <div className="cross-school-empty">目前沒有可顯示的課表專案。</div>
-  if (data.schemaVersion === 6 && !timetableId) return <div className="cross-school-empty">請先選擇教師課表。</div>
+  if (data.schemaVersion >= 6 && !timetableId) return <div className="cross-school-empty">請先選擇教師課表。</div>
 
   return <div className="multi-schedule">
     <div className="multi-schedule-toolbar">

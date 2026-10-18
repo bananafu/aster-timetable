@@ -89,12 +89,12 @@ export function resolveProjectDay(
   const subjects = new Map(data.subjects.map((subject) => [subject.id, subject]))
   const classes = new Map(data.classes.filter((item) => item.projectId === projectId).map((item) => [item.id, item]))
   const assignedOverrides = data.overrides.filter((item) => item.projectId === projectId
-    && (data.schemaVersion !== 6 || item.timetableId === timetableId)
+    && (data.schemaVersion < 6 || item.timetableId === timetableId)
     && item.teachingUnitId !== null && unitIds.has(item.teachingUnitId))
   const overrides = assignedOverrides.filter((item) => item.date === dateKey)
 
   const resolved = data.recurringLessons.flatMap<ResolvedLessonV4>((lesson) => {
-    if (lesson.projectId !== projectId || (data.schemaVersion === 6 && lesson.timetableId !== timetableId) || !unitIds.has(lesson.teachingUnitId)
+    if (lesson.projectId !== projectId || (data.schemaVersion >= 6 && lesson.timetableId !== timetableId) || !unitIds.has(lesson.teachingUnitId)
       || dateKey < lesson.effectiveStart || (lesson.effectiveEnd && dateKey > lesson.effectiveEnd)) return []
     const unit = units.find((item) => item.id === lesson.teachingUnitId)
     if (!unit || !lessonAppliesOnDate(dateKey, lesson.day, lesson.weekPattern, unit, date)) return []
@@ -105,7 +105,7 @@ export function resolveProjectDay(
     if (!school || !period || !originalSubject || !originalClass) return []
 
     const activeSlotLessonCount = data.recurringLessons.filter((candidate) => candidate.projectId === projectId
-      && (data.schemaVersion !== 6 || candidate.timetableId === timetableId)
+      && (data.schemaVersion < 6 || candidate.timetableId === timetableId)
       && candidate.teachingUnitId === unit.id && candidate.periodId === lesson.periodId
       && dateKey >= candidate.effectiveStart && (!candidate.effectiveEnd || dateKey <= candidate.effectiveEnd)
       && lessonAppliesOnDate(dateKey, candidate.day, candidate.weekPattern, unit, date)).length
@@ -155,7 +155,7 @@ export function resolveProjectDay(
     const subject = lesson ? subjects.get(lesson.subjectId) : undefined
     const schoolClass = lesson ? classes.get(lesson.classId) : undefined
     const sourceDate = fromDateKey(override.date)
-    if (!lesson || (data.schemaVersion === 6 && lesson.timetableId !== timetableId) || !unit || !school || !period || !subject || !schoolClass
+    if (!lesson || (data.schemaVersion >= 6 && lesson.timetableId !== timetableId) || !unit || !school || !period || !subject || !schoolClass
       || override.date < lesson.effectiveStart || (lesson.effectiveEnd && override.date > lesson.effectiveEnd)
       || !lessonAppliesOnDate(override.date, lesson.day, lesson.weekPattern, unit, sourceDate)) return []
     return [{

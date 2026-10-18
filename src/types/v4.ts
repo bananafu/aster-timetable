@@ -113,6 +113,26 @@ export interface ScheduleOverrideV4 {
   origin?: DataOrigin
 }
 
+export type OneOffLessonTime =
+  | { mode: 'period'; periodId: number; startTime?: never; endTime?: never }
+  | { mode: 'custom'; startTime: string; endTime: string; periodId?: never }
+
+/** A dated lesson independent of recurring series and schedule overrides. */
+export interface OneOffLesson {
+  id: string
+  projectId: string
+  timetableId: string
+  teachingUnitId: string
+  classId: string
+  subjectId: string
+  date: string
+  purpose: 'extra' | 'make-up' | 'substitute'
+  /** Informational only: the original may later be deleted. */
+  relatedRecurringLessonId?: string
+  room?: string
+  time: OneOffLessonTime
+}
+
 export interface MigrationWarningV4 {
   id: string
   entityType: 'class' | 'event' | 'override' | 'lesson'
@@ -121,8 +141,8 @@ export interface MigrationWarningV4 {
 }
 
 export interface AppDataV4 {
-  // Existing runtime operations accept both persisted generations during v5 cutover.
-  schemaVersion: 4 | 5 | 6
+  // Legacy data operations retain a common shape across persisted generations.
+  schemaVersion: 4 | 5 | 6 | 7
   activeProjectId: string | null
   projects: TimetableProject[]
   /** Required in v6; absent from the retained v4/v5 formats. */
@@ -134,11 +154,13 @@ export interface AppDataV4 {
   recurringLessons: RecurringLesson[]
   events: CalendarEventV4[]
   overrides: ScheduleOverrideV4[]
+  /** Required in v7; absent from retained v4–v6 formats. */
+  oneOffLessons?: OneOffLesson[]
   migrationWarnings: MigrationWarningV4[]
 }
 
 export type SubjectV5 = Subject & { applicableSchoolLevels: SchoolLevel[] }
-export type AppDataV5 = Omit<AppDataV4, 'schemaVersion' | 'subjects'> & {
+export type AppDataV5 = Omit<AppDataV4, 'schemaVersion' | 'subjects' | 'oneOffLessons'> & {
   schemaVersion: 5
   subjects: SubjectV5[]
 }
@@ -148,4 +170,9 @@ export type AppDataV6 = Omit<AppDataV5, 'schemaVersion' | 'timetables' | 'recurr
   timetables: Timetable[]
   recurringLessons: (RecurringLesson & { timetableId: string })[]
   overrides: (ScheduleOverrideV4 & { timetableId: string | null })[]
+}
+
+export type AppDataV7 = Omit<AppDataV6, 'schemaVersion' | 'oneOffLessons'> & {
+  schemaVersion: 7
+  oneOffLessons: OneOffLesson[]
 }

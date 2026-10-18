@@ -168,7 +168,7 @@ export default function App() {
     : activeTimetable.teacherNamePending || !activeTimetable.teacherName?.trim()
       ? '目前課表的授課教師姓名尚待補齊。'
       : '')
-  const todaySummary = activeProject && (appData.schemaVersion !== 6 || activeTimetable)
+  const todaySummary = activeProject && (appData.schemaVersion < 6 || activeTimetable)
     ? getTodayTeachingSummaryV4(appData, activeProject.id, now, activeTimetable?.id)
     : { count: 0, state: 'idle' as const }
   const upcomingEvent = getNextUpcomingEvent(data.events, now)
@@ -275,7 +275,7 @@ export default function App() {
         name: details.name,
         teacherName: details.teacherName,
       }, uid)
-      const created = next.timetables.find((item) => !appData.timetables?.some((current) => current.id === item.id))
+      const created = next.timetables?.find((item) => !appData.timetables?.some((current) => current.id === item.id))
       if (!created) throw new Error('Copied timetable was not created')
       setPendingTimetableCopy({ projectId: timetableDialog.projectId, timetableId: created.id, startedRevision: storagePersistence.revision })
       setTimetableError('')
@@ -414,17 +414,20 @@ function AddChoiceDialog({ canAddLesson, addLessonReason, canCreateTimetable, cr
 function StorageSafetyNotice({ status, controls }: { status: StorageStatus; controls: StorageControls }) {
   const [confirmReset, setConfirmReset] = useState(false)
   const isConflict = status === 'conflict'
+  const legacyConflict = isConflict && controls.conflictSource === 'legacy'
   const message = status === 'read-error'
     ? '無法讀取已儲存的資料。原始內容仍保留，系統已暫停寫入。'
     : status === 'write-error'
       ? '資料寫入失敗。請先匯出備份，再檢查瀏覽器儲存空間。'
-      : '其他分頁已更新資料，本分頁仍有尚未寫入的變更。已暫停自動儲存以避免覆寫。'
+      : legacyConflict
+        ? '舊版分頁更新了 v6 資料，本頁已暫停 v7 寫入。請先關閉舊版分頁並匯出核對；兩個版本無法自動合併。'
+        : '其他分頁已更新資料，本分頁仍有尚未寫入的變更。已暫停自動儲存以避免覆寫。'
 
   return <section className="storage-notice" role="alert">
     <div><strong>{isConflict ? '偵測到多分頁資料衝突' : '資料儲存需要處理'}</strong><p>{message}</p></div>
     <div className="storage-notice-actions">
       {controls.rawBackup !== null && <button type="button" onClick={() => downloadRawData(controls.rawBackup!)}>匯出原始 JSON</button>}
-      {isConflict ? <><button type="button" onClick={controls.acceptExternal}>採用其他分頁版本</button><button type="button" className="danger-outline" onClick={controls.keepLocal}>保留本分頁版本</button></> : !confirmReset ? <button type="button" className="danger-outline" onClick={() => setConfirmReset(true)}>重設資料</button> : <div className="reset-confirm"><span>確定重設？原始資料將被取代。</span><button type="button" onClick={() => setConfirmReset(false)}>取消</button><button type="button" className="danger-outline" onClick={() => { controls.reset(); setConfirmReset(false) }}>再次確認重設</button></div>}
+      {isConflict ? <>{!legacyConflict && <button type="button" onClick={controls.acceptExternal}>採用其他分頁版本</button>}<button type="button" className="danger-outline" onClick={controls.keepLocal}>{legacyConflict ? '已核對，保留本頁 v7' : '保留本分頁版本'}</button></> : !confirmReset ? <button type="button" className="danger-outline" onClick={() => setConfirmReset(true)}>重設資料</button> : <div className="reset-confirm"><span>確定重設？原始資料將被取代。</span><button type="button" onClick={() => setConfirmReset(false)}>取消</button><button type="button" className="danger-outline" onClick={() => { controls.reset(); setConfirmReset(false) }}>再次確認重設</button></div>}
     </div>
   </section>
 }

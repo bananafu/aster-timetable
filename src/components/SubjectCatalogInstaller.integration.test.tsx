@@ -2,17 +2,18 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createBlankProject } from '../data/projectRuntime'
-import { APP_DATA_V6_KEY } from '../data/storageV6'
+import { migrateV6ToV7 } from '../data/migrationsV7'
+import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { createInitialAppDataV6, useAppDataV4 } from '../hooks/useAppDataV4'
 import { AcademicSettingsV4 } from './AcademicSettingsV4'
 import { LessonEditor } from './LessonEditor'
 
 function setup() {
   let index = 0
-  return createBlankProject(createInitialAppDataV6(), {
+  return migrateV6ToV7(createBlankProject(createInitialAppDataV6(), {
     name: '教師專案', teacherName: '林老師', academicYear: 115, semester: 'first',
     startDate: '2026-08-31', endDate: '2027-01-20',
-  }, () => `setup-${++index}`, '2026-08-01T00:00:00.000Z')
+  }, () => `setup-${++index}`, '2026-08-01T00:00:00.000Z'))
 }
 
 function Harness({ readOnly = false, showLesson = false, allowMutation = false }: { readOnly?: boolean; showLesson?: boolean; allowMutation?: boolean }) {
@@ -32,13 +33,13 @@ function openPreview() {
 describe('subject catalog settings and storage integration', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(setup()))
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(setup()))
   })
   afterEach(() => {
     cleanup()
     vi.useRealTimers()
     vi.restoreAllMocks()
-    localStorage.removeItem(APP_DATA_V6_KEY)
+    localStorage.removeItem(APP_DATA_V7_KEY)
   })
 
   it('shows an explicit global preview, persists once, then exposes installed Subject IDs to LessonEditor', () => {
@@ -55,7 +56,7 @@ describe('subject catalog settings and storage integration', () => {
     act(() => vi.advanceTimersByTime(200))
     expect(screen.getByTestId('storage-status').textContent).toBe('saved')
     expect(screen.getByText(/已儲存 29 筆預設科目/)).toBeTruthy()
-    const stored = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!)
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)
     expect(stored.subjects).toHaveLength(29)
 
     const input = screen.getByRole('combobox', { name: '課程科目' })
@@ -75,20 +76,20 @@ describe('subject catalog settings and storage integration', () => {
     expect(screen.getByText(/可安全新增 30 筆/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '確認安裝安全項目（30）' }))
     act(() => vi.advanceTimersByTime(200))
-    expect(JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!).subjects.some((subject: { name: string }) => subject.name === '班會')).toBe(true)
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).subjects.some((subject: { name: string }) => subject.name === '班會')).toBe(true)
   })
 
   it('keeps review items visible while installing only safe items', () => {
     const data = setup()
     data.subjects.push({ id: 'legacy-chinese', name: '國文', shortName: '國', color: '#123456', applicableSchoolLevels: ['senior-high'] })
-    localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(data))
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<Harness />)
     openPreview()
     expect(screen.getByText(/需人工確認 1 筆/)).toBeTruthy()
     expect(screen.getByLabelText('科目補齊預覽').textContent).toContain('既有 Subject 名稱符合 catalog 同義名稱')
     fireEvent.click(screen.getByRole('button', { name: '確認安裝安全項目（28）' }))
     act(() => vi.advanceTimersByTime(200))
-    const stored = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!)
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)
     expect(stored.subjects).toHaveLength(29)
     expect(stored.subjects.find((subject: { id: string }) => subject.id === 'legacy-chinese')).toMatchObject({ name: '國文', color: '#123456' })
     expect(stored.subjects.some((subject: { name: string }) => subject.name === '國語文')).toBe(false)
@@ -101,11 +102,11 @@ describe('subject catalog settings and storage integration', () => {
     act(() => vi.advanceTimersByTime(200))
     fireEvent.click(screen.getByRole('button', { name: '確認安裝安全項目（29）' }))
     expect(screen.getByText(/科目庫或專案資料已變更，請重新預覽/)).toBeTruthy()
-    expect(JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!).subjects).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).subjects).toHaveLength(1)
   })
 
   it('reports storage write failure without claiming success', () => {
-    const original = localStorage.getItem(APP_DATA_V6_KEY)
+    const original = localStorage.getItem(APP_DATA_V7_KEY)
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota exceeded') })
     render(<Harness />)
     openPreview()
@@ -114,22 +115,22 @@ describe('subject catalog settings and storage integration', () => {
     expect(screen.getByTestId('storage-status').textContent).toBe('write-error')
     expect(screen.getByText(/科目補齊寫入失敗/)).toBeTruthy()
     expect(screen.queryByText(/已儲存 29 筆/)).toBeNull()
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(original)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(original)
   })
 
   it('reports cross-tab conflicts and does not overwrite the external version', () => {
-    const original = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!)
+    const original = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)
     render(<Harness />)
     openPreview()
     fireEvent.click(screen.getByRole('button', { name: '確認安裝安全項目（29）' }))
     const external = { ...original, projects: original.projects.map((project: { name: string }) => ({ ...project, name: '其他分頁' })) }
     const externalRaw = JSON.stringify(external)
-    localStorage.setItem(APP_DATA_V6_KEY, externalRaw)
-    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V6_KEY, newValue: externalRaw, storageArea: localStorage })))
+    localStorage.setItem(APP_DATA_V7_KEY, externalRaw)
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, newValue: externalRaw, storageArea: localStorage })))
     act(() => vi.advanceTimersByTime(200))
     expect(screen.getByTestId('storage-status').textContent).toBe('conflict')
     expect(screen.getByText(/跨分頁資料衝突；本次補齊未確認儲存/)).toBeTruthy()
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(externalRaw)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(externalRaw)
   })
 
   it('blocks installation from an archived view', () => {

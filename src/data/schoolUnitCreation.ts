@@ -2,6 +2,7 @@ import { SCHOOL_LEVELS, type AppDataV4, type SchoolLevel, type SchoolPeriod, typ
 import { isSafeAppDataV4Update } from './validators/v4'
 import { isSafeAppDataV5Update } from './validators/v5'
 import { isSafeAppDataV6Update } from './validators/v6'
+import { isSafeAppDataV7Update } from './validators/v7'
 import { addSchool, addTeachingUnit, type SchoolDraft } from './academicSettingsV4'
 
 export interface SchoolUnitCreationContext {
@@ -58,7 +59,8 @@ function unitDraft(input: NewTeachingUnitInput) {
 }
 
 function assertSafeUpdate(current: AppDataV4, next: AppDataV4) {
-  const safe = current.schemaVersion === 6 ? isSafeAppDataV6Update(current, next)
+  const safe = current.schemaVersion === 7 ? isSafeAppDataV7Update(current, next)
+    : current.schemaVersion === 6 ? isSafeAppDataV6Update(current, next)
     : current.schemaVersion === 5 ? isSafeAppDataV5Update(current, next)
       : isSafeAppDataV4Update(current, next)
   if (!safe) throw new Error('學校與學制資料未通過安全驗證，未寫入任何資料。')

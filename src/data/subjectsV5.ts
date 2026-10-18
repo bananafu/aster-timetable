@@ -4,6 +4,7 @@ import { normalizeSubjectText } from '../lib/subjectSearch'
 import { isSafeAppDataV4Update } from './validators/v4'
 import { isSafeAppDataV5Update } from './validators/v5'
 import { isSafeAppDataV6Update } from './validators/v6'
+import { isSafeAppDataV7Update } from './validators/v7'
 
 export interface SubjectDraft {
   name: string
@@ -61,7 +62,8 @@ function assertUnique(data: AppDataV4, draft: SubjectDraft, exceptId?: string, c
 }
 
 function assertResult(current: AppDataV4, next: AppDataV4): AppDataV4 {
-  const safe = current.schemaVersion === 6 ? isSafeAppDataV6Update(current, next)
+  const safe = current.schemaVersion === 7 ? isSafeAppDataV7Update(current, next)
+    : current.schemaVersion === 6 ? isSafeAppDataV6Update(current, next)
     : current.schemaVersion === 5 ? isSafeAppDataV5Update(current, next) : isSafeAppDataV4Update(current, next)
   if (!safe) fail('科目變更未通過資料驗證。')
   return next

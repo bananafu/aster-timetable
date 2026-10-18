@@ -6,9 +6,11 @@ import { addSchool } from '../data/academicSettingsV4'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { APP_DATA_V1_KEY, APP_DATA_V3_KEY, APP_DATA_V4_KEY } from '../data/storageV4'
 import { APP_DATA_V6_KEY } from '../data/storageV6'
+import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { APP_DATA_V5_KEY } from '../data/storageV5'
 import { migrateV4ToV5 } from '../data/migrationsV5'
 import { migrateV5ToV6 } from '../data/migrationsV6'
+import { migrateV6ToV7 } from '../data/migrationsV7'
 import { useAppDataV4 } from './useAppDataV4'
 import { AcademicSettingsV4 } from '../components/AcademicSettingsV4'
 
@@ -35,6 +37,7 @@ function SettingsHarness() {
 }
 
 function removeAppKeys() {
+  localStorage.removeItem(APP_DATA_V7_KEY)
   localStorage.removeItem(APP_DATA_V6_KEY)
   localStorage.removeItem(APP_DATA_V5_KEY)
   localStorage.removeItem(APP_DATA_V4_KEY)
@@ -42,13 +45,15 @@ function removeAppKeys() {
   localStorage.removeItem(APP_DATA_V1_KEY)
 }
 
+const migrateV5ToV7 = (source: Parameters<typeof migrateV5ToV6>[0]) => migrateV6ToV7(migrateV5ToV6(source))
+
 describe('useAppDataV4 runtime integration', () => {
   beforeEach(() => { vi.useFakeTimers(); removeAppKeys() })
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); removeAppKeys() })
 
   it('同一份 AppData 的 no-op updater 不啟動寫入', () => {
-    const current = migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData))))
-    localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(current))
+    const current = migrateV5ToV7(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData))))
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(current))
     const write = vi.spyOn(Storage.prototype, 'setItem')
     render(<Harness />)
     fireEvent.click(screen.getByText('no-op update'))
@@ -63,7 +68,7 @@ describe('useAppDataV4 runtime integration', () => {
     const first = render(<Harness />)
     expect(screen.getByTestId('status').textContent).toBe('saved')
     act(() => vi.advanceTimersByTime(200))
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).not.toBeNull()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).not.toBeNull()
     expect(localStorage.getItem(APP_DATA_V3_KEY)).toBe(rawV3)
     first.unmount()
     render(<Harness />)
@@ -80,7 +85,7 @@ describe('useAppDataV4 runtime integration', () => {
     first.unmount()
     render(<Harness />)
     expect(screen.getByTestId('school-count').textContent).toBe('2')
-    expect(JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!).schools.some((item: { id: string }) => item.id === 'persisted-school')).toBe(true)
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).schools.some((item: { id: string }) => item.id === 'persisted-school')).toBe(true)
   })
 
   it('runtime 從實際 LocalStorage 載入可修正的舊時間且不自動覆寫', () => {
@@ -93,7 +98,7 @@ describe('useAppDataV4 runtime integration', () => {
     expect(screen.getByTestId('first-period').textContent).toBe(`${period.id}:08:03-08:58`)
     act(() => vi.advanceTimersByTime(500))
     expect(localStorage.getItem(APP_DATA_V4_KEY)).toBe(raw)
-    expect(JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!).teachingUnits[0].periods[0]).toMatchObject({ startTime: '08:03', endTime: '08:58' })
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).teachingUnits[0].periods[0]).toMatchObject({ startTime: '08:03', endTime: '08:58' })
   })
 
   it('從實際 LocalStorage 載入舊時間後可進入設定頁查看原值與警告', () => {
@@ -114,21 +119,21 @@ describe('useAppDataV4 runtime integration', () => {
     fireEvent.click(screen.getByText('add invalid period'))
     expect(screen.getByTestId('status').textContent).toBe('write-error')
     act(() => vi.advanceTimersByTime(500))
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBeNull()
     expect(localStorage.getItem(APP_DATA_V4_KEY)).toBe(raw)
     fireEvent.click(screen.getByText('change valid period invalid'))
     act(() => vi.advanceTimersByTime(500))
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBeNull()
     expect(localStorage.getItem(APP_DATA_V4_KEY)).toBe(raw)
   })
 
   it('外部分頁不得把新產生的非五分鐘時間同步為 legacy', () => {
-    const original = migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))); const originalRaw = JSON.stringify(original)
-    localStorage.setItem(APP_DATA_V6_KEY, originalRaw)
+    const original = migrateV5ToV7(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))); const originalRaw = JSON.stringify(original)
+    localStorage.setItem(APP_DATA_V7_KEY, originalRaw)
     render(<Harness />)
     const external = structuredClone(original); external.teachingUnits[0].periods[0].startTime = '08:03'
     const externalRaw = JSON.stringify(external)
-    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V6_KEY, oldValue: originalRaw, newValue: externalRaw, storageArea: localStorage })))
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue: originalRaw, newValue: externalRaw, storageArea: localStorage })))
     expect(screen.getByTestId('status').textContent).toBe('read-error')
     expect(screen.getByTestId('first-period').textContent).not.toContain('08:03')
   })
@@ -140,7 +145,7 @@ describe('useAppDataV4 runtime integration', () => {
     fireEvent.click(screen.getByText('rename'))
     act(() => vi.advanceTimersByTime(500))
     expect(screen.getByTestId('status').textContent).toBe('saved')
-    const stored = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!)
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)
     expect(stored.projects[0].name).toBe('本頁版本')
     expect(stored.teachingUnits[0].periods[0]).toMatchObject({ startTime: '08:03', endTime: '08:58' })
   })
@@ -151,7 +156,7 @@ describe('useAppDataV4 runtime integration', () => {
     render(<Harness />)
     act(() => vi.advanceTimersByTime(500))
     expect(screen.getByTestId('status').textContent).toBe('read-error')
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBeNull()
     expect(localStorage.getItem(APP_DATA_V3_KEY)).toBe('{broken-v3')
     expect(setItem).not.toHaveBeenCalled()
   })
@@ -178,23 +183,23 @@ describe('useAppDataV4 runtime integration', () => {
     act(() => vi.advanceTimersByTime(200))
     expect(screen.getByTestId('status').textContent).toBe('write-error')
     expect(screen.getByTestId('backup').textContent).toBe(rawV3)
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBeNull()
     expect(localStorage.getItem(APP_DATA_V3_KEY)).toBe(rawV3)
   })
 
   it('跨分頁有本地待寫入內容時進入 conflict，確認前不覆寫外部 v4', () => {
-    const original = migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(initialData)))
-    localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(original))
+    const original = migrateV5ToV7(migrateV4ToV5(migrateV3ToV4(initialData)))
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(original))
     render(<Harness />)
     fireEvent.click(screen.getByText('rename'))
     const external = structuredClone(original)
     external.projects[0].name = '外部分頁版本'
     const externalRaw = JSON.stringify(external)
-    localStorage.setItem(APP_DATA_V6_KEY, externalRaw)
-    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V6_KEY, oldValue: JSON.stringify(original), newValue: externalRaw, storageArea: localStorage })))
+    localStorage.setItem(APP_DATA_V7_KEY, externalRaw)
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue: JSON.stringify(original), newValue: externalRaw, storageArea: localStorage })))
     act(() => vi.advanceTimersByTime(500))
     expect(screen.getByTestId('status').textContent).toBe('conflict')
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(externalRaw)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(externalRaw)
     fireEvent.click(screen.getByText('accept'))
     expect(screen.getByTestId('name').textContent).toBe('外部分頁版本')
     expect(screen.getByTestId('status').textContent).toBe('saved')
@@ -204,13 +209,13 @@ describe('useAppDataV4 runtime integration', () => {
     const rawV4 = JSON.stringify(migrateV3ToV4(initialData))
     localStorage.setItem(APP_DATA_V4_KEY, rawV4)
     render(<Harness />)
-    const external = migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(initialData)))
+    const external = migrateV5ToV7(migrateV4ToV5(migrateV3ToV4(initialData)))
     external.projects[0].name = '另一分頁'
     const externalRaw = JSON.stringify(external)
-    localStorage.setItem(APP_DATA_V6_KEY, externalRaw)
+    localStorage.setItem(APP_DATA_V7_KEY, externalRaw)
     act(() => vi.advanceTimersByTime(500))
     expect(screen.getByTestId('status').textContent).toBe('conflict')
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(externalRaw)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(externalRaw)
     expect(localStorage.getItem(APP_DATA_V4_KEY)).toBe(rawV4)
   })
 })

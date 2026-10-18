@@ -101,7 +101,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
     (subjectId === lesson.subjectId || (mode === 'replace' && subjectId === previousReplacement?.subjectId)))
   const classes = data.classes.filter((item) => item.projectId === projectId && item.teachingUnitId === teachingUnitId)
   const periods = [...(unit?.periods ?? [])].sort((left, right) => left.order - right.order)
-  const safeLesson = lesson && (data.schemaVersion !== 6 || lesson.timetableId === timetableId)
+  const safeLesson = lesson && (data.schemaVersion < 6 || lesson.timetableId === timetableId)
   const occurrence = safeLesson && occurrenceDate ? resolveProjectDay(data, lesson.projectId, fromDateKey(occurrenceDate), { timetableId })
     .find((item) => item.id === lesson.id && (occurrenceOverrideId == null || item.overrideId === occurrenceOverrideId)) : undefined
   const activeOverride = occurrence?.overrideId ? data.overrides.find((item) => item.id === occurrence.overrideId) : undefined
@@ -149,7 +149,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
 
   const buildChange = () => {
     if (!lesson) throw new Error('Lesson does not exist')
-    if (data.schemaVersion === 6 && lesson.timetableId !== timetableId) throw new Error('Lesson does not belong to the selected timetable')
+    if (data.schemaVersion >= 6 && lesson.timetableId !== timetableId) throw new Error('Lesson does not belong to the selected timetable')
     if (dragIntent && (dragIntent.projectId !== lesson.projectId || (dragIntent.timetableId ?? undefined) !== timetableId || dragIntent.lessonId !== lesson.id)) throw new Error('Drag intent does not belong to the selected timetable')
     const original = `${changeDate}・${dayLabel[lesson.day]}・${lessonPeriod?.label ?? lesson.periodId} ${lessonPeriod?.startTime ?? ''}–${lessonPeriod?.endTime ?? ''}`
     if (mode === 'cancel') return { data: cancelLessonOnDate(changeBase, lesson.id, changeDate, uid, timetableId), summary: '僅取消指定日期', details: [`原位置：${original}`, '其他日期與固定版本不變'], warnings: [] }
@@ -200,8 +200,8 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
   const submit = (event: FormEvent) => {
     event.preventDefault(); setError('')
     try {
-      if (data.schemaVersion === 6 && (!timetableId || !data.timetables?.some((item) => item.id === timetableId && item.projectId === projectId))) throw new Error('請先選擇教師課表。')
-      if (lesson && (lesson.projectId !== projectId || (data.schemaVersion === 6 && lesson.timetableId !== timetableId))) throw new Error('Lesson does not belong to the selected timetable')
+      if (data.schemaVersion >= 6 && (!timetableId || !data.timetables?.some((item) => item.id === timetableId && item.projectId === projectId))) throw new Error('請先選擇教師課表。')
+      if (lesson && (lesson.projectId !== projectId || (data.schemaVersion >= 6 && lesson.timetableId !== timetableId))) throw new Error('Lesson does not belong to the selected timetable')
       if (!lesson || mode === 'basic') {
         if (!unit) throw new Error('請先選擇學校中的學制。')
         if (!selectedSubjectValid && !preservedLegacySubject) throw new Error('請先選擇有效科目。')
@@ -215,7 +215,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
   }
   const confirmChange = () => {
     if (!preview) return
-    if (preview.source !== data || (data.schemaVersion === 6 && (!timetableId || !data.timetables?.some((item) => item.id === timetableId && item.projectId === projectId) || lesson?.timetableId !== timetableId))) {
+    if (preview.source !== data || (data.schemaVersion >= 6 && (!timetableId || !data.timetables?.some((item) => item.id === timetableId && item.projectId === projectId) || lesson?.timetableId !== timetableId))) {
       setPreview(null); setError('課表或資料已變更，請重新預覽異動。'); return
     }
     setData(preview.data); onSaved(projectId); onClose()

@@ -3,17 +3,18 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createBlankProject } from '../data/projectRuntime'
 import { addTeachingUnitToSchool } from '../data/schoolUnitCreation'
-import { APP_DATA_V6_KEY } from '../data/storageV6'
+import { migrateV6ToV7 } from '../data/migrationsV7'
+import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { createInitialAppDataV6, useAppDataV4 } from '../hooks/useAppDataV4'
 import type { AppDataV4, SchoolLevel } from '../types'
 import { AcademicSettingsV4 } from './AcademicSettingsV4'
 
 function setup() {
   let index = 0
-  return createBlankProject(createInitialAppDataV6(), {
+  return migrateV6ToV7(createBlankProject(createInitialAppDataV6(), {
     name: '教師專案', teacherName: '林老師', academicYear: 115, semester: 'first',
     startDate: '2026-08-31', endDate: '2027-01-20',
-  }, () => `setup-${++index}`, '2026-08-01T00:00:00.000Z')
+  }, () => `setup-${++index}`, '2026-08-01T00:00:00.000Z'))
 }
 
 function Harness({ readOnly = false }: { readOnly?: boolean }) {
@@ -42,11 +43,11 @@ function fillExistingUnit(level: SchoolLevel) {
 }
 
 describe('integrated school and teaching-unit creation UI', () => {
-  beforeEach(() => { vi.useFakeTimers(); localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(setup())) })
-  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); localStorage.removeItem(APP_DATA_V6_KEY) })
+  beforeEach(() => { vi.useFakeTimers(); localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(setup())) })
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); localStorage.removeItem(APP_DATA_V7_KEY) })
 
   it.each([['junior-high', 45], ['senior-high', 50]] as const)('creates a new school and %s in one save with %i-minute periods', (level, duration) => {
-    const original = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!) as AppDataV4
+    const original = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV4
     const write = vi.spyOn(Storage.prototype, 'setItem')
     render(<Harness />)
     fillNewSchool(level)
@@ -61,7 +62,7 @@ describe('integrated school and teaching-unit creation UI', () => {
     expect(write).toHaveBeenCalledTimes(1)
     expect(screen.getByText(`已建立「第二學校・${level === 'junior-high' ? '國中部' : '高中部'}」，可在上方卡片查看並編輯。`)).toBeTruthy()
     expect(screen.queryByLabelText('新學校名稱')).toBeNull()
-    const stored = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!) as AppDataV4
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV4
     const school = stored.schools.find((item) => item.name === '第二學校')!
     const unit = stored.teachingUnits.find((item) => item.schoolId === school.id)!
     expect(school.color).toBe('#345678')
@@ -83,18 +84,18 @@ describe('integrated school and teaching-unit creation UI', () => {
     expect(screen.getByText(/沿用既有其他學制設定/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '建立學校與學制' }))
     act(() => vi.advanceTimersByTime(200))
-    const stored = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!) as AppDataV4
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV4
     expect(stored.teachingUnits.at(-1)).toMatchObject({ schoolLevel: 'other', name: '實驗課程' })
     expect(screen.queryByLabelText('預設科目引導')).toBeNull()
   })
 
   it('adds another level to an existing school without changing its identity or other data', () => {
-    const original = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!) as AppDataV4
+    const original = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV4
     render(<Harness />)
     fillExistingUnit('junior-high')
     fireEvent.click(screen.getByRole('button', { name: '新增學制設定' }))
     act(() => vi.advanceTimersByTime(200))
-    const stored = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!) as AppDataV4
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV4
     expect(stored.schools).toEqual(original.schools)
     expect(stored.teachingUnits[0]).toEqual(original.teachingUnits[0])
     expect(stored.teachingUnits.at(-1)).toMatchObject({ schoolId: original.schools[0].id, schoolLevel: 'junior-high' })
@@ -104,7 +105,7 @@ describe('integrated school and teaching-unit creation UI', () => {
   })
 
   it('keeps the form and data unchanged for a duplicate school level', () => {
-    const originalRaw = localStorage.getItem(APP_DATA_V6_KEY)!
+    const originalRaw = localStorage.getItem(APP_DATA_V7_KEY)!
     const write = vi.spyOn(Storage.prototype, 'setItem')
     render(<Harness />)
     fillExistingUnit('senior-high')
@@ -112,13 +113,13 @@ describe('integrated school and teaching-unit creation UI', () => {
     expect(screen.getByRole('alert').textContent).toContain('同一學校不可重複建立相同學制')
     expect((screen.getByLabelText('新學制起始日') as HTMLInputElement).value).toBe('2027-02-01')
     act(() => vi.advanceTimersByTime(200))
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(originalRaw)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(originalRaw)
     expect(write).not.toHaveBeenCalled()
     expect(screen.queryByLabelText('預設科目引導')).toBeNull()
   })
 
   it('revalidates a school-level choice after another tab updates the school', () => {
-    const originalRaw = localStorage.getItem(APP_DATA_V6_KEY)!
+    const originalRaw = localStorage.getItem(APP_DATA_V7_KEY)!
     const current = JSON.parse(originalRaw) as AppDataV4
     const external = addTeachingUnitToSchool(current, { projectId: current.activeProjectId!, readOnly: false }, current.schools[0].id, {
       schoolLevel: 'junior-high', startDate: '2027-02-01', endDate: '2027-06-30',
@@ -126,17 +127,17 @@ describe('integrated school and teaching-unit creation UI', () => {
     const externalRaw = JSON.stringify(external)
     render(<Harness />)
     fillExistingUnit('junior-high')
-    localStorage.setItem(APP_DATA_V6_KEY, externalRaw)
-    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V6_KEY, oldValue: originalRaw, newValue: externalRaw, storageArea: localStorage })))
+    localStorage.setItem(APP_DATA_V7_KEY, externalRaw)
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue: originalRaw, newValue: externalRaw, storageArea: localStorage })))
     fireEvent.click(screen.getByRole('button', { name: '新增學制設定' }))
     expect(screen.getByRole('alert').textContent).toContain('同一學校不可重複建立相同學制')
     expect(screen.getByTestId('unit-count').textContent).toBe('2')
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(externalRaw)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(externalRaw)
     expect((screen.getByLabelText('新學制起始日') as HTMLInputElement).value).toBe('2027-02-01')
   })
 
   it('blocks duplicate submission while pending and retains input after a storage write failure', () => {
-    const originalRaw = localStorage.getItem(APP_DATA_V6_KEY)!
+    const originalRaw = localStorage.getItem(APP_DATA_V7_KEY)!
     const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota exceeded') })
     render(<Harness />)
     fillNewSchool('junior-high')
@@ -149,24 +150,24 @@ describe('integrated school and teaching-unit creation UI', () => {
     expect(screen.getByTestId('storage-status').textContent).toBe('write-error')
     expect(screen.getByRole('alert').textContent).toContain('寫入失敗')
     expect((screen.getByLabelText('新學校名稱') as HTMLInputElement).value).toBe('第二學校')
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(originalRaw)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(originalRaw)
     expect(screen.queryByLabelText('預設科目引導')).toBeNull()
   })
 
   it('does not overwrite an external tab or claim success on conflict', () => {
-    const originalRaw = localStorage.getItem(APP_DATA_V6_KEY)!
+    const originalRaw = localStorage.getItem(APP_DATA_V7_KEY)!
     const external = JSON.parse(originalRaw) as AppDataV4
     external.projects[0].name = '外部分頁版本'
     const externalRaw = JSON.stringify(external)
     render(<Harness />)
     fillNewSchool('junior-high')
     fireEvent.click(screen.getByRole('button', { name: '建立學校與學制' }))
-    localStorage.setItem(APP_DATA_V6_KEY, externalRaw)
-    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V6_KEY, oldValue: originalRaw, newValue: externalRaw, storageArea: localStorage })))
+    localStorage.setItem(APP_DATA_V7_KEY, externalRaw)
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue: originalRaw, newValue: externalRaw, storageArea: localStorage })))
     act(() => vi.advanceTimersByTime(200))
     expect(screen.getByTestId('storage-status').textContent).toBe('conflict')
     expect(screen.getByRole('alert').textContent).toContain('未確認儲存')
-    expect(localStorage.getItem(APP_DATA_V6_KEY)).toBe(externalRaw)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(externalRaw)
     expect((screen.getByLabelText('新學校名稱') as HTMLInputElement).value).toBe('第二學校')
     expect(screen.queryByLabelText('預設科目引導')).toBeNull()
   })

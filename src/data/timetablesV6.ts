@@ -1,5 +1,8 @@
-import type { AppDataV4, AppDataV6, Timetable } from '../types'
+import type { AppDataV4, AppDataV6, AppDataV7, Timetable } from '../types'
 import { isCompatibleAppDataV6, isSafeAppDataV6Update } from './validators/v6'
+import { isCompatibleAppDataV7, isSafeAppDataV7Update } from './validators/v7'
+
+type TimetableData = AppDataV6 | AppDataV7
 
 export interface TimetableDetails {
   name: string
@@ -20,29 +23,31 @@ function isDateKey(value: string): boolean {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
-function writableProject(data: AppDataV4, projectId: string): asserts data is AppDataV6 {
-  if (!isCompatibleAppDataV6(data)) throw new Error('Valid v6 data is required')
+function writableProject(data: AppDataV4, projectId: string): asserts data is TimetableData {
+  if (!isCompatibleAppDataV6(data) && !isCompatibleAppDataV7(data)) throw new Error('Valid v6 data is required')
   const project = data.projects.find((item) => item.id === projectId)
   if (!project || project.archivedAt) throw new Error('Archived or missing projects are read-only')
 }
 
-function validResult(current: AppDataV6, next: AppDataV6): AppDataV6 {
-  if (!isSafeAppDataV6Update(current, next)) throw new Error('Timetable operation produced invalid AppData')
+function validResult<T extends TimetableData>(current: T, next: T): T {
+  if (!(current.schemaVersion === 7 ? isSafeAppDataV7Update(current, next) : isSafeAppDataV6Update(current, next))) {
+    throw new Error('Timetable operation produced invalid AppData')
+  }
   return next
 }
 
-export function createTimetable(data: AppDataV4, projectId: string, details: TimetableDetails, id: string): AppDataV6 {
+export function createTimetable<T extends AppDataV4>(data: T, projectId: string, details: TimetableDetails, id: string): T {
   writableProject(data, projectId)
   const name = details.name.trim()
   const teacherName = details.teacherName?.trim()
   if (!id.trim() || data.timetables.some((item) => item.id === id)) throw new Error('Timetable ID must be unique')
   if (!name || !teacherName) throw new Error('Timetable name and teacher name are required')
   const timetable: Timetable = { id, projectId, name, teacherName }
-  return validResult(data, { ...data, timetables: [...data.timetables, timetable] })
+  return validResult(data, { ...data, timetables: [...data.timetables, timetable] }) as T
 }
 
 /** Copy versions effective on baseDate across the whole weekly timetable. */
-export function copyTimetable(data: AppDataV4, input: CopyTimetableInput, createId: () => string): AppDataV6 {
+export function copyTimetable<T extends AppDataV4>(data: T, input: CopyTimetableInput, createId: () => string): T {
   writableProject(data, input.projectId)
   const source = data.timetables.find((item) => item.id === input.sourceTimetableId)
   if (!source || source.projectId !== input.projectId) throw new Error('Source timetable does not belong to the project')
@@ -64,6 +69,7 @@ export function copyTimetable(data: AppDataV4, input: CopyTimetableInput, create
     ...data.events.map((item) => item.id),
     ...data.overrides.map((item) => item.id),
     ...data.migrationWarnings.map((item) => item.id),
+    ...(data.schemaVersion === 7 ? data.oneOffLessons.map((item) => item.id) : []),
   ])
   const nextId = () => {
     const id = createId()
@@ -100,11 +106,11 @@ export function copyTimetable(data: AppDataV4, input: CopyTimetableInput, create
     ...data,
     timetables: [...data.timetables, timetable],
     recurringLessons: [...data.recurringLessons, ...copiedLessons],
-  })
+  }) as T
 }
 
-export function updateTimetable(data: AppDataV4, timetableId: string, details: TimetableDetails): AppDataV6 {
-  if (!isCompatibleAppDataV6(data)) throw new Error('Valid v6 data is required')
+export function updateTimetable<T extends AppDataV4>(data: T, timetableId: string, details: TimetableDetails): T {
+  if (!isCompatibleAppDataV6(data) && !isCompatibleAppDataV7(data)) throw new Error('Valid v6 data is required')
   const existing = data.timetables.find((item) => item.id === timetableId)
   if (!existing) throw new Error('Timetable does not exist')
   writableProject(data, existing.projectId)
@@ -115,5 +121,5 @@ export function updateTimetable(data: AppDataV4, timetableId: string, details: T
   const updated: Timetable = teacherName
     ? { ...existing, name, teacherName, teacherNamePending: undefined }
     : { ...existing, name, teacherName: null, teacherNamePending: true }
-  return validResult(data, { ...data, timetables: data.timetables.map((item) => item.id === timetableId ? updated : item) })
+  return validResult(data, { ...data, timetables: data.timetables.map((item) => item.id === timetableId ? updated : item) }) as T
 }

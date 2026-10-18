@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { addSchool } from '../data/academicSettingsV4'
 import { createBlankProject } from '../data/projectRuntime'
 import { installSafeSubjectCatalog, previewSubjectCatalogInstall } from '../data/subjectCatalogInstall'
-import { APP_DATA_V6_KEY } from '../data/storageV6'
+import { migrateV6ToV7 } from '../data/migrationsV7'
+import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { createInitialAppDataV6, useAppDataV4 } from '../hooks/useAppDataV4'
 import type { AppDataV4, SchoolLevel } from '../types'
 import { AcademicSettingsV4 } from './AcademicSettingsV4'
@@ -134,7 +135,7 @@ describe('new TeachingUnit subject onboarding', () => {
 
   it('uses the persisted installer transaction and exposes the new Subject ID to LessonEditor', () => {
     vi.useFakeTimers()
-    localStorage.setItem(APP_DATA_V6_KEY, JSON.stringify(setup()))
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(migrateV6ToV7(setup())))
     render(<StoredHarness />)
     createUnit('junior-high')
     act(() => vi.advanceTimersByTime(200))
@@ -143,7 +144,7 @@ describe('new TeachingUnit subject onboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: /確認安裝安全項目/ }))
     act(() => vi.advanceTimersByTime(200))
     expect(screen.getByTestId('storage-status').textContent).toBe('saved')
-    const stored = JSON.parse(localStorage.getItem(APP_DATA_V6_KEY)!) as AppDataV4
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV4
     const physicalScience = stored.subjects.find((subject) => subject.name === '理化')!
     expect(physicalScience.id).toBeTruthy()
     expect(stored.subjects.some((subject) => subject.name === '班會')).toBe(false)

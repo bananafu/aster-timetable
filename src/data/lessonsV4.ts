@@ -44,7 +44,7 @@ function validateDraft(data: AppDataV4, draft: LessonDraftV4, previous?: Recurri
 function assertNoConflict(data: AppDataV4, candidate: RecurringLesson, excludedId?: string) {
   const conflict = data.recurringLessons.find((item) => item.id !== excludedId
     && item.projectId === candidate.projectId && item.teachingUnitId === candidate.teachingUnitId
-    && (data.schemaVersion !== 6 || item.timetableId === candidate.timetableId)
+    && (data.schemaVersion < 6 || item.timetableId === candidate.timetableId)
     && item.day === candidate.day && item.periodId === candidate.periodId
     && weekPatternsOverlap(item.weekPattern, candidate.weekPattern) && rangesOverlap(item, candidate))
   if (conflict) throw new Error('A conflicting recurring lesson already exists')

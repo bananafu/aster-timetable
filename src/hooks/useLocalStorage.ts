@@ -8,10 +8,13 @@ interface LocalStorageOptions<T> {
   validateUpdate?: (current: T, next: T) => boolean
   legacy?: { key: string; validate: (value: unknown) => boolean; migrate: (value: unknown) => T }
   loader?: (storage: Pick<Storage, 'getItem'>, key: string, initialValue: T) => StorageLoadResult<T>
+  /** Observe an older schema key without writing to it. */
+  legacyGuardKey?: string
 }
 
 export interface StorageControls {
   rawBackup: string | null
+  conflictSource: 'current' | 'legacy' | null
   acceptExternal: () => void
   keepLocal: () => void
   reset: () => void
@@ -30,6 +33,7 @@ export interface StorageLoadResult<T> {
   raw: string | null
   rawBackup?: string | null
   shouldPersist: boolean
+  legacyGuardRaw?: string | null
 }
 
 function parseValue<T>(raw: string, options: LocalStorageOptions<T>): T {
@@ -87,6 +91,8 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
   const blockedRef = useRef(initialLoad.status !== 'saved')
   const lastStoredRawRef = useRef<string | null>(initialLoad.raw)
   const externalRawRef = useRef<string | null>(null)
+  const legacyGuardRawRef = useRef<string | null>(initialLoad.legacyGuardRaw ?? null)
+  const legacyConflictRef = useRef(false)
   const valueRef = useRef(value)
   const validateRef = useRef(options.validate)
   const validateUpdateRef = useRef(options.validateUpdate)
@@ -141,6 +147,13 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
           setStatus('conflict')
           return
         }
+        if (options.legacyGuardKey && localStorage.getItem(options.legacyGuardKey) !== legacyGuardRawRef.current) {
+          legacyConflictRef.current = true
+          blockedRef.current = true
+          setRawBackup(localStorage.getItem(options.legacyGuardKey))
+          setStatus('conflict')
+          return
+        }
         const raw = JSON.stringify(value)
         localStorage.setItem(key, raw)
         lastStoredRawRef.current = raw
@@ -156,11 +169,23 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
       }
     }, 150)
     return () => window.clearTimeout(timer)
-  }, [key, value])
+  }, [key, options.legacyGuardKey, value])
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
+      if (options.legacyGuardKey && event.key === options.legacyGuardKey) {
+        if (event.newValue === legacyGuardRawRef.current) return
+        legacyConflictRef.current = true
+        blockedRef.current = true
+        setRawBackup(event.newValue)
+        setStatus('conflict')
+        return
+      }
       if (event.key !== key) return
+      if (legacyConflictRef.current) {
+        externalRawRef.current = event.newValue
+        return
+      }
       const decision = getExternalUpdateDecision(pendingRef.current, lastStoredRawRef.current, event.newValue)
       if (decision === 'ignore') return
       if (decision === 'conflict') {
@@ -181,11 +206,14 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
     }
     window.addEventListener('storage', handleStorage)
     return () => window.removeEventListener('storage', handleStorage)
-  }, [applyRaw, key])
+  }, [applyRaw, key, options.legacyGuardKey])
 
   const controls: StorageControls = {
     rawBackup,
+    conflictSource: status === 'conflict' ? (legacyConflictRef.current ? 'legacy' : 'current') : null,
     acceptExternal: () => {
+      // A v6 write cannot safely be applied over a v7 document containing one-offs.
+      if (legacyConflictRef.current) return
       try {
         applyRaw(externalRawRef.current)
       } catch {
@@ -198,11 +226,13 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
         if (options.validateUpdate && !options.validateUpdate(pendingBaseRef.current, valueRef.current)) throw new Error('Unsafe pending data update')
         const raw = JSON.stringify(valueRef.current)
         localStorage.setItem(key, raw)
+        if (options.legacyGuardKey) legacyGuardRawRef.current = localStorage.getItem(options.legacyGuardKey)
         lastStoredRawRef.current = raw
         pendingRef.current = false
         pendingBaseRef.current = valueRef.current
         setPersistence((currentPersistence) => ({ pending: false, revision: currentPersistence.revision + 1 }))
         blockedRef.current = false
+        legacyConflictRef.current = false
         externalRawRef.current = null
         setRawBackup(null)
         setStatus('saved')
@@ -213,6 +243,13 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
     },
     reset: () => {
       try {
+        if (options.legacyGuardKey && localStorage.getItem(options.legacyGuardKey) !== legacyGuardRawRef.current) {
+          legacyConflictRef.current = true
+          blockedRef.current = true
+          setRawBackup(localStorage.getItem(options.legacyGuardKey))
+          setStatus('conflict')
+          return
+        }
         if (options.validate && !options.validate(initialValue)) throw new Error('Invalid initial data structure')
         const raw = JSON.stringify(initialValue)
         localStorage.setItem(key, raw)

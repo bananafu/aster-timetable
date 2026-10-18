@@ -61,9 +61,9 @@ export function createBlankProject(data: AppDataV4, input: NewProjectInput, crea
   const name = input.name.trim()
   const teacherName = input.teacherName?.trim()
   if (!name || !Number.isInteger(input.academicYear) || input.academicYear <= 0 || !input.startDate || !input.endDate || input.startDate > input.endDate
-    || (input.semester === 'custom' && !input.customLabel?.trim()) || (data.schemaVersion === 6 && !teacherName)) throw new Error('New project data is invalid')
+    || (input.semester === 'custom' && !input.customLabel?.trim()) || (data.schemaVersion >= 6 && !teacherName)) throw new Error('New project data is invalid')
   const projectId = createId(); const schoolId = createId(); const unitId = createId()
-  const timetableId = data.schemaVersion === 6 ? createId() : undefined
+  const timetableId = data.schemaVersion >= 6 ? createId() : undefined
   return {
     ...data,
     activeProjectId: projectId,
@@ -158,7 +158,7 @@ export function deleteProject(data: AppDataV4, projectId: string): AppDataV4 {
     ...data,
     activeProjectId: nextActive,
     projects: remainingProjects,
-    ...(data.schemaVersion === 6 && { timetables: data.timetables?.filter((item) => item.projectId !== projectId) }),
+    ...(data.schemaVersion >= 6 && { timetables: data.timetables?.filter((item) => item.projectId !== projectId) }),
     schools: data.schools.filter((item) => item.projectId !== projectId),
     teachingUnits: data.teachingUnits.filter((item) => item.projectId !== projectId),
     classes: data.classes.filter((item) => item.projectId !== projectId),
@@ -176,7 +176,7 @@ export function getActiveProject(data: AppDataV4) {
 export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.activeProjectId, requestedTimetableId?: string): AppData {
   const project = data.projects.find((item) => item.id === requestedProjectId)
   if (!project) throw new Error('Active project does not exist')
-  const projectTimetables = data.schemaVersion === 6 ? data.timetables?.filter((item) => item.projectId === project.id) ?? [] : []
+  const projectTimetables = data.schemaVersion >= 6 ? data.timetables?.filter((item) => item.projectId === project.id) ?? [] : []
   if (requestedTimetableId && !projectTimetables.some((item) => item.id === requestedTimetableId)) throw new Error('Timetable does not belong to the project')
   const timetableId = requestedTimetableId ?? (projectTimetables.length === 1 ? projectTimetables[0].id : undefined)
   const schools = data.schools.filter((item) => item.projectId === project.id)
@@ -198,14 +198,14 @@ export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.a
   const classes: SchoolClass[] = data.classes.filter((item) => item.projectId === project.id)
     .map(({ id, name, grade, classNumber, room, origin }) => ({ id, name, grade, classNumber, room, origin }))
   const courses: Course[] = data.recurringLessons.filter((item) => item.projectId === project.id
-    && (data.schemaVersion !== 6 || item.timetableId === timetableId))
+    && (data.schemaVersion < 6 || item.timetableId === timetableId))
     .map(({ id, teachingUnitId, subjectId, classId, day, periodId, weekPattern, room, origin }) => ({
       id, termId: teachingUnitId, subjectId, classId, day, periodId, weekPattern, room, origin,
     }))
   const events: CalendarEvent[] = data.events.filter((item) => item.projectId === project.id || item.projectId === null)
     .map((item) => ({ id: item.id, termId: item.teachingUnitId ?? null, title: item.title, type: item.type, date: item.date, startTime: item.startTime, endTime: item.endTime, location: item.location, notes: item.notes, color: item.color, origin: item.origin }))
   const overrides: ScheduleOverride[] = data.overrides.filter((item): item is typeof item & { action: 'cancel' | 'replace' } => item.projectId === project.id && item.action !== 'move'
-    && (data.schemaVersion !== 6 || item.timetableId === timetableId))
+    && (data.schemaVersion < 6 || item.timetableId === timetableId))
     .map((item) => ({ id: item.id, termId: item.teachingUnitId, date: item.date, periodId: item.periodId, action: item.action, originalCourseId: item.originalLessonId, replacement: item.replacement, note: item.note, origin: item.origin }))
 
   return {
