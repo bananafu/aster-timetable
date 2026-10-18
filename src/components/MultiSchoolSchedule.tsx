@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties, type DragEvent } from 'react'
-import { AlertTriangle, MapPin, Plus } from 'lucide-react'
+import { AlertTriangle, MapPin } from 'lucide-react'
 import { addDays, dayNames, formatShortDate, toDateKey } from '../lib/date'
 import { createLessonDragIntent, type LessonDragIntent } from '../lib/lessonDrag'
 import { resolveProjectWeek, type ResolvedLessonV4, type ResolvedScheduleOccurrence } from '../lib/scheduleV4'
@@ -21,7 +21,6 @@ interface Props {
   onLessonClick?: (lessonId: string, date: string, overrideId?: string) => void
   onLessonDrop?: (intent: LessonDragIntent) => void
   onOneOffClick?: (oneOffId: string) => void
-  onAddOneOff?: (date: string) => void
 }
 
 function minutes(time: string) {
@@ -61,7 +60,7 @@ function LessonCard({ lesson, previous, onClick, draggable, onDragStart, onDragE
   </button>
 }
 
-export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjectId, timetableId, onLessonClick, onLessonDrop, onOneOffClick, onAddOneOff }: Props) {
+export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjectId, timetableId, onLessonClick, onLessonDrop, onOneOffClick }: Props) {
   const [scope, setScope] = useState<ScheduleScope>('all')
   const [showWeekend, setShowWeekend] = useState(false)
   const projectId = requestedProjectId === undefined ? data.activeProjectId : requestedProjectId
@@ -133,7 +132,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
     <div className="multi-schedule-scroll">
       <div className={`multi-week-grid ${showWeekend ? 'seven-days' : ''}`}>
         {schedule.map(({ date, lessons }, dayIndex) => <section className="multi-day-column" key={date.toISOString()} aria-label={`${toDateKey(date)} 課表`}>
-          <header><span>{showWeekend ? weekDayLabels[dayIndex] : dayNames[dayIndex]}</span><strong>{formatShortDate(date)}</strong>{onAddOneOff && <button type="button" className="day-add-one-off" aria-label={`${toDateKey(date)} 新增單日課程`} onClick={() => onAddOneOff(toDateKey(date))}><Plus size={14} /></button>}</header>
+          <header><span>{showWeekend ? weekDayLabels[dayIndex] : dayNames[dayIndex]}</span><strong>{formatShortDate(date)}</strong></header>
           <div className="multi-day-lessons">
             {draggedLesson && draggedUnit && <div className="lesson-drop-targets" aria-label={`${toDateKey(date)} 可放置節次`}>{[...draggedUnit.periods].sort((left, right) => left.order - right.order).map((period) => { const result = createLessonDragIntent(data, draggedLesson, { date: toDateKey(date), startTime: period.startTime, endTime: period.endTime, timetableId }); return <div key={period.id} className={`lesson-drop-target ${result.valid ? 'valid' : 'invalid'} ${result.valid && result.intent.conflictLessonIds.length ? 'occupied' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dropLesson(toDateKey(date), period.startTime, period.endTime) }}><strong>{period.label}</strong><span>{period.startTime}–{period.endTime}</span><em>{result.valid ? result.intent.conflictLessonIds.length ? '已有課程' : '放置於此' : '不可放置'}</em></div> })}</div>}
             {lessons.length === 0
