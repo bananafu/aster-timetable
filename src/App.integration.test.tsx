@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { createProject } from './data/projectRuntime'
 import { createBlankProject } from './data/projectRuntime'
 import { createTimetable, updateTimetable } from './data/timetablesV6'
+import { createOneOffLesson } from './data/oneOffLessonsV7'
+import { createInitialAppDataV7 } from './hooks/useAppDataV4'
 import { initialData } from './data/seed'
 import { migrateV3ToV4 } from './data/migrationsV4'
 import { migrateV4ToV5 } from './data/migrationsV5'
@@ -41,30 +43,69 @@ function copyReadyData() {
   return updateTimetable(data, data.timetables[0].id, { name: '原課表', teacherName: '林老師' })
 }
 
+function openTopbarChoice(name: '新增專案' | '新增空白課表') {
+  fireEvent.click(screen.getByRole('button', { name: '新增' }))
+  fireEvent.click(screen.getByRole('menuitem', { name }))
+}
+
+function openCopyDialog() {
+  fireEvent.click(screen.getByRole('button', { name: '編輯課表資訊' }))
+  fireEvent.click(screen.getByRole('button', { name: '複製課表' }))
+}
+
+const copyField = (label: string) => within(screen.getByRole('form', { name: '複製課表設定' })).getByLabelText(label)
+
 describe('App v4 runtime', () => {
   beforeEach(() => { vi.useFakeTimers(); removeAppKeys() })
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); removeAppKeys() })
 
-  it('Topbar 新增直接開啟新專案表單，課表面板才開啟選擇視窗，取消與 Escape 不寫入資料', () => {
+  it('沒有 Project 時右上角仍可新增專案，但不能建立孤立課表', () => {
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(createInitialAppDataV7()))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    expect((screen.getByRole('menuitem', { name: '新增空白課表' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('請先建立課表專案。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('menuitem', { name: '新增專案' }))
+    expect(screen.getByRole('dialog', { name: '專案設定' })).toBeTruthy()
+  })
+
+  it('窄螢幕仍可操作右上角選單與課表資訊視窗，Esc 返回入口焦點', () => {
+    vi.stubGlobal('innerWidth', 390)
+    const data = copyReadyData()
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    expect(screen.getByRole('menuitem', { name: '新增專案' })).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    const trigger = screen.getByRole('button', { name: '編輯課表資訊' })
+    fireEvent.click(trigger)
+    expect(document.activeElement).toBe(screen.getByLabelText('課表名稱'))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '編輯課表資訊' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('Topbar 選單區分專案與課表，課表面板只提供課程，取消與 Escape 不寫入資料', () => {
     const data = copyReadyData()
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
 
-    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    openTopbarChoice('新增專案')
     expect(screen.getByRole('dialog', { name: '專案設定' })).toBeTruthy()
     expect(screen.getByText('建立新專案')).toBeTruthy()
     expect(screen.getByLabelText('專案名稱')).toBeTruthy()
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: '專案設定' })).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
-    expect(screen.getByRole('dialog', { name: '新增' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /建立空白課表/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    expect(screen.getByRole('dialog', { name: '新增課程' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /新增空白課表/ })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
     expect(screen.getByRole('dialog', { name: '新增固定課程' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
-    expect(screen.getByRole('dialog', { name: '新增' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: '新增課程' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     act(() => vi.advanceTimersByTime(200))
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
@@ -74,7 +115,7 @@ describe('App v4 runtime', () => {
     const data = copyReadyData()
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    openTopbarChoice('新增專案')
     fireEvent.change(screen.getByLabelText('專案名稱'), { target: { value: '下一學期' } })
     fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '王老師' } })
     fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
@@ -92,10 +133,11 @@ describe('App v4 runtime', () => {
     const data = migrateV5ToV7(migrateV4ToV5(migrateV3ToV4(initialData)))
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
     expect((screen.getByRole('button', { name: /新增固定課程/ }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText('目前課表的授課教師姓名尚待補齊。')).toBeTruthy()
-    expect((screen.getByRole('button', { name: /建立空白課表/ }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '新增' }))
+    expect((screen.getByRole('menuitem', { name: '新增空白課表' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('同校同學制的既有設定保留個別 ID 與識別名稱，不會被合併或重新指派', () => {
@@ -105,7 +147,7 @@ describe('App v4 runtime', () => {
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
     fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
     const level = screen.getByLabelText('課程學制') as HTMLSelectElement
     expect(level.value).toBe('')
@@ -148,8 +190,7 @@ describe('App v4 runtime', () => {
     const selector = screen.getByLabelText('教師課表') as HTMLSelectElement
     expect(selector.value).toBe(data.timetables[0].id)
     const addTeacher = (name: string, teacherName: string) => {
-      fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
-      fireEvent.click(screen.getByRole('button', { name: /建立空白課表/ }))
+      openTopbarChoice('新增空白課表')
       fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: name } })
       fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: teacherName } })
       fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
@@ -199,6 +240,9 @@ describe('App v4 runtime', () => {
     fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '張老師' } })
     fireEvent.click(screen.getByRole('button', { name: '儲存課表資訊' }))
     expect(screen.getByText('張老師')).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: '編輯課表資訊' })).toBeTruthy()
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.queryByRole('dialog', { name: '編輯課表資訊' })).toBeNull()
     const projectSelector = screen.getByLabelText('課表專案') as HTMLSelectElement
     fireEvent.change(projectSelector, { target: { value: 'new-1' } })
     expect((screen.getByLabelText('教師課表') as HTMLSelectElement).value).toBe(withProject.timetables?.at(-1)?.id)
@@ -234,7 +278,7 @@ describe('App v4 runtime', () => {
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(multi))
     render(<App />)
     fireEvent.change(screen.getByLabelText('教師課表'), { target: { value: 'teacher-b' } })
-    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
     fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
     chooseLessonSubject()
     fireEvent.click(screen.getByRole('button', { name: '儲存' }))
@@ -270,8 +314,7 @@ describe('App v4 runtime', () => {
       if (key === APP_DATA_V7_KEY) throw new Error('quota')
       return original.call(this, key, value)
     })
-    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
-    fireEvent.click(screen.getByRole('button', { name: /建立空白課表/ }))
+    openTopbarChoice('新增空白課表')
     fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '未儲存課表' } })
     fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '林老師' } })
     fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
@@ -285,8 +328,7 @@ describe('App v4 runtime', () => {
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
-    fireEvent.click(screen.getByRole('button', { name: /建立空白課表/ }))
+    openTopbarChoice('新增空白課表')
     fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '本分頁課表' } })
     fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '林老師' } })
     fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
@@ -330,29 +372,54 @@ describe('App v4 runtime', () => {
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(externalRaw)
   })
 
+  it('編輯只變更目前教師課表，且未儲存內容須確認才能關閉', () => {
+    const first = copyReadyData()
+    const data = createTimetable(first, first.projects[0].id, { name: '另一份課表', teacherName: '王老師' }, 'teacher-b')
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+    fireEvent.change(screen.getByLabelText('教師課表'), { target: { value: 'teacher-b' } })
+    fireEvent.click(screen.getByRole('button', { name: '編輯課表資訊' }))
+    expect((screen.getByLabelText('課表名稱') as HTMLInputElement).value).toBe('另一份課表')
+    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '改名中的課表' } })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(confirm).toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: '編輯課表資訊' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '儲存課表資訊' }))
+    expect(screen.getByRole('dialog', { name: '編輯課表資訊' })).toBeTruthy()
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.queryByRole('dialog', { name: '編輯課表資訊' })).toBeNull()
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)
+    expect(stored.timetables.find((item: { id: string }) => item.id === 'teacher-b').name).toBe('改名中的課表')
+    expect(stored.timetables.find((item: { id: string }) => item.id === first.timetables[0].id)).toEqual(first.timetables[0])
+  })
+
   it('以本地今天預填可編輯欄位，實際寫入後才切換並可重新載入', () => {
     vi.setSystemTime(new Date(2026, 8, 7, 0, 30))
     const data = copyReadyData()
     data.overrides.push({ id: 'source-cancel', projectId: data.projects[0].id, timetableId: data.timetables[0].id,
       teachingUnitId: data.teachingUnits[0].id, date: '2026-09-07', periodId: data.recurringLessons[0].periodId,
       action: 'cancel', originalLessonId: data.recurringLessons[0].id })
-    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    const withOneOff = createOneOffLesson(data, { projectId: data.projects[0].id, timetableId: data.timetables[0].id,
+      teachingUnitId: data.teachingUnits[0].id, classId: data.classes[0].id, subjectId: data.subjects[0].id,
+      date: '2026-09-08', purpose: 'extra', time: { mode: 'custom', startTime: '18:00', endTime: '18:45' } }, () => oneOffUuid)
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(withOneOff))
     const first = render(<App />)
     const sourceId = data.timetables[0].id
-    fireEvent.click(screen.getByRole('button', { name: '複製課表' }))
-    expect((screen.getByLabelText('課表名稱') as HTMLInputElement).value).toBe('原課表（副本）')
-    expect((screen.getByLabelText('授課教師姓名') as HTMLInputElement).value).toBe('林老師')
-    expect((screen.getByLabelText('基準日期') as HTMLInputElement).value).toBe('2026-09-07')
-    expect(screen.getByText(/包含 A／B 輪週/)).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '自訂副本' } })
-    fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '王老師' } })
-    fireEvent.change(screen.getByLabelText('基準日期'), { target: { value: '2026-09-09' } })
+    openCopyDialog()
+    expect((copyField('副本名稱') as HTMLInputElement).value).toBe('原課表（副本）')
+    expect((copyField('副本授課教師姓名') as HTMLInputElement).value).toBe('林老師')
+    expect((copyField('基準日期') as HTMLInputElement).value).toBe('2026-09-07')
+    expect(screen.getByText(/A／B 週配置/)).toBeTruthy()
+    fireEvent.change(copyField('副本名稱'), { target: { value: '自訂副本' } })
+    fireEvent.change(copyField('副本授課教師姓名'), { target: { value: '王老師' } })
+    fireEvent.change(copyField('基準日期'), { target: { value: '2026-09-09' } })
     fireEvent.click(screen.getByRole('button', { name: '複製並切換' }))
-    expect(screen.getByRole('dialog', { name: '複製課表' })).toBeTruthy()
-    expect((screen.getByRole('button', { name: '正在儲存…' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('dialog', { name: '編輯課表資訊' })).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: '正在儲存…' }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true)
     expect((screen.getByLabelText('教師課表') as HTMLSelectElement).value).toBe(sourceId)
     act(() => vi.advanceTimersByTime(200))
-    expect(screen.queryByRole('dialog', { name: '複製課表' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '編輯課表資訊' })).toBeNull()
     expect(screen.getByText('已複製並儲存「自訂副本」。')).toBeTruthy()
     const selectedId = (screen.getByLabelText('教師課表') as HTMLSelectElement).value
     expect(selectedId).not.toBe(sourceId)
@@ -364,6 +431,8 @@ describe('App v4 runtime', () => {
     expect(new Set(copiedLessons.map((item: { weekPattern: string }) => item.weekPattern))).toEqual(new Set(['every', 'A', 'B']))
     expect(copiedLessons.every((item: { effectiveStart: string; effectiveEnd: string; origin: string }) => item.effectiveStart === '2026-09-09' && item.effectiveEnd === data.teachingUnits[0].endDate && item.origin === 'demo')).toBe(true)
     expect(stored.overrides).toEqual(data.overrides)
+    expect(stored.oneOffLessons).toEqual(withOneOff.oneOffLessons)
+    expect(stored.oneOffLessons.every((item: { timetableId: string }) => item.timetableId !== selectedId)).toBe(true)
     expect(copiedLessons.every((item: { id: string; seriesId: string }) => !data.recurringLessons.some((source) => source.id === item.id || source.seriesId === item.seriesId))).toBe(true)
     first.unmount()
     render(<App />)
@@ -389,17 +458,17 @@ describe('App v4 runtime', () => {
     const data = copyReadyData()
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '複製課表' }))
-    const form = screen.getByRole('dialog', { name: '複製課表' }).querySelector('form')!
-    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '   ' } })
+    openCopyDialog()
+    const form = screen.getByRole('form', { name: '複製課表設定' })
+    fireEvent.change(copyField('副本名稱'), { target: { value: '   ' } })
     fireEvent.submit(form)
     expect(screen.getByRole('alert').textContent).toContain('不可空白')
-    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '副本' } })
-    fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '   ' } })
+    fireEvent.change(copyField('副本名稱'), { target: { value: '副本' } })
+    fireEvent.change(copyField('副本授課教師姓名'), { target: { value: '   ' } })
     fireEvent.submit(form)
     expect(screen.getByRole('alert').textContent).toContain('不可空白')
-    fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '林老師' } })
-    fireEvent.change(screen.getByLabelText('基準日期'), { target: { value: '2026-02-30' } })
+    fireEvent.change(copyField('副本授課教師姓名'), { target: { value: '林老師' } })
+    fireEvent.change(copyField('基準日期'), { target: { value: '2026-02-30' } })
     fireEvent.submit(form)
     expect(screen.getByRole('alert').textContent).toContain('真實有效')
     expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).timetables).toHaveLength(1)
@@ -410,8 +479,8 @@ describe('App v4 runtime', () => {
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '複製課表' }))
-    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '保留的名稱' } })
+    openCopyDialog()
+    fireEvent.change(copyField('副本名稱'), { target: { value: '保留的名稱' } })
     const external = structuredClone(data)
     external.recurringLessons[0].room = '其他分頁教室'
     const externalRaw = JSON.stringify(external)
@@ -419,7 +488,7 @@ describe('App v4 runtime', () => {
     act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue: raw, newValue: externalRaw })))
     fireEvent.click(screen.getByRole('button', { name: '複製並切換' }))
     expect(screen.getByRole('alert').textContent).toContain('已變更')
-    expect((screen.getByLabelText('課表名稱') as HTMLInputElement).value).toBe('保留的名稱')
+    expect((copyField('副本名稱') as HTMLInputElement).value).toBe('保留的名稱')
     expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).timetables).toHaveLength(1)
   })
 
@@ -428,8 +497,8 @@ describe('App v4 runtime', () => {
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '複製課表' }))
-    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '本分頁副本' } })
+    openCopyDialog()
+    fireEvent.change(copyField('副本名稱'), { target: { value: '本分頁副本' } })
     fireEvent.click(screen.getByRole('button', { name: '複製並切換' }))
     const external = updateTimetable(data, data.timetables[0].id, { name: '外部分頁課表', teacherName: '林老師' })
     const externalRaw = JSON.stringify(external)
@@ -439,8 +508,8 @@ describe('App v4 runtime', () => {
     expect(screen.getByText('偵測到多分頁資料衝突')).toBeTruthy()
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(externalRaw)
     fireEvent.click(screen.getByRole('button', { name: '採用其他分頁版本' }))
-    expect(screen.getByRole('dialog', { name: '複製課表' })).toBeTruthy()
-    expect((screen.getByLabelText('課表名稱') as HTMLInputElement).value).toBe('本分頁副本')
+    expect(screen.getByRole('dialog', { name: '編輯課表資訊' })).toBeTruthy()
+    expect((copyField('副本名稱') as HTMLInputElement).value).toBe('本分頁副本')
     expect(screen.getByRole('alert').textContent).toContain('未完成')
   })
 
@@ -454,22 +523,22 @@ describe('App v4 runtime', () => {
       if (key === APP_DATA_V7_KEY) throw new Error('quota')
       return original.call(this, key, value)
     })
-    fireEvent.click(screen.getByRole('button', { name: '複製課表' }))
-    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '未寫入副本' } })
+    openCopyDialog()
+    fireEvent.change(copyField('副本名稱'), { target: { value: '未寫入副本' } })
     const submit = screen.getByRole('button', { name: '複製並切換' })
     fireEvent.click(submit)
     fireEvent.click(submit)
     act(() => vi.advanceTimersByTime(200))
     expect(screen.queryByText(/已複製並儲存/)).toBeNull()
-    expect(screen.getByRole('dialog', { name: '複製課表' })).toBeTruthy()
-    expect((screen.getByLabelText('課表名稱') as HTMLInputElement).value).toBe('未寫入副本')
+    expect(screen.getByRole('dialog', { name: '編輯課表資訊' })).toBeTruthy()
+    expect((copyField('副本名稱') as HTMLInputElement).value).toBe('未寫入副本')
     expect(screen.getByText(/資料尚未成功寫入此裝置/)).toBeTruthy()
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
     first.unmount()
     vi.restoreAllMocks()
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '複製課表' }))
+    openCopyDialog()
     const successfulSubmit = screen.getByRole('button', { name: '複製並切換' })
     fireEvent.click(successfulSubmit)
     fireEvent.click(successfulSubmit)
@@ -562,7 +631,7 @@ describe('App v4 runtime', () => {
     fireEvent.click(screen.getByRole('button', { name: '編輯課表資訊' }))
     fireEvent.change(screen.getByLabelText('授課教師姓名'), { target: { value: '林老師' } })
     fireEvent.click(screen.getByRole('button', { name: '儲存課表資訊' }))
-    fireEvent.click(screen.getByRole('button', { name: '新增課程或課表' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
     fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
     chooseLessonSubject()
     fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '5' } })
@@ -612,12 +681,18 @@ describe('App one-off schedule and confirmed persistence', () => {
     fireEvent.change(screen.getByLabelText('節次'), { target: { value: '3' } })
   }
 
+  const openOneOffFromCourseMenu = (date = '2026-09-07') => {
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /新增單日課程/ }))
+    if (date !== '2026-09-07') fireEvent.change(screen.getByLabelText('指定日期'), { target: { value: date } })
+  }
+
   it('adds, edits and deletes a dated lesson only after the matching v7 write completes', async () => {
     const data = copyReadyData()
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '2026-09-08 新增單日課程' }))
+    openOneOffFromCourseMenu('2026-09-08')
     expect((screen.getByLabelText('指定日期') as HTMLInputElement).value).toBe('2026-09-08')
     fillOneOff(data)
     fireEvent.click(screen.getByRole('button', { name: '送出新增' }))
@@ -651,7 +726,7 @@ describe('App one-off schedule and confirmed persistence', () => {
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '2026-09-08 新增單日課程' }))
+    openOneOffFromCourseMenu('2026-09-08')
     fillOneOff(data)
     fireEvent.click(screen.getByRole('button', { name: '送出新增' }))
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Quota exceeded') })
@@ -666,7 +741,7 @@ describe('App one-off schedule and confirmed persistence', () => {
     const data = copyReadyData()
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '2026-09-07 新增單日課程' }))
+    openOneOffFromCourseMenu()
     fillOneOff(data)
     fireEvent.change(screen.getByLabelText('節次'), { target: { value: '1' } })
     expect(screen.getByText(/此時段已有 1 堂課/)).toBeTruthy()
@@ -685,7 +760,7 @@ describe('App one-off schedule and confirmed persistence', () => {
     const raw = JSON.stringify(data)
     localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '2026-09-08 新增單日課程' }))
+    openOneOffFromCourseMenu('2026-09-08')
     fillOneOff(data)
     fireEvent.click(screen.getByRole('button', { name: '送出新增' }))
     const external = JSON.stringify({ ...data, projects: data.projects.map((item) => ({ ...item, name: '外部分頁變更' })) })
@@ -703,7 +778,7 @@ describe('App one-off schedule and confirmed persistence', () => {
     data.projects[0].archivedAt = '2026-09-01T00:00:00.000Z'
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<App />)
-    expect(screen.queryByRole('button', { name: '2026-09-08 新增單日課程' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '新增課程' })).toBeNull()
     expect(screen.queryByRole('dialog', { name: '新增單日課程' })).toBeNull()
   })
 })

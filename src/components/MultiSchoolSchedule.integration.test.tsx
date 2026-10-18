@@ -271,19 +271,18 @@ describe('MultiSchoolSchedule one-off occurrences', () => {
     expect(onLessonDrop).not.toHaveBeenCalled()
   })
 
-  it('counts Sunday-before-Monday and Saturday one-offs in the same weekend, with date-specific add entry', () => {
+  it('counts Sunday-before-Monday and Saturday one-offs without date-column add buttons', () => {
     const first = oneOff(v7(), '2026-09-06', { mode: 'custom', startTime: '18:00', endTime: '19:00' })
     const data = oneOff(first, '2026-09-12', { mode: 'period', periodId: 1 }, 2)
-    const onAddOneOff = vi.fn()
-    render(<MultiSchoolSchedule data={data} weekDays={week} timetableId={data.timetables[0].id} onAddOneOff={onAddOneOff} />)
+    render(<MultiSchoolSchedule data={data} weekDays={week} timetableId={data.timetables[0].id} />)
+    expect(screen.queryByRole('button', { name: /新增單日課程/ })).toBeNull()
     expect(screen.getByText('本週週末有 2 堂課')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '七天' }))
     const columns = [...document.querySelectorAll('.multi-day-column')]
     expect(columns[0].getAttribute('aria-label')).toBe('2026-09-06 課表')
     expect(columns[6].getAttribute('aria-label')).toBe('2026-09-12 課表')
     expect(columns[0].querySelector('.one-off')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '2026-09-06 新增單日課程' }))
-    expect(onAddOneOff).toHaveBeenCalledWith('2026-09-06')
+    expect(screen.queryByRole('button', { name: /新增單日課程/ })).toBeNull()
     expect(screen.queryByLabelText('2026-09-13 課表')).toBeNull()
   })
 
