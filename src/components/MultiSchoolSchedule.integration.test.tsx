@@ -5,6 +5,8 @@ import { cancelLessonOnDate, moveLessonOnDate, revokeLessonOverride } from '../d
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { migrateV4ToV5 } from '../data/migrationsV5'
 import { migrateV5ToV6 } from '../data/migrationsV6'
+import { migrateV6ToV7 } from '../data/migrationsV7'
+import { createOneOffLesson } from '../data/oneOffLessonsV7'
 import { initialData } from '../data/seed'
 import { getTeachingUnitWeekPattern } from '../lib/scheduleV4'
 import { MultiSchoolSchedule } from './MultiSchoolSchedule'
@@ -234,5 +236,92 @@ describe('MultiSchoolSchedule weekend visibility', () => {
     const card = within(saturday as HTMLElement).getByRole('button', { name: '編輯 國文・二年 1 班' }) as HTMLButtonElement
     expect(card.disabled).toBe(true)
     expect(card.getAttribute('draggable')).toBe('false')
+  })
+})
+
+describe('MultiSchoolSchedule one-off occurrences', () => {
+  const v7 = () => migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(setup())))
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const oneOff = (data: ReturnType<typeof v7>, date: string, time: { mode: 'period'; periodId: number } | { mode: 'custom'; startTime: string; endTime: string }, n = 1, allowConflict = false) => createOneOffLesson(data, {
+    projectId: data.projects[0].id, timetableId: data.timetables[0].id, teachingUnitId: data.teachingUnits[0].id,
+    classId: data.classes[0].id, subjectId: data.subjects[0].id, date, purpose: n === 2 ? 'make-up' : 'extra', time,
+  }, () => uuid(n), allowConflict)
+
+  it('renders period and custom cards at their resolved times; one-off click is separate and never draggable', () => {
+    const first = oneOff(v7(), '2026-09-08', { mode: 'period', periodId: 3 })
+    const data = oneOff(first, '2026-09-08', { mode: 'custom', startTime: '18:10', endTime: '19:00' }, 2)
+    const onOneOffClick = vi.fn()
+    const onLessonClick = vi.fn()
+    const onLessonDrop = vi.fn()
+    render(<MultiSchoolSchedule data={data} weekDays={week} timetableId={data.timetables[0].id} onOneOffClick={onOneOffClick} onLessonClick={onLessonClick} onLessonDrop={onLessonDrop} />)
+    const tuesday = screen.getByLabelText('2026-09-08 課表')
+    const cards = tuesday.querySelectorAll<HTMLButtonElement>('.multi-lesson-card.one-off')
+    expect(cards).toHaveLength(2)
+    expect(cards[0].textContent).toContain('第 3 節')
+    expect(cards[0].textContent).toContain('10:10–11:00')
+    expect(cards[1].textContent).toContain('自訂時間')
+    expect(cards[1].textContent).toContain('18:10–19:00')
+    expect(cards[1].textContent).toContain('補課')
+    expect(cards[0].getAttribute('draggable')).toBe('false')
+    fireEvent.click(cards[0])
+    expect(onOneOffClick).toHaveBeenCalledWith(uuid(1))
+    expect(onLessonClick).not.toHaveBeenCalled()
+    fireEvent.dragStart(cards[0], { dataTransfer: transfer() })
+    expect(screen.queryByText(/正在拖曳/)).toBeNull()
+    expect(onLessonDrop).not.toHaveBeenCalled()
+  })
+
+  it('counts Sunday-before-Monday and Saturday one-offs in the same weekend, with date-specific add entry', () => {
+    const first = oneOff(v7(), '2026-09-06', { mode: 'custom', startTime: '18:00', endTime: '19:00' })
+    const data = oneOff(first, '2026-09-12', { mode: 'period', periodId: 1 }, 2)
+    const onAddOneOff = vi.fn()
+    render(<MultiSchoolSchedule data={data} weekDays={week} timetableId={data.timetables[0].id} onAddOneOff={onAddOneOff} />)
+    expect(screen.getByText('本週週末有 2 堂課')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '七天' }))
+    const columns = [...document.querySelectorAll('.multi-day-column')]
+    expect(columns[0].getAttribute('aria-label')).toBe('2026-09-06 課表')
+    expect(columns[6].getAttribute('aria-label')).toBe('2026-09-12 課表')
+    expect(columns[0].querySelector('.one-off')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '2026-09-06 新增單日課程' }))
+    expect(onAddOneOff).toHaveBeenCalledWith('2026-09-06')
+    expect(screen.queryByLabelText('2026-09-13 課表')).toBeNull()
+  })
+
+  it('filters one-offs by timetable and school, while retaining both collision cards and their colors', () => {
+    const data = v7()
+    data.timetables.push({ ...data.timetables[0], id: 'teacher-b', name: 'B 課表' })
+    const first = oneOff(data, '2026-09-07', { mode: 'period', periodId: 1 }, 1, true)
+    const second = oneOff(first, '2026-09-07', { mode: 'custom', startTime: '08:15', endTime: '08:45' }, 2, true)
+    const view = render(<MultiSchoolSchedule data={second} weekDays={week} timetableId={second.timetables[0].id} />)
+    const monday = screen.getByLabelText('2026-09-07 課表')
+    expect(monday.querySelectorAll('.multi-lesson-card.conflict')).toHaveLength(3)
+    expect(monday.querySelectorAll('.multi-lesson-card.one-off')).toHaveLength(2)
+    expect((monday.querySelector('.multi-lesson-card.one-off') as HTMLElement).style.getPropertyValue('--subject-color')).toBe(second.subjects[0].color)
+    view.rerender(<MultiSchoolSchedule data={second} weekDays={week} timetableId="teacher-b" />)
+    expect(screen.getByLabelText('2026-09-07 課表').querySelectorAll('.multi-lesson-card.one-off')).toHaveLength(0)
+  })
+
+  it('keeps weekend one-off counts scoped to school and teaching unit filters', () => {
+    const data = v7()
+    const firstUnit = data.teachingUnits[0]
+    data.schools.push({ ...data.schools[0], id: 'school-b', name: '乙校' })
+    data.teachingUnits.push({ ...structuredClone(firstUnit), id: 'unit-b', schoolId: 'school-b', name: '乙校國中部' })
+    data.classes.push({ ...data.classes[0], id: 'class-b', teachingUnitId: 'unit-b', name: '乙班' })
+    const first = oneOff(data, '2026-09-06', { mode: 'custom', startTime: '09:00', endTime: '10:00' })
+    const second = createOneOffLesson(first, {
+      projectId: data.projects[0].id, timetableId: data.timetables[0].id, teachingUnitId: 'unit-b', classId: 'class-b',
+      subjectId: data.subjects[0].id, date: '2026-09-12', purpose: 'substitute',
+      time: { mode: 'custom', startTime: '11:00', endTime: '12:00' },
+    }, () => uuid(2))
+    render(<MultiSchoolSchedule data={second} weekDays={week} timetableId={data.timetables[0].id} />)
+    expect(screen.getByText('本週週末有 2 堂課')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: '各校課表' }))
+    expect(screen.getByText('本週週末有 1 堂課')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('選擇學校'), { target: { value: 'school-b' } })
+    fireEvent.change(screen.getByLabelText('篩選學制'), { target: { value: 'unit-b' } })
+    expect(screen.getByText('本週週末有 1 堂課')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '七天' }))
+    expect(screen.getByLabelText('2026-09-12 課表').querySelectorAll('.one-off')).toHaveLength(1)
+    expect(screen.getByLabelText('2026-09-06 課表').querySelectorAll('.one-off')).toHaveLength(0)
   })
 })

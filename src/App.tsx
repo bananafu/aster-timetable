@@ -6,12 +6,15 @@ import { Modal } from './components/Modal'
 import { MultiSchoolSchedule } from './components/MultiSchoolSchedule'
 import { FirstUse, ProjectLifecycleModal } from './components/ProjectLifecycle'
 import { LessonEditor } from './components/LessonEditor'
+import { OneOffLessonEditor } from './components/OneOffLessonEditor'
 import { TimetableControls, TimetableCopyForm, TimetableForm, type TimetableCopyDetails } from './components/TimetableControls'
 import { projectToLegacyView, switchActiveProject } from './data/projectRuntime'
 import { copyTimetable, createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
 import { getSubjectImpact, updateSubject } from './data/subjectsV5'
+import { isCompatibleAppDataV7 } from './data/validators/v7'
 import { SCHOOL_LEVELS } from './types'
 import { useAppDataV4 } from './hooks/useAppDataV4'
+import { useOneOffPersistence } from './hooks/useOneOffPersistence'
 import { type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
 import { addDays, getWeekInfo, startOfWeek, toDateKey } from './lib/date'
 import { getNextUpcomingEvent } from './lib/schedule'
@@ -66,6 +69,7 @@ function downloadRawData(raw: string) {
 
 export default function App() {
   const [appData, setAppData, storageStatus, storageControls, storagePersistence] = useAppDataV4()
+  const oneOffWrites = useOneOffPersistence(appData, setAppData, storageStatus, storagePersistence)
   // Timetable selection is view state; it must never update persisted AppData.
   const [timetableSelection, setTimetableSelection] = useState(() => ({
     projectId: appData.activeProjectId,
@@ -86,6 +90,8 @@ export default function App() {
   const [projectLifecycleInitialPage, setProjectLifecycleInitialPage] = useState<'root' | 'blank'>('root')
   const [addChoiceOpen, setAddChoiceOpen] = useState(false)
   const [lessonEditorOpen, setLessonEditorOpen] = useState(false)
+  const [oneOffEditor, setOneOffEditor] = useState<{ projectId: string; timetableId: string; date?: string; id?: string } | null>(null)
+  const [oneOffNotice, setOneOffNotice] = useState('')
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null)
   const [selectedLessonDate, setSelectedLessonDate] = useState<string | null>(null)
   const [selectedLessonOverrideId, setSelectedLessonOverrideId] = useState<string | null>(null)
@@ -104,6 +110,7 @@ export default function App() {
     setSelectedLessonDate(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
+    setOneOffEditor(null)
     lessonEditorFromAddRef.current = false
   }, [activeTimetableId])
   useEffect(() => {
@@ -163,6 +170,8 @@ export default function App() {
         ? '請先建立課表專案。'
         : ''
   const canAddLesson = canCreateTimetable && Boolean(activeTimetable?.teacherName?.trim()) && !activeTimetable?.teacherNamePending
+  const canAddOneOff = Boolean(displayProject && displayTimetable && !historicalProject && !displayProject.archivedAt
+    && storageStatus === 'saved' && !storagePersistence.pending && !oneOffWrites.pending)
   const addLessonUnavailableReason = createTimetableUnavailableReason || (!activeTimetable
     ? '請先選擇教師課表。'
     : activeTimetable.teacherNamePending || !activeTimetable.teacherName?.trim()
@@ -195,6 +204,8 @@ export default function App() {
     setSelectedLessonDate(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
+    setOneOffEditor(null)
+    setOneOffNotice('')
     lessonEditorFromAddRef.current = false
   }
 
@@ -203,8 +214,17 @@ export default function App() {
     setSelectedLessonDate(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
+    setOneOffEditor(null)
     lessonEditorFromAddRef.current = false
     setAddChoiceOpen(true)
+  }
+
+  const openOneOff = (date?: string, id?: string) => {
+    if (!canAddOneOff || !displayProject || !displayTimetable) return
+    setAddChoiceOpen(false)
+    setLessonEditorOpen(false)
+    setOneOffNotice('')
+    setOneOffEditor({ projectId: displayProject.id, timetableId: displayTimetable.id, date, id })
   }
 
   const openNewProject = () => {
@@ -220,6 +240,7 @@ export default function App() {
     setSelectedLessonDate(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
+    setOneOffEditor(null)
     lessonEditorFromAddRef.current = false
     setAddChoiceOpen(false)
     setActivePage('timetable')
@@ -302,6 +323,8 @@ export default function App() {
     setSelectedLessonDate(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
+    setOneOffEditor(null)
+    setOneOffNotice('')
     lessonEditorFromAddRef.current = false
     setAddChoiceOpen(false)
     setTimetableDialog(null)
@@ -360,10 +383,10 @@ export default function App() {
           ) : (
             <section className="panel timetable-panel">
               <div className="panel-heading">
-                <div><h2>{activePage === 'dashboard' ? '本週課表' : '跨校週課表'}</h2><p>依各校學制的實際節次與輪週設定逐日整合；點選課程可編輯固定資料。</p></div>
+                <div><h2>{activePage === 'dashboard' ? '本週課表' : '跨校週課表'}</h2><p>依各校學制的實際節次與輪週設定逐日整合；點選課程可編輯。</p>{oneOffNotice && <p role="status">{oneOffNotice}</p>}</div>
                 {!historicalProject && <button className="primary-button" aria-label="新增課程或課表" onClick={openAddChoice}><Plus size={16} />新增</button>}
               </div>
-              <MultiSchoolSchedule key={displayTimetable?.id ?? displayProject.id} data={appData} weekDays={weekDays} projectId={displayProject.id} timetableId={displayTimetable?.id} onLessonClick={historicalProject ? undefined : (lessonId, date, overrideId) => { lessonEditorFromAddRef.current = false; setSelectedLessonId(lessonId); setSelectedLessonDate(date); setSelectedLessonOverrideId(overrideId ?? null); setLessonDragIntent(null); setLessonEditorOpen(true) }} onLessonDrop={historicalProject ? undefined : (intent) => { lessonEditorFromAddRef.current = false; setSelectedLessonId(intent.lessonId); setSelectedLessonDate(intent.sourceDate); setSelectedLessonOverrideId(null); setLessonDragIntent(intent); setLessonEditorOpen(true) }} />
+              <MultiSchoolSchedule key={displayTimetable?.id ?? displayProject.id} data={appData} weekDays={weekDays} projectId={displayProject.id} timetableId={displayTimetable?.id} onLessonClick={historicalProject ? undefined : (lessonId, date, overrideId) => { lessonEditorFromAddRef.current = false; setSelectedLessonId(lessonId); setSelectedLessonDate(date); setSelectedLessonOverrideId(overrideId ?? null); setLessonDragIntent(null); setLessonEditorOpen(true) }} onLessonDrop={historicalProject ? undefined : (intent) => { lessonEditorFromAddRef.current = false; setSelectedLessonId(intent.lessonId); setSelectedLessonDate(intent.sourceDate); setSelectedLessonOverrideId(null); setLessonDragIntent(intent); setLessonEditorOpen(true) }} onOneOffClick={canAddOneOff ? (id) => openOneOff(undefined, id) : undefined} onAddOneOff={canAddOneOff ? (date) => openOneOff(date) : undefined} />
             </section>
           )}
         </div>
@@ -372,7 +395,7 @@ export default function App() {
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
       {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} initialPage={projectLifecycleInitialPage} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onClose={() => { setModal(null); setProjectLifecycleInitialPage('root') }} onViewArchived={viewArchivedProject} />}</>}
-      {addChoiceOpen && <AddChoiceDialog canAddLesson={canAddLesson} addLessonReason={addLessonUnavailableReason} canCreateTimetable={canCreateTimetable} createTimetableReason={createTimetableUnavailableReason} onAddLesson={() => {
+      {addChoiceOpen && <AddChoiceDialog canAddLesson={canAddLesson} addLessonReason={addLessonUnavailableReason} canAddOneOff={canAddOneOff} addOneOffReason={createTimetableUnavailableReason || (!displayTimetable ? '請先選擇教師課表。' : '目前資料仍在儲存，請稍後再試。')} canCreateTimetable={canCreateTimetable} createTimetableReason={createTimetableUnavailableReason} onAddOneOff={() => openOneOff(toDateKey(new Date()))} onAddLesson={() => {
         if (!canAddLesson) return
         setAddChoiceOpen(false)
         lessonEditorFromAddRef.current = true
@@ -387,16 +410,31 @@ export default function App() {
       }} onClose={() => setAddChoiceOpen(false)} />}
       {timetableDialog?.mode === 'copy' ? <TimetableCopyForm key={`copy:${timetableDialog.timetableId}`} source={timetableDialog.source} defaultDate={timetableDialog.defaultDate} error={timetableError} submitting={Boolean(pendingTimetableCopy)} onSubmit={submitTimetableCopy} onClose={() => { if (pendingTimetableCopy) return; setTimetableDialog(null); setTimetableError('') }} /> : timetableDialog && <TimetableForm key={`${timetableDialog.mode}:${timetableDialog.timetableId ?? timetableDialog.projectId}`} mode={timetableDialog.mode} timetable={appData.timetables?.find((item) => item.id === timetableDialog.timetableId && item.projectId === timetableDialog.projectId)} error={timetableError} onSubmit={submitTimetable} onClose={() => { const returnToAdd = timetableDialog.mode === 'create'; setTimetableDialog(null); setTimetableError(''); if (returnToAdd) setAddChoiceOpen(true) }} />}
       {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor key={activeTimetable?.id ?? activeProject?.id} data={appData} setData={setAppData} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} occurrenceOverrideId={selectedLessonOverrideId} dragIntent={lessonDragIntent} onOpenSettings={() => { lessonEditorFromAddRef.current = false; setLessonEditorOpen(false); setModal('settings') }} onClose={() => { setLessonEditorOpen(false); if (lessonEditorFromAddRef.current) setAddChoiceOpen(true); lessonEditorFromAddRef.current = false }} onSaved={(projectId) => { lessonEditorFromAddRef.current = false; if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
+      {oneOffEditor && !isCompatibleAppDataV7(appData) && <Modal title="單日課程暫停編輯" onClose={() => setOneOffEditor(null)}><div className="form-grid"><p className="full one-off-error" role="alert">目前資料不是有效的 AppDataV7，無法安全寫入單日課程。請先處理儲存狀態。</p><div className="full form-actions"><button type="button" onClick={() => setOneOffEditor(null)}>關閉</button></div></div></Modal>}
+      {oneOffEditor && isCompatibleAppDataV7(appData) && <OneOffLessonEditor key={`${oneOffEditor.timetableId}:${oneOffEditor.id ?? oneOffEditor.date ?? 'new'}`} data={appData} projectId={oneOffEditor.projectId} timetableId={oneOffEditor.timetableId} oneOffLessonId={oneOffEditor.id} initialDate={oneOffEditor.date} onClose={() => { if (!oneOffWrites.pending) setOneOffEditor(null) }} onSave={async (request) => {
+        if (historicalProject || oneOffEditor.projectId !== displayProject?.id || oneOffEditor.timetableId !== displayTimetable?.id) throw new Error('目前課表已切換，請重新開啟單日課程。')
+        await oneOffWrites.save(oneOffEditor, request)
+        setOneOffNotice(request.id ? '單日課程已儲存。' : '單日課程已新增並儲存。')
+        setOneOffEditor(null)
+      }} onDelete={async (id) => {
+        if (historicalProject || oneOffEditor.projectId !== displayProject?.id || oneOffEditor.timetableId !== displayTimetable?.id) throw new Error('目前課表已切換，請重新開啟單日課程。')
+        await oneOffWrites.remove(oneOffEditor, id)
+        setOneOffNotice('單日課程已刪除並儲存。')
+        setOneOffEditor(null)
+      }} />}
     </div>
   )
 }
 
-function AddChoiceDialog({ canAddLesson, addLessonReason, canCreateTimetable, createTimetableReason, onAddLesson, onCreateTimetable, onClose }: {
+function AddChoiceDialog({ canAddLesson, addLessonReason, canAddOneOff, addOneOffReason, canCreateTimetable, createTimetableReason, onAddLesson, onAddOneOff, onCreateTimetable, onClose }: {
   canAddLesson: boolean
   addLessonReason: string
+  canAddOneOff: boolean
+  addOneOffReason: string
   canCreateTimetable: boolean
   createTimetableReason: string
   onAddLesson: () => void
+  onAddOneOff: () => void
   onCreateTimetable: () => void
   onClose: () => void
 }) {
@@ -404,6 +442,7 @@ function AddChoiceDialog({ canAddLesson, addLessonReason, canCreateTimetable, cr
     <div className="add-choice-dialog">
       <nav className="settings-menu" aria-label="新增項目">
         <button type="button" className="settings-menu-item" onClick={onAddLesson} disabled={!canAddLesson} autoFocus={canAddLesson}><span><strong>新增固定課程</strong><small>{canAddLesson ? '使用目前的專案與教師課表。' : addLessonReason}</small></span></button>
+        <button type="button" className="settings-menu-item" onClick={onAddOneOff} disabled={!canAddOneOff} autoFocus={!canAddLesson && canAddOneOff}><span><strong>新增單日課程</strong><small>{canAddOneOff ? '只在指定日期加入目前教師課表。' : addOneOffReason}</small></span></button>
         <button type="button" className="settings-menu-item" onClick={onCreateTimetable} disabled={!canCreateTimetable} autoFocus={!canAddLesson && canCreateTimetable}><span><strong>建立空白課表</strong><small>{canCreateTimetable ? '只建立一份不含課程與異動的新教師課表。' : createTimetableReason}</small></span></button>
       </nav>
       <div className="form-actions add-choice-actions"><button type="button" onClick={onClose} autoFocus={!canAddLesson && !canCreateTimetable}>取消</button></div>

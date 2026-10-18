@@ -101,20 +101,21 @@ export function useLocalStorage<T>(key: string, initialValue: T, options: LocalS
   validateUpdateRef.current = options.validateUpdate
 
   const setValue: Dispatch<SetStateAction<T>> = useCallback((next) => {
-    setValueState((current) => {
-      const resolved = typeof next === 'function' ? (next as (value: T) => T)(current) : next
-      if (Object.is(resolved, current)) return current
-      if ((validateRef.current && !validateRef.current(resolved)) || (validateUpdateRef.current && !validateUpdateRef.current(current, resolved))) {
-        blockedRef.current = true
-        setStatus('write-error')
-        return current
-      }
-      if (!pendingRef.current) pendingBaseRef.current = current
-      pendingRef.current = true
-      setPersistence((currentPersistence) => ({ ...currentPersistence, pending: true }))
-      valueRef.current = resolved
-      return resolved
-    })
+    // Resolve against the latest local value synchronously so a caller can catch
+    // validation errors from a functional transaction before awaiting persistence.
+    const current = valueRef.current
+    const resolved = typeof next === 'function' ? (next as (value: T) => T)(current) : next
+    if (Object.is(resolved, current)) return
+    if ((validateRef.current && !validateRef.current(resolved)) || (validateUpdateRef.current && !validateUpdateRef.current(current, resolved))) {
+      blockedRef.current = true
+      setStatus('write-error')
+      return
+    }
+    if (!pendingRef.current) pendingBaseRef.current = current
+    pendingRef.current = true
+    setPersistence((currentPersistence) => ({ ...currentPersistence, pending: true }))
+    valueRef.current = resolved
+    setValueState(resolved)
   }, [])
 
   const applyRaw = useCallback((raw: string | null) => {

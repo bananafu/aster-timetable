@@ -158,6 +158,17 @@ describe('OneOffLesson v7 CRUD', () => {
     expect(() => updateOneOffLesson(archived, uuid(1), draft(archived))).toThrow('封存')
     expect(() => deleteOneOffLesson(archived, uuid(1))).toThrow('封存')
   })
+
+  it('permits a period-mode one-off to be edited or deleted without weakening referenced period retiming protection', () => {
+    const original = base()
+    const data = add(original, draft(original, '2026-09-06', { mode: 'period', periodId: 1 }))
+    expect(updateOneOffLesson(data, uuid(1), draft(data, '2026-09-06', { mode: 'period', periodId: 2 })).oneOffLessons[0].time)
+      .toEqual({ mode: 'period', periodId: 2 })
+    expect(deleteOneOffLesson(data, uuid(1)).oneOffLessons).toEqual([])
+    const changedUnit = { ...data.teachingUnits[0], periods: data.teachingUnits[0].periods.map((period) => period.id === 1
+      ? { ...period, startTime: '08:15' } : period) }
+    expect(isSafeAppDataV7Update(data, { ...data, teachingUnits: [changedUnit] })).toBe(false)
+  })
 })
 
 describe('OneOffLesson reference protection', () => {

@@ -15,6 +15,8 @@ import { APP_DATA_V6_KEY } from './data/storageV6'
 import { APP_DATA_V7_KEY } from './data/storageV7'
 import { APP_DATA_V5_KEY } from './data/storageV5'
 
+const oneOffUuid = '00000000-0000-4000-8000-000000000001'
+
 function removeAppKeys() {
   localStorage.removeItem(APP_DATA_V7_KEY)
   localStorage.removeItem(APP_DATA_V6_KEY)
@@ -41,7 +43,7 @@ function copyReadyData() {
 
 describe('App v4 runtime', () => {
   beforeEach(() => { vi.useFakeTimers(); removeAppKeys() })
-  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); removeAppKeys() })
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); removeAppKeys() })
 
   it('Topbar 新增直接開啟新專案表單，課表面板才開啟選擇視窗，取消與 Escape 不寫入資料', () => {
     const data = copyReadyData()
@@ -595,5 +597,113 @@ describe('App v4 runtime', () => {
     first.unmount()
     render(<App />)
     expect(screen.getByText('單日移動')).toBeTruthy()
+  })
+})
+
+describe('App one-off schedule and confirmed persistence', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 8, 7, 7, 0)); removeAppKeys(); vi.stubGlobal('crypto', { randomUUID: () => oneOffUuid }) })
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); removeAppKeys() })
+
+  const fillOneOff = (data: ReturnType<typeof copyReadyData>) => {
+    fireEvent.change(screen.getByLabelText('學校'), { target: { value: data.schools[0].id } })
+    fireEvent.change(screen.getByLabelText('學制'), { target: { value: data.teachingUnits[0].id } })
+    fireEvent.change(screen.getByLabelText('班級'), { target: { value: data.classes[0].id } })
+    fireEvent.change(screen.getByLabelText('科目'), { target: { value: data.subjects[0].id } })
+    fireEvent.change(screen.getByLabelText('節次'), { target: { value: '3' } })
+  }
+
+  it('adds, edits and deletes a dated lesson only after the matching v7 write completes', async () => {
+    const data = copyReadyData()
+    const raw = JSON.stringify(data)
+    localStorage.setItem(APP_DATA_V7_KEY, raw)
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '2026-09-08 新增單日課程' }))
+    expect((screen.getByLabelText('指定日期') as HTMLInputElement).value).toBe('2026-09-08')
+    fillOneOff(data)
+    fireEvent.click(screen.getByRole('button', { name: '送出新增' }))
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+    expect(screen.queryByText('單日課程已新增並儲存。')).toBeNull()
+    expect(screen.getByRole('dialog', { name: '新增單日課程' })).toBeTruthy()
+    await act(async () => { vi.advanceTimersByTime(200) })
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).oneOffLessons[0]).toMatchObject({ id: oneOffUuid, date: '2026-09-08', timetableId: data.timetables[0].id, time: { mode: 'period', periodId: 3 } })
+    expect(screen.getByText('單日課程已新增並儲存。')).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: '新增單日課程' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '編輯單日課程 國文・二年 1 班' }))
+    expect(screen.getByRole('dialog', { name: '編輯單日課程' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('教室（選填）'), { target: { value: '圖書館' } })
+    fireEvent.click(screen.getByRole('button', { name: '送出修改' }))
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).oneOffLessons[0].room).toBeUndefined()
+    await act(async () => { vi.advanceTimersByTime(200) })
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).oneOffLessons[0]).toMatchObject({ id: oneOffUuid, room: '圖書館' })
+    fireEvent.click(screen.getByRole('button', { name: '編輯單日課程 國文・二年 1 班' }))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: '刪除單日課程' }))
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).oneOffLessons).toHaveLength(1)
+    await act(async () => { vi.advanceTimersByTime(200) })
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)
+    expect(stored.oneOffLessons).toEqual([])
+    expect(stored.recurringLessons).toEqual(data.recurringLessons)
+    expect(screen.getByText('單日課程已刪除並儲存。')).toBeTruthy()
+  })
+
+  it('keeps the editor open and never claims success when storage write fails', async () => {
+    const data = copyReadyData()
+    const raw = JSON.stringify(data)
+    localStorage.setItem(APP_DATA_V7_KEY, raw)
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '2026-09-08 新增單日課程' }))
+    fillOneOff(data)
+    fireEvent.click(screen.getByRole('button', { name: '送出新增' }))
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Quota exceeded') })
+    await act(async () => { vi.advanceTimersByTime(200) })
+    expect(screen.getByRole('dialog', { name: '新增單日課程' })).toBeTruthy()
+    expect(screen.getByText(/單日課程尚未成功儲存至此裝置/)).toBeTruthy()
+    expect(screen.queryByText('單日課程已新增並儲存。')).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+  })
+
+  it('requires explicit overlap consent and persists both conflict-marked cards only in the current timetable', async () => {
+    const data = copyReadyData()
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '2026-09-07 新增單日課程' }))
+    fillOneOff(data)
+    fireEvent.change(screen.getByLabelText('節次'), { target: { value: '1' } })
+    expect(screen.getByText(/此時段已有 1 堂課/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: '送出新增' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByLabelText('明確允許衝堂，保留兩堂課'))
+    fireEvent.click(screen.getByRole('button', { name: '送出新增' }))
+    expect(screen.queryByText('單日課程已新增並儲存。')).toBeNull()
+    await act(async () => { vi.advanceTimersByTime(200) })
+    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)
+    expect(stored.oneOffLessons[0]).toMatchObject({ timetableId: data.timetables[0].id, date: '2026-09-07' })
+    expect(screen.getByLabelText('2026-09-07 課表').querySelectorAll('.multi-lesson-card.conflict').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('does not overwrite an external tab or report a false success on conflict', async () => {
+    const data = copyReadyData()
+    const raw = JSON.stringify(data)
+    localStorage.setItem(APP_DATA_V7_KEY, raw)
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '2026-09-08 新增單日課程' }))
+    fillOneOff(data)
+    fireEvent.click(screen.getByRole('button', { name: '送出新增' }))
+    const external = JSON.stringify({ ...data, projects: data.projects.map((item) => ({ ...item, name: '外部分頁變更' })) })
+    localStorage.setItem(APP_DATA_V7_KEY, external)
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue: raw, newValue: external, storageArea: localStorage })))
+    await act(async () => { vi.advanceTimersByTime(200) })
+    expect(screen.getByRole('dialog', { name: '新增單日課程' })).toBeTruthy()
+    expect(screen.getByText(/本次單日課程變更尚未儲存/)).toBeTruthy()
+    expect(screen.queryByText('單日課程已新增並儲存。')).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(external)
+  })
+
+  it('does not offer one-off writes from an archived project', () => {
+    const data = copyReadyData()
+    data.projects[0].archivedAt = '2026-09-01T00:00:00.000Z'
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+    expect(screen.queryByRole('button', { name: '2026-09-08 新增單日課程' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '新增單日課程' })).toBeNull()
   })
 })
