@@ -11,6 +11,7 @@ import { TimetableControls, TimetableInfoDialog, TimetableForm, type TimetableCo
 import { CourseResourceManagerDialog } from './components/CourseResourceManager'
 import { projectToLegacyView, switchActiveProject } from './data/projectRuntime'
 import { copyTimetable, createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
+import { deleteTimetable } from './data/deleteTimetableV7'
 import { getSubjectImpact, updateSubject } from './data/subjectsV5'
 import { isCompatibleAppDataV7 } from './data/validators/v7'
 import { SCHOOL_LEVELS } from './types'
@@ -36,6 +37,8 @@ type TimetableDialog = {
   source: Timetable
   original: TimetableDetails
   sourceFingerprint: string
+  deleteFingerprint: string
+  deleteImpact: ReturnType<typeof timetableDeleteImpact>
   defaultDate: string
 }
 
@@ -49,6 +52,28 @@ function timetableCopySourceFingerprint(data: AppDataV4, projectId: string, time
     lessons: data.recurringLessons.filter((item) => item.projectId === projectId && item.timetableId === timetableId),
     teachingUnits: data.teachingUnits.filter((item) => item.projectId === projectId),
   })
+}
+
+function timetableDeleteImpact(data: AppDataV4, projectId: string, timetableId: string) {
+  return {
+    lessons: data.recurringLessons.filter((item) => item.projectId === projectId && item.timetableId === timetableId).length,
+    overrides: data.overrides.filter((item) => item.projectId === projectId && item.timetableId === timetableId).length,
+    oneOffLessons: (data.oneOffLessons ?? []).filter((item) => item.projectId === projectId && item.timetableId === timetableId).length,
+  }
+}
+
+function timetableDeleteFingerprint(data: AppDataV4, projectId: string, timetableId: string): string | null {
+  const project = data.projects.find((item) => item.id === projectId)
+  const timetable = data.timetables?.find((item) => item.id === timetableId && item.projectId === projectId)
+  if (!project || !timetable) return null
+  const lessons = data.recurringLessons.filter((item) => item.timetableId === timetableId)
+  const overrides = data.overrides.filter((item) => item.timetableId === timetableId)
+  const lessonIds = new Set(lessons.map((item) => item.id))
+  const overrideIds = new Set(overrides.map((item) => item.id))
+  return JSON.stringify({ project, timetable, lessons, overrides,
+    oneOffLessons: (data.oneOffLessons ?? []).filter((item) => item.timetableId === timetableId),
+    warnings: data.migrationWarnings.filter((item) => (item.entityType === 'lesson' && lessonIds.has(item.entityId))
+      || (item.entityType === 'override' && overrideIds.has(item.entityId))) })
 }
 
 const EMPTY_LEGACY_DATA: AppData = {
@@ -104,8 +129,10 @@ export default function App() {
   const [timetableNotice, setTimetableNotice] = useState('')
   const [pendingTimetableCopy, setPendingTimetableCopy] = useState<{ projectId: string; timetableId: string; startedRevision: number } | null>(null)
   const [pendingTimetableEdit, setPendingTimetableEdit] = useState<{ projectId: string; timetableId: string; details: TimetableDetails; startedRevision: number } | null>(null)
+  const [pendingTimetableDelete, setPendingTimetableDelete] = useState<{ projectId: string; timetableId: string; name: string; expectedData: string; startedRevision: number } | null>(null)
   const copySubmittingRef = useRef(false)
   const editSubmittingRef = useRef(false)
+  const deleteSubmittingRef = useRef(false)
   const lessonEditorFromAddRef = useRef(false)
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
@@ -168,6 +195,32 @@ export default function App() {
     setTimetableError('')
     setTimetableNotice(`已儲存「${saved.name}」的課表資訊。`)
   }, [appData.timetables, pendingTimetableEdit, storagePersistence, storageStatus])
+  useEffect(() => {
+    if (!pendingTimetableDelete) return
+    if (storageStatus === 'conflict' || storageStatus === 'write-error' || storageStatus === 'read-error') {
+      deleteSubmittingRef.current = false
+      setPendingTimetableDelete(null)
+      setTimetableError(storageStatus === 'conflict'
+        ? '其他分頁已更新資料，刪除尚未確認儲存。請先處理多分頁衝突並重新檢查課表。'
+        : '課表刪除尚未成功寫入此裝置。請先處理儲存問題，勿將記憶體中的結果視為已永久刪除。')
+      return
+    }
+    if (storageStatus !== 'saved' || storagePersistence.pending || storagePersistence.revision <= pendingTimetableDelete.startedRevision) return
+    deleteSubmittingRef.current = false
+    setPendingTimetableDelete(null)
+    if (JSON.stringify(appData) !== pendingTimetableDelete.expectedData
+      || appData.timetables?.some((item) => item.id === pendingTimetableDelete.timetableId)) {
+      setTimetableError('持久化資料與預期刪除結果不同，請重新檢查課表。')
+      return
+    }
+    if (appData.activeProjectId === pendingTimetableDelete.projectId) {
+      setTimetableSelection({ projectId: pendingTimetableDelete.projectId,
+        timetableId: appData.timetables?.find((item) => item.projectId === pendingTimetableDelete.projectId)?.id ?? null })
+    }
+    setTimetableDialog(null)
+    setTimetableError('')
+    setTimetableNotice(`已刪除並儲存「${pendingTimetableDelete.name}」。`)
+  }, [appData, pendingTimetableDelete, storagePersistence.pending, storagePersistence.revision, storageStatus])
   const weekDays = useMemo(() => Array.from({ length: 5 }, (_, index) => addDays(weekStart, index)), [weekStart])
   const activeProject = appData.projects.find((project) => project.id === appData.activeProjectId)
   const historicalProject = appData.projects.find((project) => project.id === historicalProjectId && project.archivedAt)
@@ -182,8 +235,11 @@ export default function App() {
   const weekTermLabel = weekTerms.length > 1 ? weekTerms.map((term) => term?.name).join(' ／ ') : displayedTerm?.name ?? '目前日期不屬於任何學期'
   const isMixedWeek = weekTerms.length > 1 || weekDays.some((date) => !getTermForDate(data, date))
   const activeTimetable = appData.timetables?.find((item) => item.projectId === activeProject?.id && item.id === activeTimetableId)
-  const canCreateTimetable = Boolean(displayProject && !historicalProject && !displayProject.archivedAt && storageStatus === 'saved')
-  const createTimetableUnavailableReason = storageStatus !== 'saved'
+  const canCreateTimetable = Boolean(displayProject && !historicalProject && !displayProject.archivedAt
+    && storageStatus === 'saved' && !pendingTimetableDelete)
+  const createTimetableUnavailableReason = pendingTimetableDelete
+    ? '課表刪除仍在儲存，請稍後再建立新課表。'
+    : storageStatus !== 'saved'
     ? '資料目前無法安全寫入，請先處理儲存狀態。'
     : historicalProject || displayProject?.archivedAt
       ? '封存專案為唯讀，不能建立課表。'
@@ -255,7 +311,7 @@ export default function App() {
   }
 
   const openBlankTimetable = () => {
-    if (!canCreateTimetable || !displayProject) return
+    if (!canCreateTimetable || !displayProject || pendingTimetableDelete || deleteSubmittingRef.current) return
     setTimetableNotice('')
     setTimetableError('')
     setTimetableDialog({ mode: 'create', projectId: displayProject.id })
@@ -347,6 +403,42 @@ export default function App() {
     }
   }
 
+  const submitTimetableDelete = () => {
+    if (deleteSubmittingRef.current) return
+    if (!timetableDialog || timetableDialog.mode !== 'edit' || historicalProject || storageStatus !== 'saved'
+      || storagePersistence.pending || timetableDialog.projectId !== appData.activeProjectId
+      || timetableDialog.projectId !== displayProject?.id || timetableDialog.timetableId !== displayTimetable?.id) {
+      setTimetableError('目前專案或課表已切換，或資料尚未完成儲存；請重新確認後再刪除。')
+      return
+    }
+    if (timetableDeleteFingerprint(appData, timetableDialog.projectId, timetableDialog.timetableId) !== timetableDialog.deleteFingerprint) {
+      setTimetableError('課表內容已變更，請關閉視窗後重新檢視刪除範圍。')
+      return
+    }
+    try {
+      deleteSubmittingRef.current = true
+      let expectedData = ''
+      setTimetableError('')
+      setTimetableNotice('')
+      setAppData((current) => {
+        if (!isCompatibleAppDataV7(current) || current.activeProjectId !== timetableDialog.projectId
+          || timetableDeleteFingerprint(current, timetableDialog.projectId, timetableDialog.timetableId) !== timetableDialog.deleteFingerprint) {
+          throw new Error('課表或資料已變更，請重新開啟刪除確認。')
+        }
+        const next = deleteTimetable(current, timetableDialog.projectId, timetableDialog.timetableId)
+        expectedData = JSON.stringify(next)
+        return next
+      })
+      if (!expectedData) throw new Error('刪除未通過安全更新驗證。')
+      setPendingTimetableDelete({ projectId: timetableDialog.projectId, timetableId: timetableDialog.timetableId,
+        name: timetableDialog.source.name, expectedData, startedRevision: storagePersistence.revision })
+    } catch (reason) {
+      deleteSubmittingRef.current = false
+      setPendingTimetableDelete(null)
+      setTimetableError(reason instanceof Error ? reason.message : '無法安全刪除課表，請重新確認。')
+    }
+  }
+
   const switchProject = (projectId: string) => {
     const project = appData.projects.find((item) => item.id === projectId && !item.archivedAt)
     if (!project) return
@@ -396,7 +488,7 @@ export default function App() {
           <section className="page-heading">
             <div><p className="eyebrow">{activePage === 'timetable' ? displayProject.name : weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? '我的課表' : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>{historicalProject ? '封存專案僅供查看。' : '所有資料都會自動儲存在這台裝置。'}</p>}</div>
             <div className="page-heading-side">
-              {(activePage === 'timetable' || activePage === 'dashboard') && <TimetableControls timetables={displayTimetables} selected={displayTimetable} canManage={!historicalProject && storageStatus === 'saved'} notice={timetableNotice} onSelect={(id) => { setTimetableNotice(''); chooseTimetable(displayProject.id, id) }} onEdit={() => { if (!displayTimetable) return; const sourceFingerprint = timetableCopySourceFingerprint(appData, displayProject.id, displayTimetable.id); if (!sourceFingerprint) return; setTimetableNotice(''); setTimetableError(''); setTimetableDialog({ mode: 'edit', projectId: displayProject.id, timetableId: displayTimetable.id, source: displayTimetable, original: { name: displayTimetable.name, teacherName: displayTimetable.teacherName }, sourceFingerprint, defaultDate: toDateKey(new Date()) }) }} />}
+              {(activePage === 'timetable' || activePage === 'dashboard') && displayTimetables.length > 0 && <TimetableControls timetables={displayTimetables} selected={displayTimetable} canManage={!historicalProject && storageStatus === 'saved'} notice={timetableNotice} onSelect={(id) => { setTimetableNotice(''); chooseTimetable(displayProject.id, id) }} onEdit={() => { if (!displayTimetable) return; const sourceFingerprint = timetableCopySourceFingerprint(appData, displayProject.id, displayTimetable.id); const deleteFingerprint = timetableDeleteFingerprint(appData, displayProject.id, displayTimetable.id); if (!sourceFingerprint || !deleteFingerprint) return; setTimetableNotice(''); setTimetableError(''); setTimetableDialog({ mode: 'edit', projectId: displayProject.id, timetableId: displayTimetable.id, source: displayTimetable, original: { name: displayTimetable.name, teacherName: displayTimetable.teacherName }, sourceFingerprint, deleteFingerprint, deleteImpact: timetableDeleteImpact(appData, displayProject.id, displayTimetable.id), defaultDate: toDateKey(new Date()) }) }} />}
               <div className="week-pill">{activePage === 'timetable' ? <><span>多校檢視</span><strong>實際時間</strong></> : <><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></>}</div>
             </div>
           </section>
@@ -407,11 +499,13 @@ export default function App() {
             <SubjectPanel data={data} onColorChange={changeSubjectColor} />
           ) : activePage === 'events' ? (
             <EventsPanel data={data} onDelete={(eventId) => setAppData((current) => ({ ...current, events: current.events.filter((item) => item.id !== eventId) }))} onAdd={() => setModal('event')} />
+          ) : displayTimetables.length === 0 ? (
+            <section className="panel timetable-empty-project"><h2>{storagePersistence.pending || storageStatus !== 'saved' ? '課表變更尚未確認儲存' : '這個專案尚無教師課表'}</h2><p>{storagePersistence.pending || storageStatus !== 'saved' ? '目前畫面反映記憶體中的資料；請先確認儲存狀態，勿將其視為永久刪除。' : '專案與學校、學制設定已保留。建立空白課表後，即可新增固定課程或單日課程。'}</p>{timetableNotice && <p role="status">{timetableNotice}</p>}<div><button type="button" className="primary-button" onClick={openBlankTimetable} disabled={!canCreateTimetable || storagePersistence.pending || Boolean(pendingTimetableDelete)}>新增空白課表</button><button type="button" onClick={() => { setProjectLifecycleInitialPage('root'); setModal('settings') }}>專案設定</button></div></section>
           ) : (
             <section className="panel timetable-panel">
               <div className="panel-heading">
                 <div><h2>{activePage === 'dashboard' ? '本週課表' : '跨校週課表'}</h2><p>依各校學制的實際節次與輪週設定逐日整合；點選課程可編輯。</p>{oneOffNotice && <p role="status">{oneOffNotice}</p>}</div>
-                {!historicalProject && <button className="primary-button" data-course-add onClick={openAddChoice}><Plus size={16} />新增課程</button>}
+                {!historicalProject && displayTimetable && <button className="primary-button" data-course-add onClick={openAddChoice}><Plus size={16} />新增課程</button>}
               </div>
               <MultiSchoolSchedule key={displayTimetable?.id ?? displayProject.id} data={appData} weekDays={weekDays} projectId={displayProject.id} timetableId={displayTimetable?.id} onLessonClick={historicalProject ? undefined : (lessonId, date, overrideId) => { lessonEditorFromAddRef.current = false; setSelectedLessonId(lessonId); setSelectedLessonDate(date); setSelectedLessonOverrideId(overrideId ?? null); setLessonDragIntent(null); setLessonEditorOpen(true) }} onLessonDrop={historicalProject ? undefined : (intent) => { lessonEditorFromAddRef.current = false; setSelectedLessonId(intent.lessonId); setSelectedLessonDate(intent.sourceDate); setSelectedLessonOverrideId(null); setLessonDragIntent(intent); setLessonEditorOpen(true) }} onOneOffClick={canAddOneOff ? (id) => openOneOff(undefined, id) : undefined} />
             </section>
@@ -430,7 +524,7 @@ export default function App() {
         setLessonEditorOpen(true)
       }} onClose={() => setAddChoiceOpen(false)} />}
       {resourceDialog && <CourseResourceManagerDialog data={appData} setData={setAppData} mode={resourceDialog} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onOpenSettings={() => { setResourceDialog(null); setProjectLifecycleInitialPage('root'); setModal('settings') }} onClose={() => setResourceDialog(null)} />}
-      {timetableDialog?.mode === 'edit' ? <TimetableInfoDialog key={timetableDialog.timetableId} timetable={timetableDialog.source} defaultDate={timetableDialog.defaultDate} error={timetableError} submitting={Boolean(pendingTimetableCopy || pendingTimetableEdit)} onEdit={submitTimetable} onCopy={submitTimetableCopy} onClose={() => { setTimetableDialog(null); setTimetableError('') }} /> : timetableDialog && <TimetableForm key={`create:${timetableDialog.projectId}`} error={timetableError} onSubmit={submitTimetable} onClose={() => { setTimetableDialog(null); setTimetableError('') }} />}
+      {timetableDialog?.mode === 'edit' ? <TimetableInfoDialog key={timetableDialog.timetableId} timetable={timetableDialog.source} defaultDate={timetableDialog.defaultDate} error={timetableError} submitting={Boolean(pendingTimetableCopy || pendingTimetableEdit || pendingTimetableDelete)} deleteImpact={timetableDialog.deleteImpact} onEdit={submitTimetable} onCopy={submitTimetableCopy} onDelete={submitTimetableDelete} onClose={() => { setTimetableDialog(null); setTimetableError('') }} /> : timetableDialog && <TimetableForm key={`create:${timetableDialog.projectId}`} error={timetableError} onSubmit={submitTimetable} onClose={() => { setTimetableDialog(null); setTimetableError('') }} />}
       {storageStatus === 'saved' && lessonEditorOpen && !historicalProject && <LessonEditor key={activeTimetable?.id ?? activeProject?.id} data={appData} setData={setAppData} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} occurrenceOverrideId={selectedLessonOverrideId} dragIntent={lessonDragIntent} onOpenSettings={() => { lessonEditorFromAddRef.current = false; setLessonEditorOpen(false); setModal('settings') }} onClose={() => { setLessonEditorOpen(false); if (lessonEditorFromAddRef.current) setAddChoiceOpen(true); lessonEditorFromAddRef.current = false }} onSaved={(projectId) => { lessonEditorFromAddRef.current = false; if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
       {oneOffEditor && !isCompatibleAppDataV7(appData) && <Modal title="單日課程暫停編輯" onClose={() => setOneOffEditor(null)}><div className="form-grid"><p className="full one-off-error" role="alert">目前資料不是有效的 AppDataV7，無法安全寫入單日課程。請先處理儲存狀態。</p><div className="full form-actions"><button type="button" onClick={() => setOneOffEditor(null)}>關閉</button></div></div></Modal>}
       {oneOffEditor && isCompatibleAppDataV7(appData) && <OneOffLessonEditor key={`${oneOffEditor.timetableId}:${oneOffEditor.id ?? oneOffEditor.date ?? 'new'}`} data={appData} projectId={oneOffEditor.projectId} timetableId={oneOffEditor.timetableId} oneOffLessonId={oneOffEditor.id} initialDate={oneOffEditor.date} onClose={() => { if (!oneOffWrites.pending) setOneOffEditor(null) }} onSave={async (request) => {

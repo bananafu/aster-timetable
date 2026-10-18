@@ -37,19 +37,26 @@ interface InfoDialogProps {
   defaultDate: string
   error: string
   submitting: boolean
+  deleteImpact: { lessons: number; overrides: number; oneOffLessons: number }
   onEdit: (details: TimetableDetails) => void
   onCopy: (details: TimetableCopyDetails) => void
+  onDelete: () => void
   onClose: () => void
 }
 
-export function TimetableInfoDialog({ timetable, defaultDate, error, submitting, onEdit, onCopy, onClose }: InfoDialogProps) {
+export function TimetableInfoDialog({ timetable, defaultDate, error, submitting, deleteImpact, onEdit, onCopy, onDelete, onClose }: InfoDialogProps) {
   const [name, setName] = useState(timetable.name)
   const [teacherName, setTeacherName] = useState(timetable.teacherName ?? '')
   const [copyOpen, setCopyOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteSubmitted, setDeleteSubmitted] = useState(false)
   const [copyName, setCopyName] = useState(`${timetable.name}（副本）`)
   const [copyTeacher, setCopyTeacher] = useState(timetable.teacherName ?? '')
   const [baseDate, setBaseDate] = useState(defaultDate)
   const inputRef = useRef<HTMLInputElement>(null)
+  const deleteTriggerRef = useRef<HTMLButtonElement>(null)
+  const deleteConfirmRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => { if (deleteOpen) deleteConfirmRef.current?.focus() }, [deleteOpen])
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null
     inputRef.current?.focus()
@@ -71,6 +78,7 @@ export function TimetableInfoDialog({ timetable, defaultDate, error, submitting,
     || copyName !== `${timetable.name}（副本）` || copyTeacher !== (timetable.teacherName ?? '') || baseDate !== defaultDate
   const close = () => {
     if (submitting) return
+    if (deleteOpen) { setDeleteOpen(false); queueMicrotask(() => deleteTriggerRef.current?.focus()); return }
     if (dirty && !window.confirm('尚未儲存的課表資訊會遺失，確定關閉？')) return
     onClose()
   }
@@ -78,10 +86,10 @@ export function TimetableInfoDialog({ timetable, defaultDate, error, submitting,
   return <Modal title="編輯課表資訊" subtitle={`目前課表：${timetable.name}・${timetable.teacherName ?? '待補授課教師'}`} onClose={close}>
     <div className="timetable-info-body">
       <form className="form-grid" onSubmit={(event) => { event.preventDefault(); onEdit({ name, teacherName: teacherName.trim() || null }) }}>
-        <label className="full">課表名稱<input ref={inputRef} value={name} onChange={(event) => setName(event.target.value)} required /></label>
-        <label className="full">授課教師姓名<input value={teacherName} onChange={(event) => setTeacherName(event.target.value)} required={!timetable.teacherNamePending} /></label>
+        <label className="full">課表名稱<input ref={inputRef} value={name} onChange={(event) => setName(event.target.value)} required disabled={submitting} /></label>
+        <label className="full">授課教師姓名<input value={teacherName} onChange={(event) => setTeacherName(event.target.value)} required={!timetable.teacherNamePending} disabled={submitting} /></label>
         {timetable.teacherNamePending && <p className="settings-empty full">舊課表尚未填寫授課教師姓名。可先保留待補狀態，之後再填寫。</p>}
-        {error && !copyOpen && <p className="form-error full" role="alert">{error}</p>}
+        {error && !copyOpen && !deleteOpen && <p className="form-error full" role="alert">{error}</p>}
         <div className="form-actions full"><button type="button" onClick={close} disabled={submitting}>取消</button><button type="submit" className="primary-button" disabled={submitting}>{submitting ? '正在儲存…' : '儲存課表資訊'}</button></div>
       </form>
       <section className="timetable-copy-section" aria-label="複製課表">
@@ -90,12 +98,25 @@ export function TimetableInfoDialog({ timetable, defaultDate, error, submitting,
         {!canCopy && <p>請先補齊授課教師姓名，才能複製。</p>}
         {copyOpen && <form className="form-grid" aria-label="複製課表設定" onSubmit={(event) => { event.preventDefault(); onCopy({ name: copyName, teacherName: copyTeacher, baseDate }) }}>
           {editDirty && <p className="settings-empty full">請先儲存或還原上方課表資訊，再複製課表。</p>}
-          <label className="full">副本名稱<input value={copyName} onChange={(event) => setCopyName(event.target.value)} required /></label>
-          <label className="full">副本授課教師姓名<input value={copyTeacher} onChange={(event) => setCopyTeacher(event.target.value)} required /></label>
-          <label className="full">基準日期<input type="date" value={baseDate} onChange={(event) => setBaseDate(event.target.value)} required /></label>
-          {error && <p className="form-error full" role="alert">{error}</p>}
+          <label className="full">副本名稱<input value={copyName} onChange={(event) => setCopyName(event.target.value)} required disabled={submitting} /></label>
+          <label className="full">副本授課教師姓名<input value={copyTeacher} onChange={(event) => setCopyTeacher(event.target.value)} required disabled={submitting} /></label>
+          <label className="full">基準日期<input type="date" value={baseDate} onChange={(event) => setBaseDate(event.target.value)} required disabled={submitting} /></label>
+          {error && !deleteOpen && <p className="form-error full" role="alert">{error}</p>}
           <div className="form-actions full"><button type="submit" className="primary-button" disabled={submitting || editDirty}>{submitting ? '正在儲存…' : '複製並切換'}</button></div>
         </form>}
+      </section>
+      <section className="timetable-delete-section" aria-label="刪除課表">
+        <h3>刪除課表</h3>
+        <p>刪除「{timetable.name}」會一併移除這份課表的 {deleteImpact.lessons} 筆固定課程版本、{deleteImpact.overrides} 筆單日異動與 {deleteImpact.oneOffLessons} 筆單日課程。專案及學校、學制、班級和科目不受影響。</p>
+        {!deleteOpen ? <button ref={deleteTriggerRef} type="button" className="danger-outline" disabled={submitting} onClick={() => {
+          if (dirty && !window.confirm('尚未儲存的課表資訊會遺失，確定繼續刪除？')) return
+          setDeleteSubmitted(false)
+          setDeleteOpen(true)
+        }}>刪除課表</button> : <div className="timetable-delete-confirm">
+          <p>請再次確認：永久刪除「{timetable.name}」及上述課程與異動？此操作無法復原。</p>
+          {error && deleteSubmitted && <p className="form-error" role="alert">{error}</p>}
+          <div className="form-actions"><button type="button" disabled={submitting} onClick={() => { setDeleteOpen(false); queueMicrotask(() => deleteTriggerRef.current?.focus()) }}>保留課表</button><button ref={deleteConfirmRef} type="button" className="danger-outline" disabled={submitting} onClick={() => { setDeleteSubmitted(true); onDelete() }}>{submitting ? '正在儲存…' : `確認刪除「${timetable.name}」`}</button></div>
+        </div>}
       </section>
     </div>
   </Modal>
