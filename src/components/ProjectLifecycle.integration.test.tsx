@@ -21,6 +21,7 @@ describe('ProjectLifecycleModal hierarchical settings', () => {
     expect(screen.queryByText('課堂時間表')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /學校與學制管理/ }))
     expect(screen.getByRole('button', { name: /課堂時間表/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /班級管理|科目管理/ })).toBeNull()
     expect(screen.queryByLabelText('學校')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /課堂時間表/ }))
     expect(screen.getByLabelText('學校')).toBeTruthy()

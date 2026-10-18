@@ -111,6 +111,27 @@ describe('App v4 runtime', () => {
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
   })
 
+  it('新增課程選單依序提供固定課、單日課、管理班級與全域科目', () => {
+    const data = copyReadyData()
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    const dialog = screen.getByRole('dialog', { name: '新增課程' })
+    expect(within(dialog).getAllByRole('button').map((button) => button.textContent?.trim().split('。')[0]).filter(Boolean)).toEqual([
+      expect.stringContaining('新增固定課程'), expect.stringContaining('新增單日課程'),
+      expect.stringContaining('管理班級'), expect.stringContaining('管理科目'), expect.stringContaining('取消'),
+    ])
+    fireEvent.click(within(dialog).getByRole('button', { name: /管理班級/ }))
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    expect(screen.getByLabelText('學校')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    expect(screen.getByText(/科目庫由所有專案共用/)).toBeTruthy()
+  })
+
   it('Topbar 新專案表單沿用既有 Project 建立流程並建立必要關聯', () => {
     const data = copyReadyData()
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))

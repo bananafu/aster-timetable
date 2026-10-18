@@ -110,22 +110,22 @@ describe('AcademicSettingsV4 class roster', () => {
           : { ...subject, applicableSchoolLevels: ['senior-high'] })
     const setData = vi.fn()
     render(<AcademicSettingsV4 data={data} setData={setData} page="subjects" />)
-    expect(screen.getByText('高中科目')).toBeTruthy()
-    expect(screen.getByText('共用科目')).toBeTruthy()
-    expect(screen.queryByText('國中科目')).toBeNull()
+    expect(screen.getByLabelText('高中科目名稱')).toBeTruthy()
+    expect(screen.getByLabelText('共用科目名稱')).toBeTruthy()
+    expect(screen.queryByLabelText('國中科目名稱')).toBeNull()
     fireEvent.change(screen.getByLabelText('學校'), { target: { value: 'school-j' } })
-    expect(screen.getByText('國中科目')).toBeTruthy()
-    expect(screen.queryByText('高中科目')).toBeNull()
+    expect(screen.getByLabelText('國中科目名稱')).toBeTruthy()
+    expect(screen.queryByLabelText('高中科目名稱')).toBeNull()
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '新科目' } })
     fireEvent.click(screen.getByRole('button', { name: '新增科目' }))
-    expect(setData.mock.calls[0][0].subjects.at(-1)).toMatchObject({ name: '新科目', applicableSchoolLevels: ['junior-high'] })
+    expect(setData.mock.calls[0][0](data).subjects.at(-1)).toMatchObject({ name: '新科目', applicableSchoolLevels: ['junior-high'] })
   })
 
   it('沒有學制時不顯示全域科目庫或新增入口', () => {
     const data = migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))
     data.teachingUnits = []
     render(<AcademicSettingsV4 data={data} setData={vi.fn()} page="subjects" />)
-    expect(screen.getByText('請先選擇學校與學制，才能查看或新增科目。')).toBeTruthy()
+    expect(screen.getByText(/目前專案尚無學校或學制/)).toBeTruthy()
     expect(screen.queryByText('國文')).toBeNull()
     expect(screen.queryByRole('button', { name: '新增科目' })).toBeNull()
   })
@@ -136,7 +136,7 @@ describe('AcademicSettingsV4 class roster', () => {
     fireEvent.change(screen.getByLabelText('新班級年級'), { target: { value: '1' } })
     fireEvent.change(screen.getByLabelText('新班級班號'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: '新增班級' }))
-    const result = setData.mock.calls[0][0]
+    const result = setData.mock.calls[0][0](data)
     expect(result.classes.at(-1)).toMatchObject({ name: '103', grade: 1, classNumber: 3, teachingUnitId: data.teachingUnits[0].id })
   })
 

@@ -1,23 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import {
-  addClass,
-  removeClass,
   removeSchool,
   removeTeachingUnit,
-  updateClass,
   updateSchool,
   updateTeachingUnit,
-  type ClassDraft,
   type TeachingUnitDraft,
 } from '../data/academicSettingsV4'
-import { SCHOOL_LEVELS, type AppDataV4, type ProjectClass, type School, type SchoolLevel, type SchoolPeriod, type Subject, type TeachingUnit } from '../types'
-import { classDisplayName, gradeLabel, gradesForLevel, isGradeValidForLevel } from '../lib/classes'
-import { subjectsForLevel } from '../lib/subjects'
-import { addSubjectForLevel, getSubjectImpact, updateSubject } from '../data/subjectsV5'
+import { type AppDataV4, type School, type SchoolLevel, type SchoolPeriod, type TeachingUnit } from '../types'
 import type { StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
 import { SubjectCatalogInstaller } from './SubjectCatalogInstaller'
 import { previewSubjectCatalogInstall, type CatalogSchoolLevel } from '../data/subjectCatalogInstall'
 import { addTeachingUnitToSchool, createSchoolWithTeachingUnit, type NewTeachingUnitInput } from '../data/schoolUnitCreation'
+import { CourseResourceManager } from './CourseResourceManager'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const levelLabel: Record<SchoolLevel, string> = { 'junior-high': '國中部', 'senior-high': '高中部', other: '其他' }
@@ -47,7 +41,6 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
   const projectId = data.activeProjectId!
   const schools = data.schools.filter((item) => item.projectId === projectId)
   const units = data.teachingUnits.filter((item) => item.projectId === projectId)
-  const classes = data.classes.filter((item) => item.projectId === projectId)
   const [schoolDraft, setSchoolDraft] = useState({ name: '', color: '#718B6C', schoolLevel: 'senior-high' as SchoolLevel, unitName: '', startDate: '', endDate: '' })
   const [unitDraft, setUnitDraft] = useState({ schoolId: schools[0]?.id ?? '', name: '', schoolLevel: 'senior-high' as SchoolLevel, startDate: '', endDate: '' })
   const [showSchoolForm, setShowSchoolForm] = useState(true)
@@ -55,18 +48,14 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
   const [creationSubmission, setCreationSubmission] = useState<CreationSubmission | null>(null)
   const [creationResult, setCreationResult] = useState('')
   const creatingRef = useRef(false)
-  const firstClassUnit = units[0]
-  const [classDraft, setClassDraft] = useState<ClassDraft>({ grade: gradesForLevel(firstClassUnit?.schoolLevel ?? 'other')[0], classNumber: undefined, room: '', teachingUnitId: firstClassUnit?.id ?? '' })
   const [error, setError] = useState('')
   const [subjectOnboarding, setSubjectOnboarding] = useState<{ unitId: string; level: CatalogSchoolLevel; viewing: boolean } | null>(null)
   useEffect(() => { if (page !== 'schools') setSubjectOnboarding(null) }, [page])
-  const [newSubjectName, setNewSubjectName] = useState('')
   const [selectedSchoolId, setSelectedSchoolId] = useState(schools[0]?.id ?? '')
   const selectedSchoolUnits = useMemo(() => units.filter((item) => item.schoolId === selectedSchoolId), [selectedSchoolId, units])
   const selectedSchoolHasDuplicates = selectedSchoolUnits.some((unit) => selectedSchoolUnits.some((item) => item.id !== unit.id && item.schoolLevel === unit.schoolLevel))
   const [selectedUnitId, setSelectedUnitId] = useState(selectedSchoolHasDuplicates ? '' : selectedSchoolUnits[0]?.id ?? '')
   const selectedUnit = selectedSchoolUnits.find((item) => item.id === selectedUnitId)
-  const visibleSubjects = subjectsForLevel(data.subjects, selectedUnit?.schoolLevel)
   const activeProject = data.projects.find((item) => item.id === projectId)
   const editable = !readOnly && Boolean(activeProject && !activeProject.archivedAt)
   const creationReady = editable && storageStatus === 'saved' && !storagePersistence.pending && !creationSubmission
@@ -101,11 +90,7 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
   }, [creationSubmission, data, projectId, storagePersistence.pending, storagePersistence.revision, storageStatus])
   useEffect(() => {
     if (!schools.some((item) => item.id === unitDraft.schoolId)) setUnitDraft((current) => ({ ...current, schoolId: schools[0]?.id ?? '' }))
-    if (classDraft.teachingUnitId !== (units[0]?.id ?? '') && !units.some((item) => item.id === classDraft.teachingUnitId)) {
-      const nextUnit = units[0]
-      setClassDraft((current) => ({ ...current, teachingUnitId: nextUnit?.id ?? '', grade: gradesForLevel(nextUnit?.schoolLevel ?? 'other')[0], classNumber: undefined }))
-    }
-  }, [classDraft.teachingUnitId, schools, unitDraft.schoolId, units])
+  }, [schools, unitDraft.schoolId])
   useEffect(() => {
     if (!schools.some((item) => item.id === selectedSchoolId)) setSelectedSchoolId(schools[0]?.id ?? '')
   }, [schools, selectedSchoolId])
@@ -113,12 +98,6 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
     if (selectedSchoolUnits.some((item) => item.id === selectedUnitId)) return
     setSelectedUnitId(selectedSchoolHasDuplicates ? '' : selectedSchoolUnits[0]?.id ?? '')
   }, [selectedSchoolHasDuplicates, selectedSchoolUnits, selectedUnitId])
-  useEffect(() => {
-    if (selectedUnitId && classDraft.teachingUnitId !== selectedUnitId) {
-      const nextUnit = units.find((item) => item.id === selectedUnitId)
-      setClassDraft((current) => ({ ...current, teachingUnitId: selectedUnitId, grade: gradesForLevel(nextUnit?.schoolLevel ?? 'other')[0], classNumber: undefined, name: undefined }))
-    }
-  }, [classDraft.teachingUnitId, selectedUnitId, units])
 
   const createFromForm = (kind: 'school' | 'unit', event: FormEvent) => {
     event.preventDefault()
@@ -157,24 +136,11 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
       setError(reason instanceof Error ? reason.message : '學校與學制無法建立。')
     }
   }
-  const createClass = (event: FormEvent) => {
-    event.preventDefault()
-    apply(() => addClass(data, projectId, classDraft, uid()), setData, setError)
-    setClassDraft((current) => ({ ...current, classNumber: undefined, name: undefined, room: '' }))
-  }
-  const changeSubjectColor = (subject: Subject, color: string) => {
-    const impact = getSubjectImpact(data, subject.id)
-    if (!window.confirm(`變更「${subject.name}」的全域顏色？科目庫會同步更新；目前有 ${impact.projectIds.length} 個專案、${impact.references.length} 筆課程或異動引用。`)) return
-    apply(() => updateSubject(data, subject.id, {
-      name: subject.name, shortName: subject.shortName, color,
-      applicableSchoolLevels: [...(subject.applicableSchoolLevels ?? SCHOOL_LEVELS)],
-    }, true), setData, setError)
-  }
 
   const selectors = <div className="academic-context-selectors"><label>學校<select aria-label="學校" value={selectedSchoolId} onChange={(event) => setSelectedSchoolId(event.target.value)}>{schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}</select></label><label>學制<select aria-label="目前學制" value={selectedUnitId} onChange={(event) => setSelectedUnitId(event.target.value)}>{selectedSchoolHasDuplicates && <option value="">請選擇要管理的學制設定</option>}{selectedSchoolUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitLabel(unit, units)}</option>)}</select></label></div>
 
   return <section className="academic-settings">
-    {page !== 'schools' && selectors}
+    {page === 'periods' && selectors}
     {page === 'schools' && <>
     <header><strong>學校與學制</strong><p>學校識別色由同校各學制共用；學期日期與輪週規則由學制獨立管理。</p></header>
     <div className="school-card-list">{schools.map((school) => <SchoolEditor key={school.id} school={school} units={units.filter((unit) => unit.schoolId === school.id)} data={data} setData={setData} setError={setError} readOnly={!editable} />)}</div>
@@ -207,14 +173,7 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
     </section>}
     </>}
     {page === 'periods' && <>{selectedUnit ? <PeriodEditor unit={selectedUnit} data={data} setData={setData} setError={setError} /> : <p className="settings-empty">請先為所選學校建立學制，才能設定課堂時間表。</p>}</>}
-    {page === 'classes' && <>
-    <section className="class-settings">
-      <div><strong>班級</strong><p>只顯示目前學校與學制的班級名單。</p></div>
-      {classes.filter((item) => item.teachingUnitId === selectedUnitId).map((schoolClass) => <ClassEditor key={schoolClass.id} schoolClass={schoolClass} units={selectedSchoolUnits} data={data} setData={setData} setError={setError} />)}
-      {selectedUnit ? <form className="inline-create class-create" onSubmit={createClass}><ClassIdentityFields draft={{ ...classDraft, teachingUnitId: selectedUnitId }} units={[selectedUnit]} onChange={setClassDraft} prefix="新班級" /><input aria-label="新班級教室" value={classDraft.room ?? ''} onChange={(event) => setClassDraft({ ...classDraft, room: event.target.value })} placeholder="預設教室" /><button type="submit">新增班級</button></form> : <p className="settings-empty">請先建立學制，才能新增班級。</p>}
-    </section>
-    </>}
-    {page === 'subjects' && <><section className="subject-settings"><div><strong>科目</strong><p>科目庫由所有課表專案共用；目前只顯示所選學制適用的科目。</p></div>{!selectedUnit ? <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p> : <>{visibleSubjects.length === 0 && <p className="settings-empty">目前學制尚無適用科目，可在下方新增。</p>}{visibleSubjects.map((subject) => <div className="subject-setting-row" key={subject.id}><i style={{ background: subject.color }} /><span>{subject.name}</span><input aria-label={`${subject.name}顏色`} type="color" value={subject.color} onChange={(event) => changeSubjectColor(subject, event.target.value)} /></div>)}<form className="inline-create" onSubmit={(event) => { event.preventDefault(); try { setData(addSubjectForLevel(data, newSubjectName, selectedUnit.schoolLevel, uid())); setNewSubjectName(''); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : '科目無法新增。') } }}><input aria-label="新科目名稱" value={newSubjectName} onChange={(event) => setNewSubjectName(event.target.value)} placeholder="新科目名稱" required /><button type="submit">新增科目</button></form></>}</section><SubjectCatalogInstaller data={data} setData={setData} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={readOnly} /></>}
+    {(page === 'classes' || page === 'subjects') && <CourseResourceManager data={data} setData={setData} mode={page} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={readOnly} />}
     {error && <p className="form-error" role="alert">{error}</p>}
   </section>
 }
@@ -289,31 +248,4 @@ function PeriodEditor({ unit, data, setData, setError }: { unit: TeachingUnit; d
 function TimeSelect({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   const invalid = !isFiveMinuteTime(value)
   return <select aria-label={label} value={value} className={invalid ? 'invalid-time' : ''} onChange={(event) => onChange(event.target.value)}>{invalid && <option value={value}>{value}（需修正）</option>}{timeOptions.map((time) => <option key={time} value={time}>{time}</option>)}</select>
-}
-
-function ClassEditor({ schoolClass, units, data, setData, setError }: { schoolClass: ProjectClass; units: TeachingUnit[]; data: AppDataV4; setData: Dispatch<SetStateAction<AppDataV4>>; setError: (value: string) => void }) {
-  const toDraft = (item: ProjectClass): ClassDraft => ({ name: item.name, grade: item.grade, classNumber: item.classNumber, room: item.room ?? '', teachingUnitId: item.teachingUnitId })
-  const [draft, setDraft] = useState<ClassDraft>(() => toDraft(schoolClass))
-  useEffect(() => setDraft(toDraft(schoolClass)), [schoolClass])
-  return <form className="class-editor-row" onSubmit={(event) => { event.preventDefault(); apply(() => updateClass(data, schoolClass.id, draft), setData, setError) }}><ClassIdentityFields draft={draft} units={units} onChange={setDraft} prefix="班級" legacyName={schoolClass.grade === undefined || schoolClass.classNumber === undefined} /><input aria-label="班級教室" value={draft.room ?? ''} onChange={(event) => setDraft({ ...draft, room: event.target.value })} placeholder="預設教室" /><span className="class-code-preview">顯示：{classDisplayName({ name: draft.name ?? schoolClass.name, grade: draft.grade, classNumber: draft.classNumber })}</span><button type="submit">儲存</button><button type="button" className="danger-outline" onClick={() => { if (window.confirm(`確定刪除「${classDisplayName(schoolClass)}」？`)) apply(() => removeClass(data, schoolClass.id), setData, setError) }}>刪除</button></form>
-}
-
-function ClassIdentityFields({ draft, units, onChange, prefix, legacyName = false }: { draft: ClassDraft; units: TeachingUnit[]; onChange: (draft: ClassDraft) => void; prefix: string; legacyName?: boolean }) {
-  const unit = units.find((item) => item.id === draft.teachingUnitId)
-  const grades = gradesForLevel(unit?.schoolLevel ?? 'other')
-  const selectUnit = (teachingUnitId: string) => {
-    const nextUnit = units.find((item) => item.id === teachingUnitId)
-    const nextGrades = gradesForLevel(nextUnit?.schoolLevel ?? 'other')
-    onChange({
-      ...draft,
-      teachingUnitId,
-      grade: draft.grade !== undefined && isGradeValidForLevel(nextUnit?.schoolLevel ?? 'other', draft.grade) ? draft.grade : nextGrades[0],
-      classNumber: nextGrades.length ? draft.classNumber : undefined,
-      name: nextGrades.length ? undefined : draft.name,
-    })
-  }
-  return <>
-    <select aria-label={`${prefix}所屬學制`} value={draft.teachingUnitId} onChange={(event) => selectUnit(event.target.value)}>{units.map((item) => <option key={item.id} value={item.id}>{unitLabel(item, units)}</option>)}</select>
-    {grades.length > 0 && !legacyName ? <><select aria-label={`${prefix}年級`} value={draft.grade ?? ''} onChange={(event) => onChange({ ...draft, grade: Number(event.target.value), name: undefined })}>{grades.map((grade) => <option key={grade} value={grade}>{gradeLabel(unit!.schoolLevel, grade)}</option>)}</select><input aria-label={`${prefix}班號`} type="number" min="1" step="1" value={draft.classNumber ?? ''} onChange={(event) => onChange({ ...draft, classNumber: event.target.value ? Number(event.target.value) : undefined, name: undefined })} placeholder="班號" required /></> : <input aria-label={`${prefix}名稱`} value={draft.name ?? ''} onChange={(event) => onChange({ ...draft, name: event.target.value, grade: undefined, classNumber: undefined })} placeholder="班級名稱" required />}
-  </>
 }
