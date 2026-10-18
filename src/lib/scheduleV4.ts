@@ -6,8 +6,12 @@ import { selectedTimetableId } from '../data/timetableCompatibility'
 export type ResolvedLessonStatus = 'regular' | 'replaced' | 'cancelled' | 'moved'
 
 export interface ResolvedLessonV4 {
+  kind: 'recurring'
+  occurrenceKey: string
   id: string
   seriesId: string
+  /** The original calendar date, also when a move displays this occurrence elsewhere. */
+  sourceDate: string
   date: string
   projectId: string
   timetableId?: string
@@ -32,6 +36,42 @@ export interface ResolvedLessonV4 {
   hasConflict: boolean
 }
 
+interface ResolvedOneOffBase {
+  kind: 'one-off'
+  occurrenceKey: string
+  id: string
+  date: string
+  projectId: string
+  timetableId: string
+  schoolId: string
+  schoolName: string
+  schoolColor: string
+  teachingUnitId: string
+  teachingUnitName: string
+  subjectId: string
+  subjectName: string
+  subjectColor: string
+  classId: string
+  className: string
+  purpose: 'extra' | 'make-up' | 'substitute'
+  relatedRecurringLessonId?: string
+  startTime: string
+  endTime: string
+  room?: string
+  hasConflict: boolean
+  seriesId?: never
+  overrideId?: never
+  status?: never
+  note?: never
+}
+
+export type ResolvedOneOffLesson = ResolvedOneOffBase & (
+  | { timeMode: 'period'; periodId: number; periodLabel: string }
+  | { timeMode: 'custom'; periodId?: never; periodLabel?: never }
+)
+
+export type ResolvedScheduleOccurrence = ResolvedLessonV4 | ResolvedOneOffLesson
+
 export interface ScheduleFiltersV4 {
   timetableId?: string
   schoolId?: string
@@ -39,12 +79,12 @@ export interface ScheduleFiltersV4 {
 }
 
 /** A recurring lesson ID identifies a version, while a date and override identify one occurrence. */
-export type LessonOccurrenceIdentity = Pick<ResolvedLessonV4, 'projectId' | 'timetableId' | 'id' | 'seriesId' | 'date' | 'overrideId'>
+export type LessonOccurrenceIdentity = Pick<ResolvedLessonV4, 'kind' | 'projectId' | 'timetableId' | 'id' | 'seriesId' | 'sourceDate' | 'overrideId' | 'occurrenceKey'>
 
 export interface TodayTeachingSummaryV4 {
   count: number
   state: 'current' | 'next' | 'finished' | 'idle' | 'outside-semester'
-  lesson?: ResolvedLessonV4
+  lesson?: ResolvedScheduleOccurrence
 }
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
@@ -61,8 +101,8 @@ export function getTeachingUnitWeekPattern(date: Date, unit: TeachingUnit): Alte
 }
 
 export function timeIntervalsOverlap(
-  left: Pick<ResolvedLessonV4, 'startTime' | 'endTime'>,
-  right: Pick<ResolvedLessonV4, 'startTime' | 'endTime'>,
+  left: Pick<ResolvedScheduleOccurrence, 'startTime' | 'endTime'>,
+  right: Pick<ResolvedScheduleOccurrence, 'startTime' | 'endTime'>,
 ): boolean {
   return left.startTime < right.endTime && right.startTime < left.endTime
 }
@@ -73,12 +113,20 @@ function lessonAppliesOnDate(dateKey: string, day: DayOfWeek, weekPattern: strin
   return getTeachingUnitWeekPattern(date, unit) === weekPattern
 }
 
+function recurringOccurrenceKey(projectId: string, timetableId: string | undefined, lessonId: string, seriesId: string, sourceDate: string, overrideId?: string) {
+  return JSON.stringify(['recurring', projectId, timetableId ?? null, lessonId, seriesId, sourceDate, overrideId ?? null])
+}
+
+function oneOffOccurrenceKey(projectId: string, timetableId: string, oneOffId: string, date: string) {
+  return JSON.stringify(['one-off', projectId, timetableId, oneOffId, date])
+}
+
 export function resolveProjectDay(
   data: AppDataV4,
   projectId: string,
   date: Date,
   filters: ScheduleFiltersV4 = {},
-): ResolvedLessonV4[] {
+): ResolvedScheduleOccurrence[] {
   const timetableId = selectedTimetableId(data, projectId, filters.timetableId)
   const dateKey = toDateKey(date)
   const units = data.teachingUnits.filter((unit) => unit.projectId === projectId
@@ -119,8 +167,11 @@ export function resolveProjectDay(
     const schoolClass = replacementClass ?? originalClass
 
     return [{
+      kind: 'recurring',
+      occurrenceKey: recurringOccurrenceKey(projectId, timetableId, lesson.id, lesson.seriesId, dateKey, override?.id),
       id: lesson.id,
       seriesId: lesson.seriesId,
+      sourceDate: dateKey,
       date: dateKey,
       projectId,
       ...(timetableId && { timetableId }),
@@ -159,7 +210,8 @@ export function resolveProjectDay(
       || override.date < lesson.effectiveStart || (lesson.effectiveEnd && override.date > lesson.effectiveEnd)
       || !lessonAppliesOnDate(override.date, lesson.day, lesson.weekPattern, unit, sourceDate)) return []
     return [{
-      id: lesson.id, seriesId: lesson.seriesId, date: dateKey, projectId, ...(timetableId && { timetableId }), schoolId: school.id,
+      kind: 'recurring', occurrenceKey: recurringOccurrenceKey(projectId, timetableId, lesson.id, lesson.seriesId, override.date, override.id),
+      id: lesson.id, seriesId: lesson.seriesId, sourceDate: override.date, date: dateKey, projectId, ...(timetableId && { timetableId }), schoolId: school.id,
       schoolName: school.name, schoolColor: school.color, teachingUnitId: unit.id, teachingUnitName: unit.name,
       subjectId: subject.id, subjectName: subject.name, subjectColor: subject.color,
       classId: schoolClass.id, className: classDisplayName(schoolClass), periodId: period.id, periodLabel: period.label,
@@ -168,34 +220,60 @@ export function resolveProjectDay(
     }]
   })
 
-  const sorted = [...resolved, ...moved].sort((left, right) => left.startTime.localeCompare(right.startTime)
+  const oneOffs: ResolvedOneOffLesson[] = (data.oneOffLessons ?? []).flatMap((lesson) => {
+    if (lesson.projectId !== projectId || lesson.timetableId !== timetableId || lesson.date !== dateKey || !unitIds.has(lesson.teachingUnitId)) return []
+    const unit = units.find((item) => item.id === lesson.teachingUnitId)
+    const school = unit ? schools.get(unit.schoolId) : undefined
+    const subject = subjects.get(lesson.subjectId)
+    const schoolClass = classes.get(lesson.classId)
+    const period = lesson.time.mode === 'period' ? unit?.periods.find((item) => item.id === lesson.time.periodId) : undefined
+    if (!unit || !school || !subject || !schoolClass || lesson.date < unit.startDate || lesson.date > unit.endDate
+      || (lesson.time.mode === 'period' && !period)) return []
+    const timing = lesson.time.mode === 'period'
+      ? { timeMode: 'period' as const, periodId: period!.id, periodLabel: period!.label,
+        startTime: period!.startTime, endTime: period!.endTime }
+      : { timeMode: 'custom' as const, startTime: lesson.time.startTime, endTime: lesson.time.endTime }
+    return [{
+      kind: 'one-off', occurrenceKey: oneOffOccurrenceKey(projectId, lesson.timetableId, lesson.id, lesson.date),
+      id: lesson.id, date: dateKey, projectId, timetableId: lesson.timetableId,
+      schoolId: school.id, schoolName: school.name, schoolColor: school.color,
+      teachingUnitId: unit.id, teachingUnitName: unit.name,
+      subjectId: subject.id, subjectName: subject.name, subjectColor: subject.color,
+      classId: schoolClass.id, className: classDisplayName(schoolClass),
+      purpose: lesson.purpose, relatedRecurringLessonId: lesson.relatedRecurringLessonId,
+      ...timing,
+      room: lesson.room ?? schoolClass.room,
+      hasConflict: false,
+    }]
+  })
+
+  const sorted = [...resolved, ...moved, ...oneOffs].sort((left, right) => left.startTime.localeCompare(right.startTime)
     || left.endTime.localeCompare(right.endTime)
     || left.schoolName.localeCompare(right.schoolName)
     || left.teachingUnitName.localeCompare(right.teachingUnitName))
 
   const conflicts = new Set<string>()
-  const activeLessons = sorted.filter((item) => item.status !== 'cancelled')
+  const activeLessons = sorted.filter((item) => item.kind === 'one-off' || item.status !== 'cancelled')
   activeLessons.forEach((lesson, index) => {
     activeLessons.slice(index + 1).forEach((candidate) => {
       if (timeIntervalsOverlap(lesson, candidate)) {
-        conflicts.add(lesson.id)
-        conflicts.add(candidate.id)
+        conflicts.add(lesson.occurrenceKey)
+        conflicts.add(candidate.occurrenceKey)
       }
     })
   })
-  return sorted.map((item) => ({ ...item, hasConflict: conflicts.has(item.id) }))
+  return sorted.map((item) => ({ ...item, hasConflict: conflicts.has(item.occurrenceKey) }))
 }
 
 export function getMoveTargetConflicts(
   data: AppDataV4,
-  source: LessonOccurrenceIdentity,
-  target: Pick<ResolvedLessonV4, 'date' | 'startTime' | 'endTime'>,
-): ResolvedLessonV4[] {
+  source: LessonOccurrenceIdentity | ResolvedScheduleOccurrence,
+  target: Pick<ResolvedScheduleOccurrence, 'date' | 'startTime' | 'endTime'>,
+): ResolvedScheduleOccurrence[] {
+  if (source.kind !== 'recurring') throw new Error('Only recurring occurrences can be moved by the lesson move flow')
   return resolveProjectDay(data, source.projectId, fromDateKey(target.date), { timetableId: source.timetableId })
-    .filter((item) => item.status !== 'cancelled'
-      && !(item.projectId === source.projectId && item.timetableId === source.timetableId
-        && item.id === source.id && item.seriesId === source.seriesId
-        && item.date === source.date && item.overrideId === source.overrideId)
+    .filter((item) => (item.kind === 'one-off' || item.status !== 'cancelled')
+      && item.occurrenceKey !== source.occurrenceKey
       && timeIntervalsOverlap(item, target))
 }
 
@@ -213,7 +291,7 @@ export function getTodayTeachingSummaryV4(data: AppDataV4, projectId: string, no
   const dateKey = toDateKey(now)
   const hasActiveUnit = data.teachingUnits.some((unit) => unit.projectId === projectId && dateKey >= unit.startDate && dateKey <= unit.endDate)
   if (!hasActiveUnit) return { count: 0, state: 'outside-semester' }
-  const lessons = resolveProjectDay(data, projectId, now, { timetableId }).filter((lesson) => lesson.status !== 'cancelled')
+  const lessons = resolveProjectDay(data, projectId, now, { timetableId }).filter((lesson) => lesson.kind === 'one-off' || lesson.status !== 'cancelled')
   const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
   const current = lessons.find((lesson) => lesson.startTime <= currentTime && currentTime < lesson.endTime)
   if (current) return { count: lessons.length, state: 'current', lesson: current }

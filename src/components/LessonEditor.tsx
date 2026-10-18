@@ -103,14 +103,14 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
   const periods = [...(unit?.periods ?? [])].sort((left, right) => left.order - right.order)
   const safeLesson = lesson && (data.schemaVersion < 6 || lesson.timetableId === timetableId)
   const occurrence = safeLesson && occurrenceDate ? resolveProjectDay(data, lesson.projectId, fromDateKey(occurrenceDate), { timetableId })
-    .find((item) => item.id === lesson.id && (occurrenceOverrideId == null || item.overrideId === occurrenceOverrideId)) : undefined
+    .find((item) => item.kind === 'recurring' && item.id === lesson.id && (occurrenceOverrideId == null || item.overrideId === occurrenceOverrideId)) : undefined
   const activeOverride = occurrence?.overrideId ? data.overrides.find((item) => item.id === occurrence.overrideId) : undefined
   const changeBase = useMemo(() => {
     if (!editingOverrideId) return data
     try { return revokeLessonOverride(data, editingOverrideId, timetableId) } catch { return data }
   }, [data, editingOverrideId, timetableId])
   const swapDate = dragIntent ? targetDate : changeDate
-  const candidates = safeLesson ? resolveProjectDay(changeBase, lesson.projectId, fromDateKey(swapDate), { timetableId }).filter((item) => item.id !== lesson.id && item.status !== 'cancelled') : []
+  const candidates = safeLesson ? resolveProjectDay(changeBase, lesson.projectId, fromDateKey(swapDate), { timetableId }).filter((item) => item.kind === 'recurring' && item.id !== lesson.id && item.status !== 'cancelled') : []
   const lessonUnit = lesson ? data.teachingUnits.find((item) => item.id === lesson.teachingUnitId) : undefined
   const lessonSchool = lessonUnit ? data.schools.find((item) => item.id === lessonUnit.schoolId) : undefined
   const lessonSubject = lesson ? data.subjects.find((item) => item.id === lesson.subjectId) : undefined
@@ -156,7 +156,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
     if (mode === 'move') {
       const targetPeriod = lessonUnit?.periods.find((item) => item.id === targetPeriodId)
       const sourceOccurrence = resolveProjectDay(changeBase, lesson.projectId, fromDateKey(changeDate), { timetableId })
-        .find((item) => item.id === lesson.id && item.status !== 'cancelled')
+        .find((item) => item.kind === 'recurring' && item.id === lesson.id && item.status !== 'cancelled')
       const collisions = targetPeriod && sourceOccurrence
         ? getMoveTargetConflicts(changeBase, sourceOccurrence, { date: targetDate, startTime: targetPeriod.startTime, endTime: targetPeriod.endTime }) : []
       return { data: moveLessonOnDate(changeBase, lesson.id, changeDate, { date: targetDate, periodId: targetPeriodId }, allowConflict, uid, timetableId), summary: '僅移動指定日期', details: [`原位置：${original}（將留白）`, `目標位置：${targetDate}・${targetPeriod?.label ?? targetPeriodId} ${targetPeriod?.startTime ?? ''}–${targetPeriod?.endTime ?? ''}`], warnings: collisions.map((item) => `可能衝堂：${item.subjectName}・${item.className}（${item.schoolName}）`) }

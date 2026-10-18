@@ -20,7 +20,7 @@ function assertWritableLesson(data: AppDataV4, lessonId: string, date: string, t
   if (!lesson || !project || !unit) throw new Error('Lesson does not exist')
   if (project.archivedAt) throw new Error('Archived projects are read-only')
   if (date < lesson.effectiveStart || (lesson.effectiveEnd && date > lesson.effectiveEnd)) throw new Error('Date is outside the lesson version')
-  const occurrence = resolveProjectDay(data, lesson.projectId, fromDateKey(date), { timetableId: selectedId }).find((item) => item.id === lesson.id && item.status !== 'cancelled')
+  const occurrence = resolveProjectDay(data, lesson.projectId, fromDateKey(date), { timetableId: selectedId }).find((item) => item.kind === 'recurring' && item.id === lesson.id && item.status !== 'cancelled')
   if (!occurrence) throw new Error('Lesson does not occur on the selected date')
   if (occurrence.status === 'moved') throw new Error('The lesson already has an override on this date')
   return { lesson, unit, occurrence }
@@ -95,8 +95,8 @@ export function swapLessonOccurrences(data: AppDataV4, firstId: string, firstDat
   const second = assertWritableLesson(data, secondId, secondDate, timetableId).lesson
   if (first.projectId !== second.projectId || (data.schemaVersion >= 6 && first.timetableId !== second.timetableId)) throw new Error('Lessons must belong to the same timetable')
   assertNoExistingOverride(data, firstId, firstDate); assertNoExistingOverride(data, secondId, secondDate)
-  const firstSlot = resolveProjectDay(data, first.projectId, fromDateKey(firstDate), { timetableId: first.timetableId }).find((item) => item.id === firstId)!
-  const secondSlot = resolveProjectDay(data, first.projectId, fromDateKey(secondDate), { timetableId: first.timetableId }).find((item) => item.id === secondId)!
+  const firstSlot = resolveProjectDay(data, first.projectId, fromDateKey(firstDate), { timetableId: first.timetableId }).find((item) => item.kind === 'recurring' && item.id === firstId)!
+  const secondSlot = resolveProjectDay(data, first.projectId, fromDateKey(secondDate), { timetableId: first.timetableId }).find((item) => item.kind === 'recurring' && item.id === secondId)!
   const firstTarget = periodMatchingTime(data, first, secondSlot.startTime, secondSlot.endTime)
   const secondTarget = periodMatchingTime(data, second, firstSlot.startTime, firstSlot.endTime)
   if (!firstTarget || !secondTarget) throw new Error('Cross-school swap has no matching real-time period in each original unit')

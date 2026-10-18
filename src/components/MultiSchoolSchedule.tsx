@@ -89,7 +89,7 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
     () => projectId && (data.schemaVersion < 6 || timetableId)
       ? resolveProjectWeek(data, projectId, fullWeekDays, scope === 'school'
         ? { timetableId, schoolId, teachingUnitId: unitId === 'all' ? undefined : unitId }
-        : { timetableId }) : [],
+        : { timetableId }).map((day) => ({ ...day, lessons: day.lessons.filter((lesson): lesson is ResolvedLessonV4 => lesson.kind === 'recurring') })) : [],
     [data, projectId, timetableId, fullWeekDays, scope, schoolId, unitId],
   )
   const weekendLessonCount = [fullSchedule[0], fullSchedule[6]].flatMap((day) => day?.lessons ?? []).filter((lesson) => lesson.status !== 'cancelled').length

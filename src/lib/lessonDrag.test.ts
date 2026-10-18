@@ -5,7 +5,8 @@ import { resolveProjectDay } from './scheduleV4'
 import { createLessonDragIntent } from './lessonDrag'
 
 const setup = () => migrateV3ToV4(structuredClone(initialData))
-const source = (data: ReturnType<typeof setup>) => resolveProjectDay(data, data.activeProjectId!, new Date('2026-09-07T12:00:00')).find((item) => item.id === 'c1')!
+const source = (data: ReturnType<typeof setup>) => resolveProjectDay(data, data.activeProjectId!, new Date('2026-09-07T12:00:00'))
+  .filter((item) => item.kind === 'recurring').find((item) => item.id === 'c1')!
 
 describe('desktop lesson drag intent', () => {
   it('只產生原 TeachingUnit period 的操作意圖，不修改資料', () => {

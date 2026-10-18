@@ -1,4 +1,4 @@
-import { getMoveTargetConflicts, type ResolvedLessonV4 } from './scheduleV4'
+import { getMoveTargetConflicts, type ResolvedScheduleOccurrence } from './scheduleV4'
 import type { AppDataV4 } from '../types'
 import { selectedTimetableId } from '../data/timetableCompatibility'
 
@@ -18,9 +18,10 @@ export type LessonDropResult = { valid: true; intent: LessonDragIntent } | { val
 
 export function createLessonDragIntent(
   data: AppDataV4,
-  lesson: ResolvedLessonV4,
+  lesson: ResolvedScheduleOccurrence,
   target: { date: string; startTime: string; endTime: string; timetableId?: string },
 ): LessonDropResult {
+  if (lesson.kind !== 'recurring') return { valid: false, reason: '單日新增課程尚不支援固定課程的拖曳操作。' }
   const project = data.projects.find((item) => item.id === lesson.projectId)
   if (!project || project.archivedAt) return { valid: false, reason: '封存或不存在的專案不可拖曳。' }
   if (lesson.status !== 'regular' || lesson.overrideId) return { valid: false, reason: '此課程已有單日異動，請開啟編輯器後使用「修改此異動」。' }
