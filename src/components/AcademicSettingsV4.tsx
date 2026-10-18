@@ -18,6 +18,7 @@ import { subjectsForLevel } from '../lib/subjects'
 import { addSubjectForLevel, getSubjectImpact, updateSubject } from '../data/subjectsV5'
 import type { StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
 import { SubjectCatalogInstaller } from './SubjectCatalogInstaller'
+import { previewSubjectCatalogInstall, type CatalogSchoolLevel } from '../data/subjectCatalogInstall'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const levelLabel: Record<SchoolLevel, string> = { 'junior-high': '國中部', 'senior-high': '高中部', other: '其他' }
@@ -52,6 +53,8 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
   const firstClassUnit = units[0]
   const [classDraft, setClassDraft] = useState<ClassDraft>({ grade: gradesForLevel(firstClassUnit?.schoolLevel ?? 'other')[0], classNumber: undefined, room: '', teachingUnitId: firstClassUnit?.id ?? '' })
   const [error, setError] = useState('')
+  const [subjectOnboarding, setSubjectOnboarding] = useState<{ unitId: string; level: CatalogSchoolLevel; viewing: boolean } | null>(null)
+  useEffect(() => { if (page !== 'schools') setSubjectOnboarding(null) }, [page])
   const [newSubjectName, setNewSubjectName] = useState('')
   const [selectedSchoolId, setSelectedSchoolId] = useState(schools[0]?.id ?? '')
   const selectedSchoolUnits = useMemo(() => units.filter((item) => item.schoolId === selectedSchoolId), [selectedSchoolId, units])
@@ -87,13 +90,23 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
   }
   const createUnit = (event: FormEvent) => {
     event.preventDefault()
+    const activeProject = data.projects.find((item) => item.id === projectId)
+    if (readOnly || !activeProject || activeProject.archivedAt) { setError('封存或唯讀專案不可新增學制。'); return }
     if (units.some((item) => item.schoolId === unitDraft.schoolId && item.schoolLevel === unitDraft.schoolLevel)) {
       setError(`所選學校已有${levelLabel[unitDraft.schoolLevel]}設定，未新增重複資料。`)
       return
     }
     const name = unitDraft.schoolLevel === 'other' ? unitDraft.name.trim() : levelLabel[unitDraft.schoolLevel]
     if (!name) { setError('其他學制需要可辨識的自訂名稱。'); return }
-    apply(() => addTeachingUnit(data, unitDraft.schoolId, { name, schoolLevel: unitDraft.schoolLevel, startDate: unitDraft.startDate, endDate: unitDraft.endDate, weekCycle: { enabled: true, anchorDate: unitDraft.startDate, anchorPattern: 'A' } }, uid()), setData, setError)
+    try {
+      const unitId = uid()
+      const next = addTeachingUnit(data, unitDraft.schoolId, { name, schoolLevel: unitDraft.schoolLevel, startDate: unitDraft.startDate, endDate: unitDraft.endDate, weekCycle: { enabled: true, anchorDate: unitDraft.startDate, anchorPattern: 'A' } }, unitId)
+      const level = unitDraft.schoolLevel
+      const counts = level === 'other' ? null : previewSubjectCatalogInstall(next, [level]).counts
+      setData(next)
+      setError('')
+      setSubjectOnboarding(counts && counts['safe-to-add'] + counts['needs-review'] > 0 && level !== 'other' ? { unitId, level, viewing: false } : null)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '學制無法新增。') }
   }
   const createClass = (event: FormEvent) => {
     event.preventDefault()
@@ -124,8 +137,13 @@ export function AcademicSettingsV4({ data, setData, page = 'schools', storageSta
       {unitDraft.schoolLevel === 'other' && <label className="full">自訂學制名稱<input value={unitDraft.name} onChange={(event) => setUnitDraft({ ...unitDraft, name: event.target.value })} placeholder="例如：實驗課程" required /></label>}
       <label>起始日<input aria-label="新學制起始日" type="date" value={unitDraft.startDate} onChange={(event) => setUnitDraft({ ...unitDraft, startDate: event.target.value })} required /></label>
       <label>結束日<input aria-label="新學制結束日" type="date" value={unitDraft.endDate} onChange={(event) => setUnitDraft({ ...unitDraft, endDate: event.target.value })} required /></label>
-      <div className="form-actions full"><button type="submit" className="primary-button" disabled={!schools.length}>新增學制設定</button></div>
+      <div className="form-actions full"><button type="submit" className="primary-button" disabled={!schools.length || readOnly || Boolean(data.projects.find((item) => item.id === projectId)?.archivedAt)}>新增學制設定</button></div>
     </form>
+    {subjectOnboarding && units.some((unit) => unit.id === subjectOnboarding.unitId) && !readOnly && !data.projects.find((item) => item.id === projectId)?.archivedAt && <section className="subject-onboarding" aria-label="預設科目引導">
+      <div><strong>要檢視{levelLabel[subjectOnboarding.level]}的預設科目嗎？</strong><p>科目庫由所有專案共用。只會在確認後新增安全項目；既有科目與待確認衝突不會自動修改。</p></div>
+      {!subjectOnboarding.viewing && <div className="subject-onboarding-actions"><button type="button" className="primary-button" onClick={() => setSubjectOnboarding({ ...subjectOnboarding, viewing: true })}>檢視並補齊</button><button type="button" onClick={() => setSubjectOnboarding(null)}>稍後再說</button></div>}
+      {subjectOnboarding.viewing && <SubjectCatalogInstaller data={data} setData={setData} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={readOnly} initialLevel={subjectOnboarding.level} />}
+    </section>}
     </>}
     {page === 'periods' && <>{selectedUnit ? <PeriodEditor unit={selectedUnit} data={data} setData={setData} setError={setError} /> : <p className="settings-empty">請先為所選學校建立學制，才能設定課堂時間表。</p>}</>}
     {page === 'classes' && <>

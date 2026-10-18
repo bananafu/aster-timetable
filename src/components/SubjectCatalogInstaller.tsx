@@ -18,13 +18,14 @@ interface Props {
   storageStatus: StorageStatus
   storagePersistence: StoragePersistence
   readOnly?: boolean
+  initialLevel?: CatalogSchoolLevel
 }
 
-export function SubjectCatalogInstaller({ data, setData, storageStatus, storagePersistence, readOnly = false }: Props) {
-  const [expanded, setExpanded] = useState(false)
-  const [levels, setLevels] = useState<CatalogSchoolLevel[]>(['junior-high', 'senior-high'])
+export function SubjectCatalogInstaller({ data, setData, storageStatus, storagePersistence, readOnly = false, initialLevel }: Props) {
+  const [expanded, setExpanded] = useState(Boolean(initialLevel))
+  const [levels, setLevels] = useState<CatalogSchoolLevel[]>(initialLevel ? [initialLevel] : ['junior-high', 'senior-high'])
   const [optionalKeys, setOptionalKeys] = useState<string[]>([])
-  const [preview, setPreview] = useState<CatalogInstallPreview | null>(null)
+  const [preview, setPreview] = useState<CatalogInstallPreview | null>(() => initialLevel ? previewSubjectCatalogInstall(data, [initialLevel]) : null)
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState<{ revision: number; ids: string[] } | null>(null)
   const active = data.projects.find((project) => project.id === data.activeProjectId)
