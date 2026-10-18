@@ -170,6 +170,24 @@ describe('LessonEditor integrated experience', () => {
     expect(setData).toHaveBeenCalledTimes(1)
   })
 
+  it('跨週移動至同課原有 occurrence 時先阻止，明確允許後預覽與寫入皆提示衝堂', () => {
+    const data = setup()
+    const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'move' } })
+    fireEvent.change(screen.getByLabelText('移至日期'), { target: { value: '2026-09-14' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(screen.getByRole('alert').textContent).toContain('目標時間已有課程')
+    expect(setData).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByLabelText('目標已有課程時仍保留雙方並顯示衝堂警告'))
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(screen.getByLabelText('異動預覽').textContent).toContain('可能衝堂：國文')
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    const result = setData.mock.calls[0][0] as ReturnType<typeof setup>
+    expect(result.overrides.at(-1)).toMatchObject({ action: 'move', originalLessonId: 'c1', date: '2026-09-07', target: { date: '2026-09-14', periodId: 1 } })
+  })
+
   it('版本歷史呈現生效範圍且不提供過去版本回寫入口', () => {
     const data = setup()
     const lesson = data.recurringLessons.find((item) => item.id === 'c1')!
@@ -179,12 +197,64 @@ describe('LessonEditor integrated experience', () => {
       projectId: lesson.projectId, schoolId: school.id, teachingUnitId: unit.id, subjectId: lesson.subjectId,
       classId: lesson.classId, day: lesson.day, periodId: 2, weekPattern: lesson.weekPattern, room: lesson.room,
     }, () => 'c1-v2')
-    render(<LessonEditor data={versioned} setData={vi.fn()} lessonId="c1-v2" occurrenceDate="2026-09-14" onClose={vi.fn()} onSaved={vi.fn()} />)
+    const setData = vi.fn()
+    render(<LessonEditor data={versioned} setData={setData} lessonId="c1-v2" occurrenceDate="2026-09-14" onClose={vi.fn()} onSaved={vi.fn()} />)
     fireEvent.click(screen.getByText('課程版本歷史（2）'))
     expect(screen.getByText('2026-08-31 — 2026-09-13')).toBeTruthy()
     expect(screen.getByText('2026-09-14 — 2027-01-20')).toBeTruthy()
     expect(screen.getByText('歷史版本僅供檢視，不可直接回寫。')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /回復|修改歷史/ })).toBeNull()
+    expect(screen.getByText(/此課程已有歷史版本，不能直接刪除/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '刪除固定課程' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
+    expect(screen.getByRole('option', { name: '結束課程' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'end' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(screen.getByLabelText('異動預覽').textContent).toContain('從指定日期起結束課程')
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    const ended = setData.mock.calls[0][0] as ReturnType<typeof setup>
+    expect(ended.recurringLessons.some((item) => item.id === 'c1-v2')).toBe(false)
+    expect(ended.recurringLessons.find((item) => item.id === 'c1')?.effectiveEnd).toBe('2026-09-13')
+  })
+
+  it('單版本固定課程仍可使用原有刪除功能', () => {
+    const setData = vi.fn()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<LessonEditor data={setup()} setData={setData} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '刪除固定課程' }))
+    expect((setData.mock.calls[0][0] as ReturnType<typeof setup>).recurringLessons.some((item) => item.id === 'c1')).toBe(false)
+    confirm.mockRestore()
+  })
+
+  it('永久修改鎖定原學校與學制，單日異動仍維持可用', () => {
+    const original = setup()
+    const unit = original.teachingUnits[0]
+    const data = addTeachingUnit(original, unit.schoolId, { name: '國中部', schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: false, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'junior-unit')
+    render(<LessonEditor data={data} setData={vi.fn()} lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
+    expect((screen.getByLabelText('課程學校') as HTMLSelectElement).disabled).toBe(true)
+    expect((screen.getByLabelText('課程學制') as HTMLSelectElement).disabled).toBe(true)
+    expect(screen.getByText(/永久版本必須保留原學制/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    expect(screen.getByRole('option', { name: '移動課程' })).toBeTruthy()
+  })
+
+  it('同一天同課程的週末異動可依 override ID 編輯正確 occurrence', () => {
+    const first = moveLessonOnDate(setup(), 'c1', '2026-09-07', { date: '2026-09-12', periodId: 1 }, false, () => 'first-weekend')
+    const data = moveLessonOnDate(first, 'c1', '2026-09-14', { date: '2026-09-12', periodId: 8 }, false, () => 'second-weekend')
+    const setData = vi.fn()
+    render(<LessonEditor data={data} setData={setData} lessonId="c1" occurrenceDate="2026-09-12" occurrenceOverrideId="second-weekend" onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByLabelText('現有單日異動').textContent).toContain('2026-09-14 → 2026-09-12・節次 8')
+    fireEvent.click(screen.getByRole('button', { name: '修改此異動' }))
+    expect((screen.getByLabelText('異動日期') as HTMLInputElement).value).toBe('2026-09-14')
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'cancel' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    const result = setData.mock.calls[0][0] as ReturnType<typeof setup>
+    expect(result.overrides).toHaveLength(2)
+    expect(result.overrides.find((item) => item.id === 'first-weekend')?.action).toBe('move')
+    expect(result.overrides.some((item) => item.id === 'second-weekend')).toBe(false)
+    expect(result.overrides.find((item) => item.date === '2026-09-14')?.action).toBe('cancel')
   })
 
   it('從歷史日期開啟已結束版本時只提供唯讀檢視', () => {

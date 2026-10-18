@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type CSSProperties, type DragEvent } from 'react'
 import { AlertTriangle, MapPin } from 'lucide-react'
-import { dayNames, formatShortDate, toDateKey } from '../lib/date'
+import { addDays, dayNames, formatShortDate, toDateKey } from '../lib/date'
 import { createLessonDragIntent, type LessonDragIntent } from '../lib/lessonDrag'
 import { resolveProjectWeek, type ResolvedLessonV4 } from '../lib/scheduleV4'
 import type { AppDataV4, TeachingUnit } from '../types'
 
 type ScheduleScope = 'all' | 'school'
+const weekDayLabels = ['週日', ...dayNames, '週六']
 const unitLabel = (unit: TeachingUnit, units: TeachingUnit[]) => {
   const peers = units.filter((item) => item.schoolId === unit.schoolId && item.schoolLevel === unit.schoolLevel)
   const base = unit.schoolLevel === 'junior-high' ? '國中部' : unit.schoolLevel === 'senior-high' ? '高中部' : unit.name
@@ -17,7 +18,7 @@ interface Props {
   weekDays: Date[]
   projectId?: string | null
   timetableId?: string
-  onLessonClick?: (lessonId: string, date: string) => void
+  onLessonClick?: (lessonId: string, date: string, overrideId?: string) => void
   onLessonDrop?: (intent: LessonDragIntent) => void
 }
 
@@ -59,6 +60,7 @@ function LessonCard({ lesson, previous, onClick, draggable, onDragStart, onDragE
 
 export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjectId, timetableId, onLessonClick, onLessonDrop }: Props) {
   const [scope, setScope] = useState<ScheduleScope>('all')
+  const [showWeekend, setShowWeekend] = useState(false)
   const projectId = requestedProjectId === undefined ? data.activeProjectId : requestedProjectId
   const schools = useMemo(() => data.schools.filter((item) => item.projectId === projectId), [data.schools, projectId])
   const units = useMemo(() => data.teachingUnits.filter((item) => item.projectId === projectId), [data.teachingUnits, projectId])
@@ -81,13 +83,17 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
   }, [])
 
   const schoolUnits = units.filter((item) => item.schoolId === schoolId)
-  const schedule = useMemo(
+  const fullWeekDays = useMemo(() => weekDays[0]
+    ? Array.from({ length: 7 }, (_, index) => addDays(weekDays[0], index - 1)) : [], [weekDays])
+  const fullSchedule = useMemo(
     () => projectId && (data.schemaVersion !== 6 || timetableId)
-      ? resolveProjectWeek(data, projectId, weekDays, scope === 'school'
+      ? resolveProjectWeek(data, projectId, fullWeekDays, scope === 'school'
         ? { timetableId, schoolId, teachingUnitId: unitId === 'all' ? undefined : unitId }
         : { timetableId }) : [],
-    [data, projectId, timetableId, weekDays, scope, schoolId, unitId],
+    [data, projectId, timetableId, fullWeekDays, scope, schoolId, unitId],
   )
+  const weekendLessonCount = [fullSchedule[0], fullSchedule[6]].flatMap((day) => day?.lessons ?? []).filter((lesson) => lesson.status !== 'cancelled').length
+  const schedule = showWeekend ? fullSchedule : fullSchedule.slice(1, 6)
   const conflictCount = schedule.flatMap((day) => day.lessons).filter((lesson) => lesson.hasConflict).length
   const draggedUnit = draggedLesson ? data.teachingUnits.find((item) => item.id === draggedLesson.teachingUnitId) : undefined
   const dropLesson = (date: string, startTime: string, endTime: string) => {
@@ -108,23 +114,28 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
         <button role="tab" aria-selected={scope === 'all'} className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>總課表</button>
         <button role="tab" aria-selected={scope === 'school'} className={scope === 'school' ? 'active' : ''} onClick={() => setScope('school')}>各校課表</button>
       </div>
+      <div className="view-switch schedule-days-switch" role="group" aria-label="課表顯示天數">
+        <button type="button" className={!showWeekend ? 'active' : ''} aria-pressed={!showWeekend} onClick={() => setShowWeekend(false)}>五天</button>
+        <button type="button" className={showWeekend ? 'active' : ''} aria-pressed={showWeekend} onClick={() => setShowWeekend(true)}>七天</button>
+      </div>
       {scope === 'school' && <div className="school-schedule-filters">
         <label>學校<select aria-label="選擇學校" value={schoolId} onChange={(event) => { setSchoolId(event.target.value); setUnitId('all') }}>{schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}</select></label>
         <label>學制<select aria-label="篩選學制" value={unitId} onChange={(event) => setUnitId(event.target.value)}><option value="all">全部學制</option>{schoolUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitLabel(unit, units)}</option>)}</select></label>
       </div>}
       {conflictCount > 0 && <p className="schedule-conflict-summary" role="status"><AlertTriangle size={14} />本週有 {conflictCount} 堂課涉及時間衝突</p>}
     </div>
+    {!showWeekend && weekendLessonCount > 0 && <div className="weekend-lesson-notice" role="status"><span>本週週末有 {weekendLessonCount} 堂課</span><button type="button" onClick={() => setShowWeekend(true)}>顯示週末</button></div>}
     {(draggedLesson || dragFeedback) && <div className={`drag-status ${dragFeedback ? 'warning' : ''}`} role="status">{draggedLesson ? `正在拖曳：${draggedLesson.subjectName}・${draggedLesson.className}；按 Escape 取消。` : dragFeedback}<button type="button" onClick={() => setDragFeedback('')}>關閉</button></div>}
 
     <div className="multi-schedule-scroll">
-      <div className="multi-week-grid">
-        {schedule.map(({ date, lessons }, dayIndex) => <section className="multi-day-column" key={date.toISOString()}>
-          <header><span>{dayNames[dayIndex]}</span><strong>{formatShortDate(date)}</strong></header>
+      <div className={`multi-week-grid ${showWeekend ? 'seven-days' : ''}`}>
+        {schedule.map(({ date, lessons }, dayIndex) => <section className="multi-day-column" key={date.toISOString()} aria-label={`${toDateKey(date)} 課表`}>
+          <header><span>{showWeekend ? weekDayLabels[dayIndex] : dayNames[dayIndex]}</span><strong>{formatShortDate(date)}</strong></header>
           <div className="multi-day-lessons">
             {draggedLesson && draggedUnit && <div className="lesson-drop-targets" aria-label={`${toDateKey(date)} 可放置節次`}>{[...draggedUnit.periods].sort((left, right) => left.order - right.order).map((period) => { const result = createLessonDragIntent(data, draggedLesson, { date: toDateKey(date), startTime: period.startTime, endTime: period.endTime, timetableId }); return <div key={period.id} className={`lesson-drop-target ${result.valid ? 'valid' : 'invalid'} ${result.valid && result.intent.conflictLessonIds.length ? 'occupied' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dropLesson(toDateKey(date), period.startTime, period.endTime) }}><strong>{period.label}</strong><span>{period.startTime}–{period.endTime}</span><em>{result.valid ? result.intent.conflictLessonIds.length ? '已有課程' : '放置於此' : '不可放置'}</em></div> })}</div>}
             {lessons.length === 0
               ? <p className="cross-school-empty">無有效課程</p>
-              : lessons.map((lesson, index) => <LessonCard key={`${lesson.id}-${lesson.overrideId ?? 'fixed'}`} lesson={lesson} previous={lessons[index - 1]} onClick={onLessonClick ? () => onLessonClick(lesson.id, lesson.date) : undefined} draggable={Boolean(onLessonDrop)} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', lesson.id); setDraggedLesson(lesson); setDragFeedback('') }} onDragEnd={() => setDraggedLesson(null)} onDragOver={(event) => { if (draggedLesson) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); dropLesson(lesson.date, lesson.startTime, lesson.endTime) }} />)}
+              : lessons.map((lesson, index) => <LessonCard key={`${lesson.id}-${lesson.overrideId ?? 'fixed'}`} lesson={lesson} previous={lessons[index - 1]} onClick={onLessonClick ? () => onLessonClick(lesson.id, lesson.date, lesson.overrideId) : undefined} draggable={Boolean(onLessonDrop)} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', lesson.id); setDraggedLesson(lesson); setDragFeedback('') }} onDragEnd={() => setDraggedLesson(null)} onDragOver={(event) => { if (draggedLesson) event.preventDefault() }} onDrop={(event) => { event.preventDefault(); dropLesson(lesson.date, lesson.startTime, lesson.endTime) }} />)}
           </div>
         </section>)}
       </div>

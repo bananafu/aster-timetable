@@ -157,3 +157,8 @@ input[type="date"], input[type="time"], .week-controls, .period-label, .day-head
 .settings-create-preview { margin: 0; color: var(--color-text-secondary); font-size: 11px; line-height: 1.6; }
 .settings-create-result { margin: 0; padding: 10px 12px; color: var(--color-accent); background: var(--color-primary-soft); border-left: 3px solid var(--color-primary); font-size: 11px; line-height: 1.5; }
 @media (max-width: 560px) { .settings-create-heading { flex-direction: column; }.settings-create-heading button { align-self: flex-start; } }
+.schedule-days-switch { flex: 0 0 auto; margin-left: auto; }
+.weekend-lesson-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 24px; color: var(--color-accent); background: var(--color-primary-soft); border-bottom: 1px solid var(--color-border-soft); font-size: 12px; }
+.weekend-lesson-notice button { min-height: 34px; padding: 5px 10px; color: var(--color-focus); background: var(--color-surface-strong); border: var(--border); border-radius: var(--radius-sm); cursor: pointer; font-size: 11px; }
+.multi-week-grid.seven-days { min-width: 1400px; grid-template-columns: repeat(7, minmax(200px, 1fr)); }
+@media (max-width: 760px) { .schedule-days-switch { align-self: flex-start; margin-left: 0; }.schedule-days-switch button, .weekend-lesson-notice button { min-height: 44px; }.weekend-lesson-notice { padding-inline: 16px; }.multi-week-grid.seven-days { min-width: 1260px; grid-template-columns: repeat(7, minmax(180px, 1fr)); } }

@@ -1,5 +1,5 @@
 import { fromDateKey, toDateKey } from '../lib/date'
-import { resolveProjectDay } from '../lib/scheduleV4'
+import { getMoveTargetConflicts, resolveProjectDay } from '../lib/scheduleV4'
 import type { AppDataV4, RecurringLesson, ScheduleOverrideV4 } from '../types'
 import type { LessonDraftV4 } from './lessonsV4'
 import { isCurrentAppData } from './validators/current'
@@ -20,9 +20,10 @@ function assertWritableLesson(data: AppDataV4, lessonId: string, date: string, t
   if (!lesson || !project || !unit) throw new Error('Lesson does not exist')
   if (project.archivedAt) throw new Error('Archived projects are read-only')
   if (date < lesson.effectiveStart || (lesson.effectiveEnd && date > lesson.effectiveEnd)) throw new Error('Date is outside the lesson version')
-  const resolved = resolveProjectDay(data, lesson.projectId, fromDateKey(date), { timetableId: selectedId }).some((item) => item.id === lesson.id && item.status !== 'cancelled')
-  if (!resolved) throw new Error('Lesson does not occur on the selected date')
-  return { lesson, unit }
+  const occurrence = resolveProjectDay(data, lesson.projectId, fromDateKey(date), { timetableId: selectedId }).find((item) => item.id === lesson.id && item.status !== 'cancelled')
+  if (!occurrence) throw new Error('Lesson does not occur on the selected date')
+  if (occurrence.status === 'moved') throw new Error('The lesson already has an override on this date')
+  return { lesson, unit, occurrence }
 }
 
 function assertNoExistingOverride(data: AppDataV4, lessonId: string, date: string) {
@@ -70,12 +71,11 @@ export function replaceLessonOnDate(data: AppDataV4, lessonId: string, date: str
 }
 
 export function moveLessonOnDate(data: AppDataV4, lessonId: string, date: string, target: { date: string; periodId: number }, allowConflict: boolean, createId: () => string, timetableId?: string): AppDataV4 {
-  const { lesson, unit } = assertWritableLesson(data, lessonId, date, timetableId)
+  const { lesson, unit, occurrence } = assertWritableLesson(data, lessonId, date, timetableId)
   assertNoExistingOverride(data, lessonId, date)
   const targetPeriod = unit.periods.find((item) => item.id === target.periodId)
   if (!targetPeriod || target.date < unit.startDate || target.date > unit.endDate) throw new Error('Move target must use a valid period from the original teaching unit')
-  const collisions = resolveProjectDay(data, lesson.projectId, fromDateKey(target.date), { timetableId: lesson.timetableId }).filter((item) => item.status !== 'cancelled' && item.id !== lesson.id
-    && item.startTime < targetPeriod.endTime && targetPeriod.startTime < item.endTime)
+  const collisions = getMoveTargetConflicts(data, occurrence, { date: target.date, startTime: targetPeriod.startTime, endTime: targetPeriod.endTime })
   if (collisions.length > 0 && !allowConflict) throw new Error('Move target is occupied')
   const override: ScheduleOverrideV4 = { id: createId(), projectId: lesson.projectId, ...(lesson.timetableId && { timetableId: lesson.timetableId }), teachingUnitId: lesson.teachingUnitId, date, periodId: lesson.periodId, action: 'move', originalLessonId: lesson.id, target, origin: 'user' }
   return validResult({ ...data, overrides: [...data.overrides, override] })
@@ -118,6 +118,7 @@ function prepareSplit(data: AppDataV4, lesson: RecurringLesson, date: string, dr
   const school = data.schools.find((item) => item.id === draft.schoolId)
   const schoolClass = data.classes.find((item) => item.id === draft.classId)
   if (!project || project.archivedAt || draft.projectId !== lesson.projectId || (data.schemaVersion === 6 && draft.timetableId !== lesson.timetableId)) throw new Error('Project or timetable is read-only or cannot be changed')
+  if (draft.teachingUnitId !== lesson.teachingUnitId) throw new Error('Permanent changes cannot move a lesson across teaching units')
   if (!unit || unit.projectId !== project.id || school?.id !== unit.schoolId || schoolClass?.teachingUnitId !== unit.id || schoolClass.projectId !== project.id) throw new Error('Permanent change has invalid project references')
   if (!unit.periods.some((item) => item.id === draft.periodId) || !subjectChoiceAllowed(data.subjects.find((item) => item.id === draft.subjectId), unit.schoolLevel, unit.id, lesson)) throw new Error('Permanent change has invalid period or subject')
   if ((!unit.weekCycle.enabled && draft.weekPattern !== 'every') || date < unit.startDate || date > unit.endDate || date < lesson.effectiveStart || (lesson.effectiveEnd && date > lesson.effectiveEnd)) throw new Error('Permanent effective date is invalid')

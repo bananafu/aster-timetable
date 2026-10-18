@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveProjectDay } from '../lib/scheduleV4'
+import { getMoveTargetConflicts, resolveProjectDay } from '../lib/scheduleV4'
 import { initialData } from './seed'
 import { migrateV3ToV4 } from './migrationsV4'
 import { migrateV4ToV5 } from './migrationsV5'
@@ -55,6 +55,31 @@ describe('v4 lesson changes', () => {
     expect(day(result, '2026-09-14').find((item) => item.id === 'c1')?.periodId).toBe(1)
   })
 
+  it('移至週末後只能透過原 override 修改或撤銷，不可在目標日期新增無效取消', () => {
+    const moved = moveLessonOnDate(setup(), 'c1', '2026-09-07', { date: '2026-09-12', periodId: 8 }, false, ids('weekend-move'))
+    const before = structuredClone(moved)
+    expect(day(moved, '2026-09-12').find((item) => item.id === 'c1')).toMatchObject({ status: 'moved', overrideId: 'weekend-move' })
+    expect(() => cancelLessonOnDate(moved, 'c1', '2026-09-12', ids('invalid-cancel'))).toThrow('already has an override')
+    expect(() => moveLessonOnDate(moved, 'c1', '2026-09-12', { date: '2026-09-13', periodId: 8 }, false, ids('invalid-move'))).toThrow('already has an override')
+    expect(moved).toEqual(before)
+    const replacement = cancelLessonOnDate(revokeLessonOverride(moved, 'weekend-move'), 'c1', '2026-09-07', ids('source-cancel'))
+    expect(day(replacement, '2026-09-12').some((item) => item.id === 'c1')).toBe(false)
+    expect(day(replacement, '2026-09-07').find((item) => item.id === 'c1')?.status).toBe('cancelled')
+  })
+
+  it('永久修改在版本起日及未來日期均不能跨 TeachingUnit，原資料不變', () => {
+    const data = setup()
+    const lesson = data.recurringLessons.find((item) => item.id === 'c1')!
+    const sourceUnit = data.teachingUnits.find((item) => item.id === lesson.teachingUnitId)!
+    data.teachingUnits.push({ ...structuredClone(sourceUnit), id: 'other-unit', schoolLevel: 'junior-high' })
+    data.classes.push({ id: 'other-class', projectId: lesson.projectId, teachingUnitId: 'other-unit', name: '另一班' })
+    const draft = { projectId: lesson.projectId, schoolId: sourceUnit.schoolId, teachingUnitId: 'other-unit', subjectId: lesson.subjectId, classId: 'other-class', day: lesson.day, periodId: lesson.periodId, weekPattern: lesson.weekPattern }
+    const before = structuredClone(data)
+    expect(() => permanentlyUpdateLesson(data, lesson.id, lesson.effectiveStart, draft, ids('new-at-start'))).toThrow('across teaching units')
+    expect(() => permanentlyUpdateLesson(data, lesson.id, '2026-09-14', draft, ids('new-future'))).toThrow('across teaching units')
+    expect(data).toEqual(before)
+  })
+
   it('目標已有課程時阻止覆寫，明確允許後保留雙方及衝堂警告', () => {
     const data = setup()
     expect(() => moveLessonOnDate(data, 'c1', '2026-09-07', { date: '2026-09-07', periodId: 3 }, false, ids('blocked'))).toThrow('occupied')
@@ -62,6 +87,70 @@ describe('v4 lesson changes', () => {
     const lessons = day(result, '2026-09-07').filter((item) => ['c1', 'c2'].includes(item.id))
     expect(lessons).toHaveLength(2)
     expect(lessons.every((item) => item.hasConflict)).toBe(true)
+  })
+
+  it('跨週移至同一固定課程原有時段時阻止寫入，明確允許才保留兩次 occurrence', () => {
+    const data = setup()
+    const before = structuredClone(data)
+    expect(() => moveLessonOnDate(data, 'c1', '2026-09-07', { date: '2026-09-14', periodId: 1 }, false, ids('blocked'))).toThrow('occupied')
+    expect(data).toEqual(before)
+    const allowed = moveLessonOnDate(data, 'c1', '2026-09-07', { date: '2026-09-14', periodId: 1 }, true, ids('allowed'))
+    const occurrences = day(allowed, '2026-09-14').filter((item) => item.id === 'c1')
+    expect(occurrences).toHaveLength(2)
+    expect(occurrences.map((item) => [item.date, item.status, item.overrideId, item.hasConflict])).toEqual([
+      ['2026-09-14', 'regular', undefined, true],
+      ['2026-09-14', 'moved', 'allowed', true],
+    ])
+    expect(getMoveTargetConflicts(allowed, occurrences[0], { date: '2026-09-14', startTime: '08:10', endTime: '09:00' })
+      .map((item) => item.overrideId)).toEqual(['allowed'])
+    expect(day(allowed, '2026-09-07').some((item) => item.id === 'c1')).toBe(false)
+  })
+
+  it('同一固定課程不同來源日期各自獨立，同日改節次只排除來源 occurrence', () => {
+    const data = setup()
+    expect(() => moveLessonOnDate(data, 'c1', '2026-09-07', { date: '2026-09-07', periodId: 8 }, false, ids('same-day'))).not.toThrow()
+    const first = moveLessonOnDate(data, 'c1', '2026-09-07', { date: '2026-09-21', periodId: 1 }, true, ids('first'))
+    expect(() => moveLessonOnDate(first, 'c1', '2026-09-14', { date: '2026-09-21', periodId: 1 }, false, ids('second'))).toThrow('occupied')
+    expect(first.overrides).toHaveLength(1)
+  })
+
+  it('A/B 課程移至無課週可寫入，有課週須先處理衝堂', () => {
+    const data = setup()
+    data.teachingUnits[0].weekCycle.anchorDate = '2026-09-07'
+    data.recurringLessons = data.recurringLessons.filter((item) => item.id !== 'c4')
+    expect(day(data, '2026-09-14').some((item) => item.id === 'c3')).toBe(false)
+    expect(day(data, '2026-09-21').some((item) => item.id === 'c3')).toBe(true)
+    expect(() => moveLessonOnDate(data, 'c3', '2026-09-07', { date: '2026-09-14', periodId: 6 }, false, ids('off-week'))).not.toThrow()
+    expect(() => moveLessonOnDate(data, 'c3', '2026-09-07', { date: '2026-09-21', periodId: 6 }, false, ids('on-week'))).toThrow('occupied')
+  })
+
+  it('跨年與 anchor 前日期仍依 resolver 的 A/B occurrence 偵測衝堂', () => {
+    const data = setup()
+    data.teachingUnits[0].weekCycle = { enabled: true, anchorDate: '2027-01-04', anchorPattern: 'A' }
+    data.recurringLessons = data.recurringLessons.filter((item) => item.id !== 'c4')
+    expect(day(data, '2026-12-21').some((item) => item.id === 'c3')).toBe(true)
+    expect(day(data, '2026-12-28').some((item) => item.id === 'c3')).toBe(false)
+    expect(day(data, '2027-01-04').some((item) => item.id === 'c3')).toBe(true)
+    expect(() => moveLessonOnDate(data, 'c3', '2026-12-21', { date: '2026-12-28', periodId: 6 }, false, ids('before-anchor-off-week'))).not.toThrow()
+    expect(() => moveLessonOnDate(data, 'c3', '2026-12-21', { date: '2027-01-04', periodId: 6 }, false, ids('cross-year-on-week'))).toThrow('occupied')
+  })
+
+  it('跨學制目標日期使用各自 anchor 判斷實際時間重疊，相鄰時間不算衝堂', () => {
+    const data = setup()
+    const unit = data.teachingUnits[0]
+    unit.weekCycle.anchorDate = '2026-09-07'
+    data.recurringLessons = data.recurringLessons.filter((item) => item.id !== 'c4')
+    data.schools.push({ id: 'other-school', projectId: unit.projectId, name: '另一校', color: '#123456' })
+    data.teachingUnits.push({ ...structuredClone(unit), id: 'other-unit', schoolId: 'other-school', schoolLevel: 'junior-high', weekCycle: { enabled: true, anchorDate: '2026-09-14', anchorPattern: 'A' } })
+    data.classes.push({ id: 'other-class', projectId: unit.projectId, teachingUnitId: 'other-unit', name: '七年一班' })
+    data.recurringLessons.push({ ...data.recurringLessons.find((item) => item.id === 'c3')!, id: 'other-lesson', seriesId: 'other-lesson', teachingUnitId: 'other-unit', classId: 'other-class' })
+    expect(day(data, '2026-09-14').find((item) => item.id === 'other-lesson')?.startTime).toBe('14:10')
+    expect(() => moveLessonOnDate(data, 'c3', '2026-09-07', { date: '2026-09-14', periodId: 6 }, false, ids('blocked-other-unit'))).toThrow('occupied')
+    data.recurringLessons.find((item) => item.id === 'other-lesson')!.periodId = 7
+    const adjacentPeriod = data.teachingUnits.find((item) => item.id === 'other-unit')!.periods.find((item) => item.id === 7)!
+    adjacentPeriod.startTime = '15:00'
+    adjacentPeriod.endTime = '15:50'
+    expect(() => moveLessonOnDate(data, 'c3', '2026-09-07', { date: '2026-09-14', periodId: 6 }, false, ids('adjacent'))).not.toThrow()
   })
 
   it('單日替換保留原 School 與 TeachingUnit 身分', () => {

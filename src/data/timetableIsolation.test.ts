@@ -64,6 +64,17 @@ describe('v6 timetable isolation', () => {
     expect(moveLessonOnDate(data, 'b1', '2026-09-07', { date: target.date, periodId: 2 }, false, () => 'b-move', 'teacher-b').overrides[0].timetableId).toBe('teacher-b')
   })
 
+  it('跨週自我衝堂只計算所選 Timetable 的 occurrence', () => {
+    const data = fixture()
+    const source = day(data, 'teacher-b').find((item) => item.id === 'b1')!
+    const intent = createLessonDragIntent(data, source, { date: '2026-09-14', startTime: '08:10', endTime: '09:00', timetableId: 'teacher-b' })
+    expect(intent).toMatchObject({ valid: true, intent: { conflictLessonIds: ['b1'] } })
+    expect(() => moveLessonOnDate(data, 'b1', '2026-09-07', { date: '2026-09-14', periodId: 1 }, false, () => 'blocked', 'teacher-b')).toThrow('occupied')
+    const allowed = moveLessonOnDate(data, 'b1', '2026-09-07', { date: '2026-09-14', periodId: 1 }, true, () => 'b-allowed', 'teacher-b')
+    expect(resolveProjectDay(allowed, source.projectId, new Date(2026, 8, 14), { timetableId: 'teacher-b' }).filter((item) => item.id === 'b1')).toHaveLength(2)
+    expect(resolveProjectDay(allowed, source.projectId, new Date(2026, 8, 14), { timetableId: data.timetables[0].id }).filter((item) => item.id === 'c1')).toHaveLength(1)
+  })
+
   it('rejects cross-timetable changes, original IDs, swaps, and grouped revocation', () => {
     const data = fixture()
     const a = data.timetables[0].id

@@ -120,6 +120,6 @@ export function deleteLessonV4(data: AppDataV4, lessonId: string, timetableId?: 
   const project = data.projects.find((item) => item.id === lesson.projectId)
   if (!project || project.archivedAt) throw new Error('Archived or missing projects are read-only')
   if (data.overrides.some((item) => item.originalLessonId === lessonId)) throw new Error('Lesson has date-specific overrides')
-  if (data.recurringLessons.filter((item) => item.seriesId === lesson.seriesId).length > 1) throw new Error('Versioned lessons require Phase 3B editing')
+  if (data.recurringLessons.filter((item) => item.seriesId === lesson.seriesId).length > 1) throw new Error('Versioned lessons cannot be deleted directly; end the current version from a date')
   return assertValidResult({ ...data, recurringLessons: data.recurringLessons.filter((item) => item.id !== lessonId) })
 }

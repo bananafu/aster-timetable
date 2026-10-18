@@ -1,5 +1,4 @@
-import { fromDateKey } from './date'
-import { resolveProjectDay, timeIntervalsOverlap, type ResolvedLessonV4 } from './scheduleV4'
+import { getMoveTargetConflicts, type ResolvedLessonV4 } from './scheduleV4'
 import type { AppDataV4 } from '../types'
 import { selectedTimetableId } from '../data/timetableCompatibility'
 
@@ -36,8 +35,7 @@ export function createLessonDragIntent(
   const period = unit.periods.find((item) => item.startTime === target.startTime && item.endTime === target.endTime)
   if (!period) return { valid: false, reason: '原任教單位沒有相同實際起訖時間的節次，無法安全跨校映射。' }
   if (target.date === lesson.date && period.id === lesson.periodId) return { valid: false, reason: '目標位置與原位置相同。' }
-  const conflicts = resolveProjectDay(data, lesson.projectId, fromDateKey(target.date), { timetableId }).filter((item) => item.status !== 'cancelled'
-    && item.id !== lesson.id && timeIntervalsOverlap(item, { startTime: period.startTime, endTime: period.endTime }))
+  const conflicts = getMoveTargetConflicts(data, lesson, { date: target.date, startTime: period.startTime, endTime: period.endTime })
   return {
     valid: true,
     intent: {

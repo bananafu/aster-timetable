@@ -38,6 +38,9 @@ export interface ScheduleFiltersV4 {
   teachingUnitId?: string
 }
 
+/** A recurring lesson ID identifies a version, while a date and override identify one occurrence. */
+export type LessonOccurrenceIdentity = Pick<ResolvedLessonV4, 'projectId' | 'timetableId' | 'id' | 'seriesId' | 'date' | 'overrideId'>
+
 export interface TodayTeachingSummaryV4 {
   count: number
   state: 'current' | 'next' | 'finished' | 'idle' | 'outside-semester'
@@ -181,6 +184,19 @@ export function resolveProjectDay(
     })
   })
   return sorted.map((item) => ({ ...item, hasConflict: conflicts.has(item.id) }))
+}
+
+export function getMoveTargetConflicts(
+  data: AppDataV4,
+  source: LessonOccurrenceIdentity,
+  target: Pick<ResolvedLessonV4, 'date' | 'startTime' | 'endTime'>,
+): ResolvedLessonV4[] {
+  return resolveProjectDay(data, source.projectId, fromDateKey(target.date), { timetableId: source.timetableId })
+    .filter((item) => item.status !== 'cancelled'
+      && !(item.projectId === source.projectId && item.timetableId === source.timetableId
+        && item.id === source.id && item.seriesId === source.seriesId
+        && item.date === source.date && item.overrideId === source.overrideId)
+      && timeIntervalsOverlap(item, target))
 }
 
 export function resolveProjectWeek(

@@ -22,6 +22,16 @@ describe('desktop lesson drag intent', () => {
     expect(data.overrides).toHaveLength(0)
   })
 
+  it('跨週預覽將同一 recurring lesson 的目標日 occurrence 回報為衝堂，同日則只排除來源', () => {
+    const data = setup()
+    const lesson = source(data)
+    const crossWeek = createLessonDragIntent(data, lesson, { date: '2026-09-14', startTime: '08:10', endTime: '09:00' })
+    expect(crossWeek).toMatchObject({ valid: true, intent: { conflictLessonIds: ['c1'] } })
+    const sameDay = createLessonDragIntent(data, lesson, { date: '2026-09-07', startTime: '16:10', endTime: '17:00' })
+    expect(sameDay).toMatchObject({ valid: true, intent: { conflictLessonIds: [] } })
+    expect(data.overrides).toHaveLength(0)
+  })
+
   it('阻止無法映射、相同位置、已有 override 及封存專案', () => {
     const data = setup(); const lesson = source(data)
     expect(createLessonDragIntent(data, lesson, { date: '2026-09-08', startTime: '08:00', endTime: '08:45' })).toMatchObject({ valid: false, reason: expect.stringContaining('無法安全跨校映射') })
