@@ -1,4 +1,6 @@
-import type { AppDataV4, AppDataV7, OneOffLesson } from '../../types'
+import { SCHOOL_LEVELS, type AppDataV4, type AppDataV7, type OneOffLesson } from '../../types'
+import { normalizeSubjectText } from '../../lib/subjectSearch'
+import { analyzeSubjectReferences } from '../subjectReferences'
 import { hasCompatibleV7TimetableData, hasSafeV7TimetableUpdate } from './v6'
 
 type UnknownRecord = Record<string, unknown>
@@ -71,8 +73,40 @@ export function isCompatibleAppDataV7(value: unknown): value is AppDataV7 {
   }
 }
 
+function hasSafeSubjectUpdate(current: AppDataV4, next: AppDataV7): boolean {
+  const currentSubjects = new Map(current.subjects.map((subject) => [subject.id, subject]))
+  const nextSubjects = new Map(next.subjects.map((subject) => [subject.id, subject]))
+  for (const field of ['name', 'shortName'] as const) {
+    const counts = new Map<string, number>()
+    for (const subject of next.subjects) {
+      const key = normalizeSubjectText(subject[field])
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    for (const subject of next.subjects) {
+      const before = currentSubjects.get(subject.id)
+      const key = normalizeSubjectText(subject[field])
+      // Grandfather unchanged legacy collisions, never newly introduced ones.
+      if ((!before || normalizeSubjectText(before[field]) !== key) && counts.get(key)! > 1) return false
+    }
+  }
+  for (const subject of current.subjects) {
+    const after = nextSubjects.get(subject.id)
+    const removedLevels = (subject.applicableSchoolLevels ?? SCHOOL_LEVELS)
+      .filter((level) => !after?.applicableSchoolLevels.includes(level))
+    if (after && !removedLevels.length) continue
+    // Check both snapshots: a batch must not hide old references or add new ones
+    // while removing a subject or one of its applicable levels.
+    for (const data of [current, next]) {
+      if (analyzeSubjectReferences(data, subject.id).some((reference) => !after
+        || reference.schoolLevel === null || removedLevels.includes(reference.schoolLevel))) return false
+    }
+  }
+  return true
+}
+
 export function isSafeAppDataV7Update(current: AppDataV4, next: AppDataV4): boolean {
   if (!isCompatibleAppDataV7(next) || !hasSafeV7TimetableUpdate(current, next)) return false
+  if (!hasSafeSubjectUpdate(current, next)) return false
   if ((current.oneOffLessons ?? []).some((lesson) => {
     if (lesson.time.mode !== 'period') return false
     const retained = next.oneOffLessons.find((item) => item.id === lesson.id)
