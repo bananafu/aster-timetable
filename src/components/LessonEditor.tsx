@@ -10,6 +10,8 @@ import { addSubjectForLevel } from '../data/subjectsV5'
 import type { AppDataV4, DayOfWeek, WeekPattern } from '../types'
 import { Modal } from './Modal'
 import { SubjectCombobox } from './SubjectCombobox'
+import { LessonResourceCreator } from './LessonResourceCreator'
+import type { StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 type ChangeMode = 'basic' | 'cancel' | 'move' | 'replace' | 'swap' | 'permanent' | 'permanent-swap' | 'end'
@@ -36,6 +38,8 @@ interface Props {
   onOpenSettings?: () => void
   onClose: () => void
   onSaved: (projectId: string) => void
+  storageStatus?: StorageStatus
+  storagePersistence?: StoragePersistence
 }
 
 function messageFor(error: unknown) {
@@ -57,7 +61,7 @@ function messageFor(error: unknown) {
   return '課程資料未通過驗證，請確認日期、歸屬、班級與節次。'
 }
 
-export function LessonEditor({ data, setData, timetableId: selectedTimetableId, lessonId, occurrenceDate, occurrenceOverrideId, dragIntent, context, onOpenSettings, onClose, onSaved }: Props) {
+export function LessonEditor({ data, setData, timetableId: selectedTimetableId, lessonId, occurrenceDate, occurrenceOverrideId, dragIntent, context, onOpenSettings, onClose, onSaved, storageStatus = 'saved', storagePersistence = { pending: false, revision: 0 } }: Props) {
   const lesson = lessonId ? data.recurringLessons.find((item) => item.id === lessonId) : undefined
   const initialProjectId = lesson?.projectId ?? context?.projectId ?? data.activeProjectId ?? data.projects.find((item) => !item.archivedAt)?.id ?? ''
   const requestedInitialUnit = data.teachingUnits.find((item) => item.id === (lesson?.teachingUnitId ?? context?.teachingUnitId))
@@ -86,6 +90,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
   const [editingOverrideId, setEditingOverrideId] = useState<string | null>(null)
   const [newSubjectName, setNewSubjectName] = useState('')
   const [showSubjectCreate, setShowSubjectCreate] = useState(false)
+  const [creatingResource, setCreatingResource] = useState<'class' | 'subject' | null>(null)
   const [error, setError] = useState('')
   const [preview, setPreview] = useState<{ data: AppDataV4; source: AppDataV4; summary: string; details: string[]; warnings: string[] } | null>(null)
 
@@ -129,19 +134,19 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
     setProjectId(nextProjectId); setSchoolId(nextSchool?.id ?? ''); setTeachingUnitId(nextUnit?.id ?? '')
     const nextTimetables = data.timetables?.filter((item) => item.projectId === nextProjectId) ?? []
     setTimetableId(nextTimetables.length === 1 ? nextTimetables[0].id : undefined)
-    setSwapLessonId(''); setEditingOverrideId(null)
+    setSwapLessonId(''); setEditingOverrideId(null); setCreatingResource(null)
     if (!nextUnit || !data.subjects.some((item) => item.id === subjectId && subjectAppliesToLevel(item, nextUnit.schoolLevel))) setSubjectId('')
     setClassId('')
     setPeriodId(0); setTargetPeriodId(0); setWeekPattern('every'); resetPreview()
   }
   const selectSchool = (nextSchoolId: string) => {
     const nextUnit = data.teachingUnits.find((item) => item.projectId === projectId && item.schoolId === nextSchoolId && !hasDuplicateLevel(item, data.teachingUnits))
-    setSchoolId(nextSchoolId); setTeachingUnitId(nextUnit?.id ?? ''); setClassId('')
+    setSchoolId(nextSchoolId); setTeachingUnitId(nextUnit?.id ?? ''); setClassId(''); setCreatingResource(null)
     if (!nextUnit || !data.subjects.some((item) => item.id === subjectId && subjectAppliesToLevel(item, nextUnit.schoolLevel))) setSubjectId('')
     setPeriodId(0); setTargetPeriodId(0); setWeekPattern('every'); resetPreview()
   }
   const selectUnit = (nextUnitId: string) => {
-    setTeachingUnitId(nextUnitId); setClassId('')
+    setTeachingUnitId(nextUnitId); setClassId(''); setCreatingResource(null)
     const nextUnit = data.teachingUnits.find((item) => item.id === nextUnitId)
     if (!nextUnit || !data.subjects.some((item) => item.id === subjectId && subjectAppliesToLevel(item, nextUnit.schoolLevel))) setSubjectId('')
     setPeriodId(0); setTargetPeriodId(0); setWeekPattern('every'); resetPreview()
@@ -199,6 +204,7 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
   }
   const submit = (event: FormEvent) => {
     event.preventDefault(); setError('')
+    if (storageStatus !== 'saved') { setError('資料儲存狀態異常，請先處理儲存問題。'); return }
     try {
       if (data.schemaVersion >= 6 && (!timetableId || !data.timetables?.some((item) => item.id === timetableId && item.projectId === projectId))) throw new Error('請先選擇教師課表。')
       if (lesson && (lesson.projectId !== projectId || (data.schemaVersion >= 6 && lesson.timetableId !== timetableId))) throw new Error('Lesson does not belong to the selected timetable')
@@ -215,16 +221,19 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
   }
   const confirmChange = () => {
     if (!preview) return
+    if (storageStatus !== 'saved') { setError('資料儲存狀態異常，請先處理儲存問題。'); return }
     if (preview.source !== data || (data.schemaVersion >= 6 && (!timetableId || !data.timetables?.some((item) => item.id === timetableId && item.projectId === projectId) || lesson?.timetableId !== timetableId))) {
       setPreview(null); setError('課表或資料已變更，請重新預覽異動。'); return
     }
     setData(preview.data); onSaved(projectId); onClose()
   }
   const remove = () => {
+    if (storageStatus !== 'saved') { setError('資料儲存狀態異常，請先處理儲存問題。'); return }
     if (!lesson || !window.confirm(`確定刪除這筆固定課程？\n${lesson.id}\n若要保留歷史，請改用「從此日期起結束」。`)) return
     try { setData(deleteLessonV4(data, lesson.id, timetableId)); onClose() } catch (reason) { setError(messageFor(reason)) }
   }
   const addSubject = () => {
+    if (storageStatus !== 'saved') { setError('資料儲存狀態異常，請先處理儲存問題。'); return }
     if (!unit) { setError('請先選擇學校與學制。'); return }
     try {
       const id = uid()
@@ -254,16 +263,19 @@ export function LessonEditor({ data, setData, timetableId: selectedTimetableId, 
       <label>學制<select aria-label="課程學制" value={teachingUnitId} onChange={(event) => selectUnit(event.target.value)} disabled={Boolean(lesson) && mode === 'permanent'}><option value="">請選擇學制</option>{units.map((item) => <option key={item.id} value={item.id} disabled={hasDuplicateLevel(item, data.teachingUnits) && item.id !== lesson?.teachingUnitId}>{unitLabel(item, data.teachingUnits)}</option>)}</select></label>
       {lesson && mode === 'permanent' && <p className="lesson-risk-warning full">永久版本必須保留原學制；學校與學制已鎖定。單日移動或交換仍可使用各自學制的合法節次。</p>}
       {ambiguousLevels.length > 0 && <p className="form-warning full" role="alert">同一學校有重複的{ambiguousLevels.join('、')}設定；不會自動選取或重新指派，請先在專案設定確認舊資料。</p>}
-      {!unit ? <p className="lesson-setup-empty">請先選擇學校與學制，才能選擇或新增科目。</p> : <><SubjectCombobox subjects={data.subjects} schoolLevel={unit.schoolLevel} value={subjectId} onChange={(nextSubjectId) => { setSubjectId(nextSubjectId); resetPreview() }} onCreateRequest={() => setShowSubjectCreate(true)} />{!selectedSubjectValid && subjectId && <p className="lesson-setup-empty">既有科目不適用目前學制；原課程仍保留，可修改其他欄位。若要更換科目，請選擇適用科目。</p>}{availableSubjects.length === 0 && <p className="lesson-setup-empty">目前學制尚無適用科目，可建立科目或前往專案設定。</p>}{showSubjectCreate && <div className="lesson-subject-create"><label>新科目<input aria-label="新科目名稱" value={newSubjectName} onChange={(event) => setNewSubjectName(event.target.value)} /></label><button type="button" onClick={addSubject}>建立科目</button>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}</>}
+      {!unit ? <p className="lesson-setup-empty">請先選擇學校與學制，才能選擇或新增科目。</p> : <><SubjectCombobox subjects={data.subjects} schoolLevel={unit.schoolLevel} value={subjectId} onChange={(nextSubjectId) => { setSubjectId(nextSubjectId); resetPreview() }} onCreateRequest={() => setShowSubjectCreate(true)} />{!selectedSubjectValid && subjectId && <p className="lesson-setup-empty">既有科目不適用目前學制；原課程仍保留，可修改其他欄位。若要更換科目，請選擇適用科目。</p>}{availableSubjects.length === 0 && <div className="lesson-resource-empty full"><span>目前學制尚未建立科目</span><button type="button" onClick={() => setCreatingResource('subject')}>＋ 新增科目</button></div>}{showSubjectCreate && <div className="lesson-subject-create"><label>新科目<input aria-label="新科目名稱" value={newSubjectName} onChange={(event) => setNewSubjectName(event.target.value)} /></label><button type="button" onClick={addSubject}>建立科目</button>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}</>}
       <label>班級<select aria-label="課程班級" value={classId} onChange={(event) => { setClassId(event.target.value); resetPreview() }} disabled={!unit || classes.length === 0}><option value="">請選擇班級</option>{classes.map((item) => <option key={item.id} value={item.id}>{classDisplayName(item)}</option>)}</select></label>
+      {unit && classes.length === 0 && <div className="lesson-resource-empty full"><span>目前學制尚未建立班級</span><button type="button" onClick={() => setCreatingResource('class')}>＋ 新增班級</button></div>}
+      {unit && creatingResource && <div className="full"><LessonResourceCreator key={`${unit.id}:${creatingResource}`} kind={creatingResource} data={data} setData={setData} projectId={projectId} unit={unit} storageStatus={storageStatus} storagePersistence={storagePersistence} onCreated={(id) => { if (creatingResource === 'class') setClassId(id); else setSubjectId(id); setCreatingResource(null); resetPreview() }} onCancel={() => setCreatingResource(null)} /></div>}
       {mode !== 'replace' && <><label>星期<select aria-label="課程星期" value={day} onChange={(event) => { setDay(Number(event.target.value) as DayOfWeek); resetPreview() }}>{[1,2,3,4,5].map((value) => <option key={value} value={value}>週{'一二三四五'[value - 1]}</option>)}</select></label><label>節次<select aria-label="課程節次" value={periodId} onChange={(event) => { setPeriodId(Number(event.target.value)); resetPreview() }} disabled={!unit || periods.length === 0}><option value={0}>請選擇節次</option>{periods.map((period) => <option key={period.id} value={period.id}>{period.label}（{period.startTime}–{period.endTime}）</option>)}</select></label><label>輪週<select aria-label="課程輪週" value={weekPattern} onChange={(event) => { setWeekPattern(event.target.value as WeekPattern); resetPreview() }}><option value="every">每週</option>{unit?.weekCycle.enabled && <><option value="A">A 週</option><option value="B">B 週</option></>}</select></label></>}
       <label>教室<input value={room} onChange={(event) => { setRoom(event.target.value); resetPreview() }} placeholder="依班級預設" /></label>
-      {missingSetup && <div className="lesson-setup-empty full" role="status"><strong>尚未完成課程基本資料</strong><p>{!unit ? ambiguousLevels.length > 0 ? '所選學校有重複學制設定，無法安全預選。' : '所選學校尚未建立學制。' : classes.length === 0 ? '此學制尚未建立班級名單。' : '此學制尚未建立節次時間表。'}</p>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}
+      {missingSetup && (!unit || periods.length === 0) && <div className="lesson-setup-empty full" role="status"><strong>尚未完成課程基本資料</strong><p>{!unit ? ambiguousLevels.length > 0 ? '所選學校有重複學制設定，無法安全預選。' : '所選學校尚未建立學制。' : '此學制尚未建立節次時間表。'}</p>{onOpenSettings && <button type="button" onClick={onOpenSettings}>前往專案設定</button>}</div>}
     </>}
     {preview && <section className="lesson-change-preview full" role="status" aria-label="異動預覽"><header><strong>異動預覽・{preview.summary}</strong><span>尚未寫入</span></header>{preview.details.map((item) => <p key={item}>{item}</p>)}{preview.warnings.map((item) => <p className="warning" key={item}>{item}</p>)}<small>確認後才會寫入 AppData v4；取消可安全放棄此次預覽。</small></section>}
     {lesson && <details className="lesson-version-history full"><summary>課程版本歷史（{lessonVersions.length}）</summary><p>歷史版本僅供檢視，不可直接回寫。</p><ol>{lessonVersions.map((version) => { const versionUnit = data.teachingUnits.find((item) => item.id === version.teachingUnitId); const versionPeriod = versionUnit?.periods.find((item) => item.id === version.periodId); const versionClass = data.classes.find((item) => item.id === version.classId); return <li key={version.id} className={version.id === lesson.id ? 'current' : ''}><div><strong>{version.effectiveStart} — {version.effectiveEnd ?? '持續中'}</strong>{version.id === lesson.id && <em>目前選取</em>}</div><span>{data.subjects.find((item) => item.id === version.subjectId)?.name}・{versionClass ? classDisplayName(versionClass) : ''}</span><small>{dayLabel[version.day]}・{versionPeriod?.label}・{versionPeriod?.startTime}–{versionPeriod?.endTime}・{version.weekPattern === 'every' ? '每週' : `${version.weekPattern} 週`}</small></li> })}</ol></details>}
+    {storageStatus !== 'saved' && <p className="form-error full" role="alert">資料儲存狀態異常；目前輸入已保留，請先處理儲存問題。</p>}
     {error && <p className="form-error full" role="alert">{error}</p>}
     {!historicalVersion && lesson && mode === 'basic' && lessonVersions.length > 1 && <p className="lesson-risk-warning full">此課程已有歷史版本，不能直接刪除；請選擇「從指定日期起」→「結束課程」，保留既有歷史。</p>}
-    <div className="form-actions full">{!historicalVersion && lesson && mode === 'basic' && lessonVersions.length === 1 && <button type="button" className="danger-button" onClick={remove}>刪除固定課程</button>}<button type="button" onClick={onClose}>{historicalVersion ? '關閉' : '取消'}</button>{!historicalVersion && (preview ? <button type="button" className="primary-button" onClick={confirmChange}>確認套用</button> : <button type="submit" className="primary-button" disabled={(needsSwap && !swapLessonId) || missingSetup || missingSelection}>{lesson && mode !== 'basic' ? '預覽異動' : '儲存'}</button>)}</div>
+    <div className="form-actions full">{!historicalVersion && lesson && mode === 'basic' && lessonVersions.length === 1 && <button type="button" className="danger-button" onClick={remove} disabled={storageStatus !== 'saved'}>刪除固定課程</button>}<button type="button" onClick={onClose}>{historicalVersion ? '關閉' : '取消'}</button>{!historicalVersion && (preview ? <button type="button" className="primary-button" onClick={confirmChange} disabled={storageStatus !== 'saved'}>確認套用</button> : <button type="submit" className="primary-button" disabled={(needsSwap && !swapLessonId) || missingSetup || missingSelection || storageStatus !== 'saved'}>{lesson && mode !== 'basic' ? '預覽異動' : '儲存'}</button>)}</div>
   </form></Modal>
 }

@@ -1,10 +1,12 @@
-import { useState, type FormEvent } from 'react'
+import { useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import { getOneOffLessonConflicts, OneOffConflictError, type OneOffLessonDraft } from '../data/oneOffLessonsV7'
 import { classDisplayName } from '../lib/classes'
 import { subjectsForLevel } from '../lib/subjects'
-import type { AppDataV7 } from '../types'
+import type { AppDataV4, AppDataV7 } from '../types'
 import type { ResolvedScheduleOccurrence } from '../lib/scheduleV4'
 import { Modal } from './Modal'
+import { LessonResourceCreator } from './LessonResourceCreator'
+import type { StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
 
 const hours = Array.from({ length: 24 }, (_, value) => String(value).padStart(2, '0'))
 const minutes = Array.from({ length: 12 }, (_, value) => String(value * 5).padStart(2, '0'))
@@ -29,13 +31,16 @@ interface Props {
   /** Called only after an explicit confirmation; the parent uses deleteOneOffLesson. */
   onDelete?: (id: string) => void | Promise<void>
   onClose: () => void
+  setData?: Dispatch<SetStateAction<AppDataV4>>
+  storageStatus?: StorageStatus
+  storagePersistence?: StoragePersistence
 }
 
 function conflictDescription(item: ResolvedScheduleOccurrence) {
   return `${item.schoolName}・${item.teachingUnitName}・${item.className}・${item.subjectName}（${item.startTime}–${item.endTime}）`
 }
 
-export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonId, initialDate, initialTeachingUnitId, onSave, onDelete, onClose }: Props) {
+export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonId, initialDate, initialTeachingUnitId, onSave, onDelete, onClose, setData, storageStatus = 'saved', storagePersistence = { pending: false, revision: 0 } }: Props) {
   const existing = oneOffLessonId ? data.oneOffLessons.find((item) => item.id === oneOffLessonId) : undefined
   const initialUnit = data.teachingUnits.find((item) => item.id === (existing?.teachingUnitId ?? initialTeachingUnitId) && item.projectId === projectId)
   const [schoolId, setSchoolId] = useState(initialUnit?.schoolId ?? '')
@@ -56,6 +61,7 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
   const [reportedConflicts, setReportedConflicts] = useState<ResolvedScheduleOccurrence[] | null>(null)
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [creatingResource, setCreatingResource] = useState<'class' | 'subject' | null>(null)
 
   const project = data.projects.find((item) => item.id === projectId)
   const timetable = data.timetables.find((item) => item.id === timetableId && item.projectId === projectId)
@@ -129,18 +135,21 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
         {Object.entries(purposeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select></label>
       <label>指定日期<input type="date" value={date} disabled={locked} onChange={(event) => change(() => setDate(event.target.value))} /></label>
-      <label>學校<select value={schoolId} disabled={locked} onChange={(event) => change(() => { setSchoolId(event.target.value); setTeachingUnitId(''); setClassId(''); setSubjectId(''); setPeriodId('') })}>
+      <label>學校<select value={schoolId} disabled={locked} onChange={(event) => change(() => { setSchoolId(event.target.value); setTeachingUnitId(''); setClassId(''); setSubjectId(''); setPeriodId(''); setCreatingResource(null) })}>
         <option value="">請選擇學校</option>{schools.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
-      <label>學制<select value={teachingUnitId} disabled={locked || !schoolId} onChange={(event) => change(() => { setTeachingUnitId(event.target.value); setClassId(''); setSubjectId(''); setPeriodId('') })}>
+      <label>學制<select value={teachingUnitId} disabled={locked || !schoolId} onChange={(event) => change(() => { setTeachingUnitId(event.target.value); setClassId(''); setSubjectId(''); setPeriodId(''); setCreatingResource(null) })}>
         <option value="">請選擇學制</option>{units.map((item) => <option key={item.id} value={item.id}>{item.schoolLevel === 'other' ? item.name : item.schoolLevel === 'junior-high' ? '國中部' : '高中部'}・{item.name}</option>)}
       </select></label>
       <label>班級<select value={classId} disabled={locked || !unit} onChange={(event) => change(() => setClassId(event.target.value))}>
         <option value="">請選擇班級</option>{classes.map((item) => <option key={item.id} value={item.id}>{classDisplayName(item)}</option>)}
       </select></label>
+      {unit && classes.length === 0 && <div className="lesson-resource-empty full"><span>目前學制尚未建立班級</span><button type="button" disabled={locked || !setData} onClick={() => setCreatingResource('class')}>＋ 新增班級</button></div>}
       <label>科目<select value={subjectId} disabled={locked || !unit} onChange={(event) => change(() => setSubjectId(event.target.value))}>
         <option value="">請選擇科目</option>{subjects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select></label>
+      {unit && subjects.length === 0 && <div className="lesson-resource-empty full"><span>目前學制尚未建立科目</span><button type="button" disabled={locked || !setData} onClick={() => setCreatingResource('subject')}>＋ 新增科目</button></div>}
+      {unit && creatingResource && setData && <div className="full"><LessonResourceCreator key={`${unit.id}:${creatingResource}`} kind={creatingResource} data={data} setData={setData} projectId={projectId} unit={unit} storageStatus={storageStatus} storagePersistence={storagePersistence} onCreated={(id) => { change(() => { if (creatingResource === 'class') setClassId(id); else setSubjectId(id); setCreatingResource(null) }) }} onCancel={() => setCreatingResource(null)} /></div>}
       {purpose === 'make-up' && <label className="full">補課來源（選填）<select value={sourceId} disabled={locked} onChange={(event) => change(() => setSourceId(event.target.value))}>
         <option value="">不指定來源</option>
         {sourceId && !sources.some((item) => item.id === sourceId) && <option value={sourceId}>原課已刪除・{sourceId}</option>}
