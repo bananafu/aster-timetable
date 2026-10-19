@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { CalendarClock, CalendarDays, Clock3, MapPin, Plus } from 'lucide-react'
+import { BookOpenCheck, CalendarClock, CalendarDays, CalendarPlus, Clock3, LibraryBig, MapPin, Plus, UsersRound } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { Modal } from './components/Modal'
@@ -229,6 +229,7 @@ export default function App() {
   const displayTimetableCandidate = timetableSelection.projectId === displayProject?.id
     ? timetableSelection.timetableId : displayTimetables[0]?.id ?? null
   const displayTimetable = displayTimetables.find((item) => item.id === displayTimetableCandidate)
+  const timetablePageTitle = displayTimetable?.name ?? (displayTimetables.length > 0 ? '尚未選擇課表' : '尚未建立課表')
   const weekTerms = weekDays.map((date) => getTermForDate(data, date)).filter((term, index, terms) => term && terms.findIndex((item) => item?.id === term.id) === index)
   const displayedTerm = weekTerms.length === 1 ? weekTerms[0] : undefined
   const weekInfo = displayedTerm ? getWeekInfo(weekDays.find((date) => getTermForDate(data, date)?.id === displayedTerm.id) ?? weekStart, displayedTerm) : null
@@ -486,7 +487,7 @@ export default function App() {
           {historicalProject && <section className="history-mode" role="status"><div><strong>歷史專案・唯讀</strong><span>目前查看「{historicalProject.name}」，不會修改此專案。</span></div><button onClick={() => { setHistoricalProjectId(null); setTimetableSelection({ projectId: appData.activeProjectId, timetableId: appData.timetables?.find((item) => item.projectId === appData.activeProjectId)?.id ?? null }) }}>返回目前專案</button></section>}
           {appData.migrationWarnings.length > 0 && <section className="migration-summary" role="status"><strong>有 {appData.migrationWarnings.length} 筆資料需要確認</strong><span>未歸屬資料已保留，且不會自動套用至課表。</span></section>}
           <section className="page-heading">
-            <div><p className="eyebrow">{activePage === 'timetable' ? displayProject.name : weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? '我的課表' : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>{historicalProject ? '封存專案僅供查看。' : '所有資料都會自動儲存在這台裝置。'}</p>}</div>
+            <div><p className="eyebrow">{activePage === 'timetable' ? displayProject.name : weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? timetablePageTitle : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>{historicalProject ? '封存專案僅供查看。' : '所有資料都會自動儲存在這台裝置。'}</p>}</div>
             <div className="page-heading-side">
               {(activePage === 'timetable' || activePage === 'dashboard') && displayTimetables.length > 0 && <TimetableControls timetables={displayTimetables} selected={displayTimetable} canManage={!historicalProject && storageStatus === 'saved'} notice={timetableNotice} onSelect={(id) => { setTimetableNotice(''); chooseTimetable(displayProject.id, id) }} onEdit={() => { if (!displayTimetable) return; const sourceFingerprint = timetableCopySourceFingerprint(appData, displayProject.id, displayTimetable.id); const deleteFingerprint = timetableDeleteFingerprint(appData, displayProject.id, displayTimetable.id); if (!sourceFingerprint || !deleteFingerprint) return; setTimetableNotice(''); setTimetableError(''); setTimetableDialog({ mode: 'edit', projectId: displayProject.id, timetableId: displayTimetable.id, source: displayTimetable, original: { name: displayTimetable.name, teacherName: displayTimetable.teacherName }, sourceFingerprint, deleteFingerprint, deleteImpact: timetableDeleteImpact(appData, displayProject.id, displayTimetable.id), defaultDate: toDateKey(new Date()) }) }} />}
               <div className="week-pill">{activePage === 'timetable' ? <><span>多校檢視</span><strong>實際時間</strong></> : <><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></>}</div>
@@ -556,11 +557,17 @@ function AddChoiceDialog({ canAddLesson, addLessonReason, canAddOneOff, addOneOf
   return <Modal title="新增課程" subtitle="選擇要加入目前教師課表的課程。" onClose={onClose}>
     <div className="add-choice-dialog">
       <nav className="settings-menu" aria-label="新增項目">
-        <button type="button" className="settings-menu-item" onClick={onAddLesson} disabled={!canAddLesson} autoFocus={canAddLesson}><span><strong>新增固定課程</strong><small>{canAddLesson ? '使用目前的專案與教師課表。' : addLessonReason}</small></span></button>
-        <button type="button" className="settings-menu-item" onClick={onAddOneOff} disabled={!canAddOneOff} autoFocus={!canAddLesson && canAddOneOff}><span><strong>新增單日課程</strong><small>{canAddOneOff ? '只在指定日期加入目前教師課表。' : addOneOffReason}</small></span></button>
+        <section className="add-choice-group" aria-labelledby="add-course-group">
+          <p id="add-course-group" className="add-choice-group-title">課程</p>
+          <button type="button" className="settings-menu-item" onClick={onAddLesson} disabled={!canAddLesson} autoFocus={canAddLesson}><BookOpenCheck aria-hidden="true" /><span><strong>新增固定課程</strong><small>{canAddLesson ? '使用目前的專案與教師課表。' : addLessonReason}</small></span></button>
+          <button type="button" className="settings-menu-item" onClick={onAddOneOff} disabled={!canAddOneOff} autoFocus={!canAddLesson && canAddOneOff}><CalendarPlus aria-hidden="true" /><span><strong>新增單日課程</strong><small>{canAddOneOff ? '只在指定日期加入目前教師課表。' : addOneOffReason}</small></span></button>
+        </section>
         <hr className="add-choice-divider" aria-hidden="true" />
-        <button type="button" className="settings-menu-item" onClick={() => onManage('classes')} disabled={!canManageResources}><span><strong>管理班級</strong><small>管理目前專案各學校與學制的班級。</small></span></button>
-        <button type="button" className="settings-menu-item" onClick={() => onManage('subjects')} disabled={!canManageResources}><span><strong>管理科目</strong><small>管理所有專案共用的科目庫。</small></span></button>
+        <section className="add-choice-group" aria-labelledby="add-resource-group">
+          <p id="add-resource-group" className="add-choice-group-title">基礎資料</p>
+          <button type="button" className="settings-menu-item" onClick={() => onManage('classes')} disabled={!canManageResources}><UsersRound aria-hidden="true" /><span><strong>管理班級</strong><small>管理目前專案各學校與學制的班級。</small></span></button>
+          <button type="button" className="settings-menu-item" onClick={() => onManage('subjects')} disabled={!canManageResources}><LibraryBig aria-hidden="true" /><span><strong>管理科目</strong><small>管理所有專案共用的科目庫。</small></span></button>
+        </section>
       </nav>
       <div className="form-actions add-choice-actions"><button type="button" onClick={onClose} autoFocus={!canAddLesson && !canAddOneOff}>取消</button></div>
     </div>

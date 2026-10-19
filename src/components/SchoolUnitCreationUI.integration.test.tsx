@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createBlankProject } from '../data/projectRuntime'
 import { addTeachingUnitToSchool } from '../data/schoolUnitCreation'
@@ -37,6 +37,10 @@ function fillNewSchool(level: SchoolLevel, name = '第二學校') {
 }
 
 function fillExistingUnit(level: SchoolLevel) {
+  if (!screen.queryByLabelText('新增學制')) {
+    const card = document.querySelector<HTMLElement>('[data-testid^="school-card-"]')!
+    fireEvent.click(within(card).getByRole('button', { name: '＋ 新增學制' }))
+  }
   fireEvent.change(screen.getByLabelText('新增學制'), { target: { value: level } })
   fireEvent.change(screen.getByLabelText('新學制起始日'), { target: { value: '2027-02-01' } })
   fireEvent.change(screen.getByLabelText('新學制結束日'), { target: { value: '2027-06-30' } })
@@ -175,7 +179,8 @@ describe('integrated school and teaching-unit creation UI', () => {
   it('disables school and unit creation and editing in a read-only view', () => {
     render(<Harness readOnly />)
     expect((screen.getByRole('button', { name: '建立學校與學制' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: '新增學制設定' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '＋ 新增學制' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: '新增學制設定' })).toBeNull()
     expect((screen.getByRole('button', { name: '儲存學校' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: '儲存學制設定' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByTestId('school-count').textContent).toBe('1')

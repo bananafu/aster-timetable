@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { initialData } from '../data/seed'
@@ -7,6 +7,11 @@ import { migrateV4ToV5 } from '../data/migrationsV5'
 import { AcademicSettingsV4 } from './AcademicSettingsV4'
 
 afterEach(cleanup)
+
+function openUnitForm(schoolId?: string) {
+  const card = schoolId ? screen.getByTestId(`school-card-${schoolId}`) : document.querySelector<HTMLElement>('[data-testid^="school-card-"]')!
+  fireEvent.click(within(card).getByRole('button', { name: '＋ 新增學制' }))
+}
 
 describe('AcademicSettingsV4 class roster', () => {
   it('以 School.color 顯示所有學校卡片與各自學制日期，且管理頁不再顯示頂部選擇器', () => {
@@ -25,6 +30,8 @@ describe('AcademicSettingsV4 class roster', () => {
     expect((screen.getByTestId('school-card-second-school') as HTMLElement).style.borderLeftColor).toBe('rgb(52, 86, 120)')
     expect((screen.getByLabelText('second-unit起始日') as HTMLInputElement).value).toBe('2027-02-01')
     expect((screen.getByLabelText('second-unit結束日') as HTMLInputElement).value).toBe('2027-06-30')
+    expect(screen.getAllByRole('button', { name: '＋ 新增學制' })).toHaveLength(2)
+    expect(screen.queryByText('既有學校新增學制')).toBeNull()
     fireEvent.change(screen.getByLabelText('第二學校學校名稱'), { target: { value: '第二學校（更新）' } })
     fireEvent.change(screen.getByLabelText('第二學校學校識別色'), { target: { value: '#456789' } })
     fireEvent.click(screen.getAllByRole('button', { name: '儲存學校' })[1])
@@ -67,6 +74,7 @@ describe('AcademicSettingsV4 class roster', () => {
     const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
     data.teachingUnits[0].schoolLevel = 'senior-high'
     render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+    openUnitForm()
     expect(screen.queryByLabelText('學制識別名稱')).toBeNull()
     expect(screen.queryByLabelText('自訂學制名稱')).toBeNull()
     fireEvent.change(screen.getByLabelText('新增學制'), { target: { value: 'junior-high' } })
@@ -80,6 +88,7 @@ describe('AcademicSettingsV4 class roster', () => {
     const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
     data.teachingUnits[0].schoolLevel = 'senior-high'
     render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+    openUnitForm()
     fireEvent.change(screen.getByLabelText('新增學制'), { target: { value: 'other' } })
     expect(screen.getByLabelText('自訂學制名稱')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('自訂學制名稱'), { target: { value: '雙語實驗課程' } })
@@ -90,6 +99,7 @@ describe('AcademicSettingsV4 class roster', () => {
 
     cleanup(); setData.mockClear()
     render(<AcademicSettingsV4 data={data} setData={setData} page="schools" />)
+    openUnitForm()
     fireEvent.change(screen.getByLabelText('新增學制'), { target: { value: 'senior-high' } })
     fireEvent.change(screen.getByLabelText('新學制起始日'), { target: { value: '2027-02-01' } })
     fireEvent.change(screen.getByLabelText('新學制結束日'), { target: { value: '2027-06-30' } })

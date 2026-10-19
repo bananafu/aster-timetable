@@ -17,8 +17,8 @@ export function TimetableControls({ timetables, selected, canManage, onSelect, o
     <div className="timetable-teacher"><span>授課教師</span><strong>{selected ? selected.teacherName ?? '待補授課教師' : '請選擇教師課表'}</strong></div>
     {notice && <p className="settings-empty" role="status">{notice}</p>}
     <div className="timetable-control-row">
-      <label>教師課表<select aria-label="教師課表" value={selected?.id ?? ''} onChange={(event) => onSelect(event.target.value)}>
-        {!selected && <option value="">請選擇課表</option>}
+      <label>課表<select aria-label="教師課表" value="" onChange={(event) => { if (event.target.value) onSelect(event.target.value) }}>
+        <option value="">切換課表</option>
         {timetables.map((item) => <option key={item.id} value={item.id}>{item.name}・{item.teacherName ?? '待補授課教師'}</option>)}
       </select></label>
       {canManage && <button type="button" onClick={(event) => { event.currentTarget.focus(); onEdit() }} disabled={!selected}>編輯課表資訊</button>}

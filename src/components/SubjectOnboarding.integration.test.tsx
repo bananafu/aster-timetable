@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { addSchool } from '../data/academicSettingsV4'
@@ -48,7 +48,8 @@ function StoredHarness() {
 }
 
 function createUnit(level: SchoolLevel, schoolId?: string) {
-  if (schoolId) fireEvent.change(screen.getByLabelText('所屬學校'), { target: { value: schoolId } })
+  const card = schoolId ? screen.getByTestId(`school-card-${schoolId}`) : document.querySelector<HTMLElement>('[data-testid^="school-card-"]')!
+  fireEvent.click(within(card).getByRole('button', { name: '＋ 新增學制' }))
   fireEvent.change(screen.getByLabelText('新增學制'), { target: { value: level } })
   if (level === 'other') fireEvent.change(screen.getByLabelText('自訂學制名稱'), { target: { value: '實驗課程' } })
   fireEvent.change(screen.getByLabelText('新學制起始日'), { target: { value: '2027-02-01' } })
@@ -71,7 +72,7 @@ describe('new TeachingUnit subject onboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: '切換設定頁' }))
     fireEvent.click(screen.getByRole('button', { name: '切換設定頁' }))
     expect(screen.queryByLabelText('預設科目引導')).toBeNull()
-    expect(screen.getByRole('button', { name: '新增學制' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '＋ 新增學制' })).toBeTruthy()
   })
 
   it('preselects senior-high in the existing installer and leaves optional subjects unchecked', () => {
@@ -120,7 +121,8 @@ describe('new TeachingUnit subject onboarding', () => {
     const initial = setup()
     initial.projects[0].archivedAt = '2026-10-01T00:00:00.000Z'
     render(<Harness initial={initial} readOnly />)
-    expect((screen.getByRole('button', { name: '新增學制設定' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '＋ 新增學制' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: '新增學制設定' })).toBeNull()
     expect(screen.queryByLabelText('預設科目引導')).toBeNull()
     expect(screen.getByTestId('unit-count').textContent).toBe('1')
   })
