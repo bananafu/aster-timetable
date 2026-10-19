@@ -652,6 +652,7 @@ describe('App v4 runtime', () => {
   })
 
   it('LessonEditor 直接寫入 v4 並在重新載入後保留固定課程', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const data = migrateV3ToV4(initialData)
     localStorage.setItem(APP_DATA_V4_KEY, JSON.stringify(data))
     const first = render(<App />)
@@ -669,6 +670,8 @@ describe('App v4 runtime', () => {
     const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)
     expect(stored.recurringLessons).toHaveLength(data.recurringLessons.length + 1)
     expect(stored.recurringLessons.at(-1)).toMatchObject({ projectId: data.activeProjectId, day: 5, periodId: 8, weekPattern: 'B' })
+    expect(stored.timetables.map((item: { id: string }) => item.id)).toEqual([migrateV5ToV7(migrateV4ToV5(data)).timetables[0].id])
+    expect(consoleError.mock.calls.flat().join(' ')).not.toContain('same key')
     first.unmount()
     render(<App />)
     expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).recurringLessons).toHaveLength(data.recurringLessons.length + 1)
