@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initialData } from '../data/seed'
 import { migrateV3ToV4 } from '../data/migrationsV4'
@@ -20,11 +20,121 @@ describe('CourseResourceManager', () => {
     expect(screen.getByLabelText('學校')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('學校'), { target: { value: 'second-school' } })
     expect((screen.getByLabelText('目前學制') as HTMLSelectElement).value).toBe('second-unit')
+    expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
+    expect(screen.queryByLabelText(/所屬學制/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
     fireEvent.change(screen.getByLabelText('新班級班號'), { target: { value: '3' } })
-    fireEvent.click(screen.getByRole('button', { name: '新增班級' }))
+    fireEvent.click(within(screen.getByRole('form', { name: '新增班級表單' })).getByRole('button', { name: '新增班級' }))
     expect(setData).toHaveBeenCalledTimes(1)
     expect(setData.mock.calls[0][0](data).classes.at(-1)).toMatchObject({ teachingUnitId: 'second-unit', classNumber: 3 })
     expect(data.classes.every((item) => item.teachingUnitId !== 'second-unit')).toBe(true)
+    expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
+    expect(screen.getByRole('button', { name: '＋ 新增班級' })).toBeTruthy()
+  })
+
+  it('每列不重複顯示學制，國中與高中使用各自年級選項', () => {
+    const data = fixture()
+    const senior = data.teachingUnits[0]
+    senior.schoolLevel = 'senior-high'
+    data.classes[0] = { ...data.classes[0], grade: 1, classNumber: 8, name: '108' }
+    const junior = { ...structuredClone(senior), id: 'junior-unit', name: '國中部', schoolLevel: 'junior-high' as const }
+    data.teachingUnits.push(junior)
+    data.classes.push({ ...structuredClone(data.classes[0]), id: 'junior-class', teachingUnitId: junior.id, grade: 7, classNumber: 8, name: '708' })
+    render(<CourseResourceManager data={data} setData={vi.fn()} mode="classes" />)
+
+    expect(screen.queryByLabelText(/所屬學制/)).toBeNull()
+    expect(screen.getAllByRole('option', { name: '高中一年級' }).length).toBeGreaterThan(0)
+    expect(screen.getByText('顯示：108')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('目前學制'), { target: { value: junior.id } })
+    expect(screen.getAllByRole('option', { name: '七年級' }).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('option', { name: '高中一年級' })).toBeNull()
+    expect(screen.getByText('顯示：708')).toBeTruthy()
+  })
+
+  it('新增表單按需開啟，取消不寫入且不留下空白表單', () => {
+    const data = fixture()
+    const setData = vi.fn()
+    render(<CourseResourceManager data={data} setData={setData} mode="classes" />)
+    expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
+    expect(screen.getByRole('form', { name: '新增班級表單' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: '不儲存的班級' } })
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
+  })
+
+  it('新增驗證失敗時保留表單與超長教室內容', () => {
+    const data = fixture()
+    const setData = vi.fn()
+    render(<CourseResourceManager data={data} setData={setData} mode="classes" />)
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
+    fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: '保留草稿' } })
+    const room = screen.getByLabelText('新班級教室') as HTMLInputElement
+    fireEvent.change(room, { target: { value: '1234567890123456' } })
+    fireEvent.submit(screen.getByRole('form', { name: '新增班級表單' }))
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.getByRole('form', { name: '新增班級表單' })).toBeTruthy()
+    expect(room.value).toBe('1234567890123456')
+    expect(room.maxLength).toBe(15)
+    expect(screen.getAllByRole('alert').some((item) => item.textContent?.includes('最多 15 個字元'))).toBe(true)
+  })
+
+  it('載入時保留既有超過 15 字的教室並要求修正後才能儲存', () => {
+    const data = fixture()
+    data.classes[0].room = '既有超過十五個字元的教室名稱需要保留'
+    const setData = vi.fn()
+    render(<CourseResourceManager data={data} setData={setData} mode="classes" />)
+    const room = screen.getAllByLabelText('班級教室')[0] as HTMLInputElement
+    expect(room.value).toBe('既有超過十五個字元的教室名稱需要保留')
+    expect(room.getAttribute('aria-invalid')).toBe('true')
+    fireEvent.click(screen.getAllByRole('button', { name: '儲存' })[0])
+    expect(setData).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('alert').some((item) => item.textContent?.includes('既有內容已保留'))).toBe(true)
+  })
+
+  it('切換學校會收起舊草稿，新班級只寫入新學制', () => {
+    const data = fixture()
+    const source = data.teachingUnits[0]
+    data.schools.push({ id: 'second-school', projectId: data.activeProjectId!, name: '第二學校', color: '#345678' })
+    data.teachingUnits.push({ ...structuredClone(source), id: 'second-unit', schoolId: 'second-school', name: '高中部', schoolLevel: 'senior-high' })
+    const setData = vi.fn()
+    render(<CourseResourceManager data={data} setData={setData} mode="classes" />)
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
+    fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: '舊草稿' } })
+    fireEvent.change(screen.getByLabelText('學校'), { target: { value: 'second-school' } })
+    expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
+    fireEvent.change(screen.getByLabelText('新班級班號'), { target: { value: '9' } })
+    fireEvent.submit(screen.getByRole('form', { name: '新增班級表單' }))
+    expect(setData.mock.calls[0][0](data).classes.at(-1)).toMatchObject({ teachingUnitId: 'second-unit', grade: 1, classNumber: 9 })
+  })
+
+  it('確認持久化成功後才收起表單，且不自動開下一筆空白表單', async () => {
+    const data = fixture()
+    const setData = vi.fn()
+    const view = render(<CourseResourceManager data={data} setData={setData} mode="classes" storagePersistence={{ pending: false, revision: 3 }} />)
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
+    fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: '新建立班級' } })
+    fireEvent.submit(screen.getByRole('form', { name: '新增班級表單' }))
+    expect(screen.getByRole('form', { name: '新增班級表單' })).toBeTruthy()
+    const next = setData.mock.calls[0][0](data)
+    view.rerender(<CourseResourceManager data={next} setData={setData} mode="classes" storagePersistence={{ pending: false, revision: 4 }} />)
+    await waitFor(() => expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull())
+    expect(screen.getByRole('button', { name: '＋ 新增班級' })).toBeTruthy()
+  })
+
+  it('持久化失敗時保留新增表單與輸入內容', async () => {
+    const data = fixture()
+    const setData = vi.fn()
+    const view = render(<CourseResourceManager data={data} setData={setData} mode="classes" storagePersistence={{ pending: false, revision: 3 }} />)
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
+    fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: '等待重試' } })
+    fireEvent.submit(screen.getByRole('form', { name: '新增班級表單' }))
+    view.rerender(<CourseResourceManager data={data} setData={setData} mode="classes" storageStatus="write-error" storagePersistence={{ pending: false, revision: 3 }} />)
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('尚未成功寫入'))
+    expect(screen.getByRole('form', { name: '新增班級表單' })).toBeTruthy()
+    expect((screen.getByLabelText('新班級名稱') as HTMLInputElement).value).toBe('等待重試')
   })
 
   it('舊資料若有重複學制，不會任選第一筆', () => {
@@ -33,7 +143,7 @@ describe('CourseResourceManager', () => {
     render(<CourseResourceManager data={data} setData={vi.fn()} mode="classes" />)
     expect((screen.getByLabelText('目前學制') as HTMLSelectElement).value).toBe('')
     expect(screen.getByRole('option', { name: /重複設定 2：舊設定/ })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: '新增班級' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '＋ 新增班級' })).toBeNull()
   })
 
   it('班級編輯保留 ID，刪除受既有課程引用保護', () => {
@@ -108,8 +218,8 @@ describe('CourseResourceManager', () => {
     const archived = fixture()
     archived.projects.find((item) => item.id === archived.activeProjectId)!.archivedAt = '2026-10-18T00:00:00.000Z'
     rerender(<CourseResourceManager data={archived} setData={vi.fn()} mode="classes" />)
-    expect((screen.getByRole('button', { name: '新增班級' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByLabelText('新班級名稱') as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '＋ 新增班級' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
   })
 
   it('視窗開啟會移入焦點並可關閉，適合窄螢幕操作', () => {

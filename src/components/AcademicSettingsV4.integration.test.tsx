@@ -143,9 +143,10 @@ describe('AcademicSettingsV4 class roster', () => {
     const data = migrateV3ToV4(structuredClone(initialData)); const setData = vi.fn()
     data.teachingUnits[0].schoolLevel = 'senior-high'
     render(<AcademicSettingsV4 data={data} setData={setData} page="classes" />)
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
     fireEvent.change(screen.getByLabelText('新班級年級'), { target: { value: '1' } })
     fireEvent.change(screen.getByLabelText('新班級班號'), { target: { value: '3' } })
-    fireEvent.click(screen.getByRole('button', { name: '新增班級' }))
+    fireEvent.click(within(screen.getByRole('form', { name: '新增班級表單' })).getByRole('button', { name: '新增班級' }))
     const result = setData.mock.calls[0][0](data)
     expect(result.classes.at(-1)).toMatchObject({ name: '103', grade: 1, classNumber: 3, teachingUnitId: data.teachingUnits[0].id })
   })
