@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import { addClass, removeClass, updateClass, type ClassDraft } from '../data/academicSettingsV4'
-import { addSubjectForLevel, deleteSubject, getSubjectImpact, updateSubject, type SubjectDraft } from '../data/subjectsV5'
+import { addSubjectForLevel, deleteSubject, getSubjectImpact, removeSubjectSchoolLevel, updateSubject, type SubjectDraft } from '../data/subjectsV5'
 import { classDisplayName, gradeLabel, gradesForLevel } from '../lib/classes'
 import { subjectsForLevel } from '../lib/subjects'
 import { SCHOOL_LEVELS, type AppDataV4, type ProjectClass, type SchoolLevel, type Subject, type TeachingUnit } from '../types'
@@ -68,7 +68,9 @@ export function CourseResourceManager({ data, setData, mode, storageStatus = 'sa
   const [subjectName, setSubjectName] = useState('')
   const [showAllSubjects, setShowAllSubjects] = useState(false)
   const [error, setError] = useState('')
-  const editable = !readOnly && Boolean(project && !project.archivedAt) && storageStatus === 'saved' && !persistence.pending
+  const [pendingSubjectRemoval, setPendingSubjectRemoval] = useState<{ subject: Subject; level: SchoolLevel; revision: number } | null>(null)
+  const [subjectRemovalResult, setSubjectRemovalResult] = useState<{ data: AppDataV4; revision: number; message: string } | null>(null)
+  const editable = !readOnly && Boolean(project && !project.archivedAt) && storageStatus === 'saved' && !persistence.pending && !pendingSubjectRemoval
 
   useEffect(() => { if (!schools.some((item) => item.id === schoolId)) setSchoolId(schools[0]?.id ?? '') }, [schoolId, schools])
   useEffect(() => { if (!schoolUnits.some((item) => item.id === unitId)) setUnitId(duplicate ? '' : schoolUnits[0]?.id ?? '') }, [duplicate, schoolUnits, unitId])
@@ -91,6 +93,24 @@ export function CourseResourceManager({ data, setData, mode, storageStatus = 'sa
     } else setError('班級資料在儲存期間已變更；輸入內容已保留，請重新確認。')
     setPendingClassCreate(null)
   }, [data.classes, pendingClassCreate, persistence.pending, persistence.revision, projectId, storageStatus, unit, unitId])
+
+  useEffect(() => {
+    if (!pendingSubjectRemoval) return
+    if (storageStatus !== 'saved') {
+      setError(storageStatus === 'conflict'
+        ? '跨分頁資料衝突；解除適用關係尚未確認儲存。請先處理資料衝突。'
+        : '解除適用關係尚未成功寫入此裝置，請先處理儲存問題。')
+      setPendingSubjectRemoval(null)
+      return
+    }
+    if (persistence.pending || persistence.revision <= pendingSubjectRemoval.revision) return
+    const subject = data.subjects.find((item) => item.id === pendingSubjectRemoval.subject.id)
+    if (subject && JSON.stringify(subject) === JSON.stringify(pendingSubjectRemoval.subject)) {
+      setSubjectRemovalResult({ data, revision: persistence.revision,
+        message: `已儲存：已解除「${subject.name}」的${levelLabel[pendingSubjectRemoval.level]}適用關係；科目與其他學制均已保留。` })
+    } else setError('科目資料在儲存期間已變更，無法確認解除結果；請重新確認。')
+    setPendingSubjectRemoval(null)
+  }, [data, pendingSubjectRemoval, persistence.pending, persistence.revision, storageStatus])
 
   const transact = (operation: (current: AppDataV4) => AppDataV4) => {
     if (!editable || !projectId) { setError('封存、唯讀或尚未完成儲存時，不能修改班級與科目。'); return false }
@@ -126,6 +146,20 @@ export function CourseResourceManager({ data, setData, mode, storageStatus = 'sa
     const id = uid()
     transact((current) => addSubjectForLevel(current, subjectName, unit.schoolLevel, id))
   }
+  const removeSubjectLevel = (subjectId: string, level: SchoolLevel) => {
+    if (!editable || !storagePersistence) return
+    setError('')
+    setSubjectRemovalResult(null)
+    try {
+      // Preflight before confirmation, then revalidate against the latest data in transact.
+      const preview = removeSubjectSchoolLevel(data, subjectId, level, true)
+      const subject = preview.subjects.find((item) => item.id === subjectId)!
+      if (!window.confirm(`解除「${subject.name}」的${levelLabel[level]}適用關係？\n此操作將從所有${levelLabel[level]}的可用科目中移除此科目，不會刪除科目本身，也不會影響其他學制。\n適用範圍包含所有專案、學校與課表。`)) return
+      if (transact((current) => removeSubjectSchoolLevel(current, subjectId, level, true))) {
+        setPendingSubjectRemoval({ subject, level, revision: persistence.revision })
+      }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '無法解除適用關係，請重新確認。') }
+  }
   const empty = !schools.length || !units.length
 
   return <section className="academic-settings resource-manager">
@@ -137,9 +171,12 @@ export function CourseResourceManager({ data, setData, mode, storageStatus = 'sa
       {unit && showClassCreate ? <form className="inline-create class-create" aria-label="新增班級表單" onSubmit={createClass}><ClassIdentityFields draft={{ ...classDraft, teachingUnitId: unitId }} unit={unit} onChange={setClassDraft} prefix="新班級" disabled={!editable || Boolean(pendingClassCreate)} /><ClassRoomField id="new-class-room-help" prefix="新班級" room={classDraft.room ?? ''} disabled={!editable || Boolean(pendingClassCreate)} onChange={(room) => setClassDraft({ ...classDraft, room })} /><div className="class-create-actions"><button type="button" disabled={Boolean(pendingClassCreate)} onClick={() => { setShowClassCreate(false); setClassDraft(emptyClassDraft(unit)); setError('') }}>取消</button><button type="submit" disabled={!editable || Boolean(pendingClassCreate)}>{pendingClassCreate ? '儲存中…' : '新增班級'}</button></div></form> : !unit && !empty && <p className="settings-empty">請選擇學制，才能管理班級。</p>}
     </section>}
     {mode === 'subjects' && <><section className="subject-settings"><div><strong>科目</strong><p>科目庫由所有課表專案共用；目前顯示所選學制適用科目，修改名稱、簡稱、顏色或適用學制會影響其他專案。</p></div>
-      {unit ? <><label className="resource-all-subjects"><input type="checkbox" checked={showAllSubjects} onChange={(event) => setShowAllSubjects(event.target.checked)} />顯示全域所有科目</label>{(showAllSubjects ? data.subjects : subjectsForLevel(data.subjects, unit.schoolLevel)).map((subject) => <SubjectRow key={subject.id} subject={subject} editable={editable} data={data} transact={transact} />)}<form className="inline-create" onSubmit={createSubject}><input aria-label="新科目名稱" value={subjectName} onChange={(event) => setSubjectName(event.target.value)} placeholder="新科目名稱" disabled={!editable} required /><button type="submit" disabled={!editable}>新增科目</button></form></> : !empty && <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p>}
+      {unit ? <><label className="resource-all-subjects"><input type="checkbox" checked={showAllSubjects} onChange={(event) => setShowAllSubjects(event.target.checked)} />顯示全域所有科目</label>{(showAllSubjects ? data.subjects : subjectsForLevel(data.subjects, unit.schoolLevel)).map((subject) => <SubjectRow key={subject.id} subject={subject} editable={editable} data={data} transact={transact} schoolLevel={unit.schoolLevel} canConfirmRemoval={Boolean(storagePersistence)} onRemoveLevel={removeSubjectLevel} />)}<form className="inline-create" onSubmit={createSubject}><input aria-label="新科目名稱" value={subjectName} onChange={(event) => setSubjectName(event.target.value)} placeholder="新科目名稱" disabled={!editable} required /><button type="submit" disabled={!editable}>新增科目</button></form></> : !empty && <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p>}
     </section><SubjectCatalogInstaller data={data} setData={setData} storageStatus={storageStatus} storagePersistence={persistence} readOnly={!editable} /></>}
     {error && <p className="form-error" role="alert">{error}</p>}
+    {pendingSubjectRemoval && storageStatus === 'saved' && <p role="status">正在儲存解除適用關係…</p>}
+    {subjectRemovalResult && subjectRemovalResult.data === data && subjectRemovalResult.revision === persistence.revision
+      && storageStatus === 'saved' && !persistence.pending && <p role="status">{subjectRemovalResult.message}</p>}
   </section>
 }
 
@@ -162,7 +199,10 @@ function ClassRoomField({ id, prefix, room, disabled, onChange }: { id: string; 
   return <div className="class-room-field"><input aria-label={`${prefix}教室`} aria-invalid={Boolean(validation)} aria-describedby={validation ? id : undefined} maxLength={CLASS_ROOM_MAX_LENGTH} value={room} onChange={(event) => onChange(event.target.value)} placeholder="預設教室" disabled={disabled} />{validation && <small id={id} role="alert">{validation}</small>}</div>
 }
 
-function SubjectRow({ subject, editable, data, transact }: { subject: Subject; editable: boolean; data: AppDataV4; transact: Transact }) {
+function SubjectRow({ subject, editable, data, transact, schoolLevel, canConfirmRemoval, onRemoveLevel }: {
+  subject: Subject; editable: boolean; data: AppDataV4; transact: Transact; schoolLevel: SchoolLevel
+  canConfirmRemoval: boolean; onRemoveLevel: (subjectId: string, level: SchoolLevel) => void
+}) {
   const [draft, setDraft] = useState<SubjectDraft>({ name: subject.name, shortName: subject.shortName, color: subject.color, applicableSchoolLevels: [...(subject.applicableSchoolLevels ?? SCHOOL_LEVELS)] })
   useEffect(() => setDraft({ name: subject.name, shortName: subject.shortName, color: subject.color, applicableSchoolLevels: [...(subject.applicableSchoolLevels ?? SCHOOL_LEVELS)] }), [subject])
   const impact = getSubjectImpact(data, subject.id)
@@ -176,5 +216,5 @@ function SubjectRow({ subject, editable, data, transact }: { subject: Subject; e
     if (!window.confirm(message)) return
     transact((current) => updateSubject(current, subject.id, draft, true))
   }
-  return <form className="subject-management-row" onSubmit={save} aria-label={`管理科目 ${subject.name}`}><label>名稱<input aria-label={`${subject.name}名稱`} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} disabled={!editable} /></label><label>簡稱<input aria-label={`${subject.name}簡稱`} value={draft.shortName} onChange={(event) => setDraft({ ...draft, shortName: event.target.value })} disabled={!editable} /></label><label>顏色<input aria-label={`${subject.name}顏色`} type="color" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} disabled={!editable} /></label><fieldset><legend>適用學制</legend>{SCHOOL_LEVELS.map((level) => <label key={level}><input type="checkbox" checked={draft.applicableSchoolLevels.includes(level)} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, applicableSchoolLevels: event.target.checked ? [...current.applicableSchoolLevels, level] : current.applicableSchoolLevels.filter((item) => item !== level) }))} />{levelLabel[level]}</label>)}</fieldset><div className="subject-management-actions"><button type="submit" disabled={!editable}>儲存科目</button><button type="button" className="danger-outline" disabled={!editable} onClick={() => { if (window.confirm(`確定刪除全域科目「${subject.name}」？目前有 ${impact.references.length} 筆課程或異動引用；有引用時系統會拒絕刪除。`)) transact((current) => deleteSubject(current, subject.id, true)) }}>刪除科目</button></div></form>
+  return <form className="subject-management-row" onSubmit={save} aria-label={`管理科目 ${subject.name}`}><label>名稱<input aria-label={`${subject.name}名稱`} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} disabled={!editable} /></label><label>簡稱<input aria-label={`${subject.name}簡稱`} value={draft.shortName} onChange={(event) => setDraft({ ...draft, shortName: event.target.value })} disabled={!editable} /></label><label>顏色<input aria-label={`${subject.name}顏色`} type="color" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} disabled={!editable} /></label><fieldset><legend>適用學制</legend>{SCHOOL_LEVELS.map((level) => <label key={level}><input type="checkbox" checked={draft.applicableSchoolLevels.includes(level)} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, applicableSchoolLevels: event.target.checked ? [...current.applicableSchoolLevels, level] : current.applicableSchoolLevels.filter((item) => item !== level) }))} />{levelLabel[level]}</label>)}</fieldset><div className="subject-management-actions">{(subject.applicableSchoolLevels ?? SCHOOL_LEVELS).includes(schoolLevel) && <button type="button" disabled={!editable || !canConfirmRemoval} title={!canConfirmRemoval ? '無法確認儲存狀態，請重新開啟管理視窗。' : undefined} onClick={() => onRemoveLevel(subject.id, schoolLevel)}>解除{levelLabel[schoolLevel]}適用</button>}<button type="submit" disabled={!editable}>儲存科目</button><button type="button" className="danger-outline" disabled={!editable} onClick={() => { if (window.confirm(`確定刪除全域科目「${subject.name}」？目前有 ${impact.references.length} 筆課程或異動引用；有引用時系統會拒絕刪除。`)) transact((current) => deleteSubject(current, subject.id, true)) }}>刪除科目</button></div></form>
 }

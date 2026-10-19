@@ -25,7 +25,7 @@ export interface SubjectImpact {
 
 export class SubjectManagementError extends Error {
   constructor(
-    public readonly code: 'invalid' | 'duplicate-name' | 'duplicate-short-name' | 'not-found' | 'referenced' | 'level-in-use' | 'confirmation-required',
+    public readonly code: 'invalid' | 'duplicate-name' | 'duplicate-short-name' | 'not-found' | 'referenced' | 'level-in-use' | 'last-level' | 'confirmation-required',
     message: string,
     public readonly details?: { existingSubject?: Subject; impact?: SubjectImpact; blockedReferences?: SubjectReference[] },
   ) { super(message) }
@@ -85,6 +85,27 @@ export function addSubjectForLevel(data: AppDataV4, name: string, level: SchoolL
   return createSubject(data, { name: normalized, shortName: normalized.slice(0, 2), color: '#A66D52', applicableSchoolLevels: [level] }, id)
 }
 
+function assertLevelsRemovable(impact: SubjectImpact, removed: readonly SchoolLevel[]) {
+  const blockedReferences = removed.length ? impact.references.filter((item) => item.schoolLevel === null || removed.includes(item.schoolLevel)) : []
+  if (!blockedReferences.length) return
+  const message = blockedReferences.some((item) => item.schoolLevel === null)
+    ? '引用資料無法判斷學制；為保護既有課程與異動，無法解除適用關係。'
+    : '此學制仍有固定課程、歷史版本、替換異動或單日課程引用，無法解除適用關係。'
+  throw new SubjectManagementError('level-in-use', message, { impact, blockedReferences })
+}
+
+/** Removes a global level association only; preserves even legacy display values verbatim. */
+export function removeSubjectSchoolLevel(data: AppDataV4, subjectId: string, schoolLevel: SchoolLevel, confirmed = false): AppDataV4 {
+  const impact = getSubjectImpact(data, subjectId)
+  const levels = impact.subject.applicableSchoolLevels ?? [...SCHOOL_LEVELS]
+  if (!SCHOOL_LEVELS.includes(schoolLevel) || !levels.includes(schoolLevel)) fail('此科目未適用指定學制，請重新確認。')
+  if (levels.length === 1) throw new SubjectManagementError('last-level', '這是科目最後一個適用學制，無法解除；科目至少須保留一個適用學制。', { impact })
+  assertLevelsRemovable(impact, [schoolLevel])
+  if (!confirmed) throw new SubjectManagementError('confirmation-required', '解除適用關係會影響所有專案、學校與課表，請先確認。', { impact })
+  return assertResult(data, { ...data, subjects: data.subjects.map((subject) => subject.id === subjectId
+    ? { ...subject, applicableSchoolLevels: levels.filter((level) => level !== schoolLevel) } : subject) })
+}
+
 export function updateSubject(data: AppDataV4, subjectId: string, draft: SubjectDraft, confirmed = false): AppDataV4 {
   const impact = getSubjectImpact(data, subjectId)
   const normalized = normalizeDraft(draft)
@@ -92,8 +113,7 @@ export function updateSubject(data: AppDataV4, subjectId: string, draft: Subject
     nameKey(normalized.name) !== nameKey(impact.subject.name), nameKey(normalized.shortName) !== nameKey(impact.subject.shortName))
   const oldLevels = impact.subject.applicableSchoolLevels ?? [...SCHOOL_LEVELS]
   const removed = oldLevels.filter((level) => !normalized.applicableSchoolLevels.includes(level))
-  const blockedReferences = removed.length ? impact.references.filter((item) => item.schoolLevel === null || removed.includes(item.schoolLevel)) : []
-  if (blockedReferences.length) throw new SubjectManagementError('level-in-use', '此學制仍有固定課程、歷史版本、替換異動或單日課程引用，無法移除。', { impact, blockedReferences })
+  assertLevelsRemovable(impact, removed)
   const changesGlobalDisplay = normalized.name !== impact.subject.name || normalized.shortName !== impact.subject.shortName || normalized.color !== impact.subject.color
   if (!confirmed && (changesGlobalDisplay || removed.length > 0)) throw new SubjectManagementError('confirmation-required', '此變更會影響全域科目或適用學制，請先確認。', { impact })
   return assertResult(data, { ...data, subjects: data.subjects.map((item) => item.id === subjectId ? { ...item, ...normalized, origin: 'user' } : item) })
