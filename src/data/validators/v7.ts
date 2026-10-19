@@ -1,4 +1,4 @@
-import { SCHOOL_LEVELS, type AppDataV4, type AppDataV7, type OneOffLesson } from '../../types'
+import { SCHOOL_LEVELS, type AppDataV4, type AppDataV7, type OneOffLesson, type ScheduleOverrideV4 } from '../../types'
 import { normalizeSubjectText } from '../../lib/subjectSearch'
 import { analyzeSubjectReferences } from '../subjectReferences'
 import { hasCompatibleV7TimetableData, hasSafeV7TimetableUpdate } from './v6'
@@ -104,9 +104,52 @@ function hasSafeSubjectUpdate(current: AppDataV4, next: AppDataV7): boolean {
   return true
 }
 
+type SubjectApplicabilityReference = Pick<ScheduleOverrideV4, 'projectId' | 'timetableId' | 'teachingUnitId'> & { subjectId: string }
+
+function hasSafeSubjectReferences(current: AppDataV4, next: AppDataV7): boolean {
+  const currentUnits = new Map(current.teachingUnits.map((unit) => [unit.id, unit]))
+  const nextUnits = new Map(next.teachingUnits.map((unit) => [unit.id, unit]))
+  const currentSubjects = new Map(current.subjects.map((subject) => [subject.id, subject]))
+  const nextSubjects = new Map(next.subjects.map((subject) => [subject.id, subject]))
+  const allowed = (reference: SubjectApplicabilityReference, previous?: SubjectApplicabilityReference): boolean => {
+    const unit = reference.teachingUnitId === null ? undefined : nextUnits.get(reference.teachingUnitId)
+    const level = unit?.projectId === reference.projectId ? unit?.schoolLevel : undefined
+    // Evaluate the complete final snapshot first, including same-batch subject repairs.
+    if (level && nextSubjects.get(reference.subjectId)?.applicableSchoolLevels.includes(level)) return true
+    if (!previous || previous.subjectId !== reference.subjectId || previous.projectId !== reference.projectId
+      || previous.timetableId !== reference.timetableId || previous.teachingUnitId !== reference.teachingUnitId) return false
+    const oldUnit = previous.teachingUnitId === null ? undefined : currentUnits.get(previous.teachingUnitId)
+    const oldLevel = oldUnit?.projectId === previous.projectId ? oldUnit?.schoolLevel : undefined
+    // Only the same pre-existing anomaly may survive; changing the unit's level
+    // cannot turn a valid reference (or a different anomaly) into a grandfathered one.
+    return oldLevel === level && !(oldLevel
+      && (currentSubjects.get(previous.subjectId)?.applicableSchoolLevels ?? SCHOOL_LEVELS).includes(oldLevel))
+  }
+
+  // Separate maps prevent an ID in another entity kind from authorizing a new reference.
+  const currentLessons = new Map(current.recurringLessons.map((lesson) => [lesson.id, lesson]))
+  for (const lesson of next.recurringLessons) {
+    const previous = currentLessons.get(lesson.id)
+    if (!allowed(lesson, previous?.seriesId === lesson.seriesId ? previous : undefined)) return false
+  }
+  const currentOverrides = new Map(current.overrides.map((override) => [override.id, override]))
+  for (const override of next.overrides) {
+    if (!override.replacement) continue
+    const previous = currentOverrides.get(override.id)
+    // Unassigned legacy overrides stay unresolved: never infer ownership from
+    // originalLessonId or classId. Preserve their reference fields, but allow notes/room edits.
+    const retained = previous?.replacement && previous.action === override.action
+      && previous.originalLessonId === override.originalLessonId
+      && (override.teachingUnitId !== null || previous.replacement.classId === override.replacement.classId)
+    if (!allowed({ ...override, subjectId: override.replacement.subjectId }, retained
+      ? { ...previous, subjectId: previous.replacement!.subjectId } : undefined)) return false
+  }
+  return true
+}
+
 export function isSafeAppDataV7Update(current: AppDataV4, next: AppDataV4): boolean {
   if (!isCompatibleAppDataV7(next) || !hasSafeV7TimetableUpdate(current, next)) return false
-  if (!hasSafeSubjectUpdate(current, next)) return false
+  if (!hasSafeSubjectUpdate(current, next) || !hasSafeSubjectReferences(current, next)) return false
   if ((current.oneOffLessons ?? []).some((lesson) => {
     if (lesson.time.mode !== 'period') return false
     const retained = next.oneOffLessons.find((item) => item.id === lesson.id)

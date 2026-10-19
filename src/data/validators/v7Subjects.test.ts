@@ -40,6 +40,257 @@ function shrink(data: AppDataV7, levels: SchoolLevel[] = ['senior-high', 'other'
     ? { ...subject, applicableSchoolLevels: levels } : subject) }
 }
 
+type ScopedReferenceKind = 'recurring' | 'replacement'
+const referenceFor = (data: AppDataV7, kind: ScopedReferenceKind) => kind === 'recurring'
+  ? data.recurringLessons[0] : data.overrides[0]
+const contentFor = (data: AppDataV7, kind: ScopedReferenceKind) => kind === 'recurring'
+  ? data.recurringLessons[0] : data.overrides[0].replacement!
+
+function applicabilityData(kind: ScopedReferenceKind) {
+  const data = withReference(kind)
+  data.subjects[0].applicableSchoolLevels = ['junior-high']
+  data.subjects[1].applicableSchoolLevels = ['senior-high']
+  return data
+}
+
+describe.each(['recurring', 'replacement'] as const)('v7 %s subject applicability updates', (kind) => {
+  it('rejects a new inapplicable reference, even when all structural references are valid', () => {
+    const current = applicabilityData(kind)
+    const next = structuredClone(current)
+    contentFor(next, kind).subjectId = next.subjects[1].id
+    referenceFor(next, kind).id = 'new-reference'
+    if (kind === 'recurring') next.recurringLessons[0].seriesId = 'new-reference'
+    current.recurringLessons = []
+    current.overrides = []
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+
+  it('rejects changing an existing reference to an inapplicable subject', () => {
+    const current = applicabilityData(kind)
+    const next = structuredClone(current)
+    contentFor(next, kind).subjectId = next.subjects[1].id
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+
+  it('rejects a TeachingUnit level change that makes the retained reference inapplicable', () => {
+    const current = applicabilityData(kind)
+    const next = structuredClone(current)
+    next.teachingUnits[0].schoolLevel = 'senior-high'
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+    next.subjects[0].applicableSchoolLevels.push('senior-high')
+    expect(isSafeAppDataV7Update(current, next)).toBe(true)
+  })
+
+  it.each(['new', 'retained'] as const)('allows a %s reference repaired by subject expansion in the same batch', (mode) => {
+    const current = applicabilityData(kind)
+    const next = structuredClone(current)
+    contentFor(next, kind).subjectId = next.subjects[1].id
+    next.subjects[1].applicableSchoolLevels.push('junior-high')
+    if (mode === 'new') { current.recurringLessons = []; current.overrides = [] }
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(true)
+  })
+
+  it('keeps a legacy anomaly readable and permits unrelated document and room/note edits', () => {
+    const current = applicabilityData(kind)
+    contentFor(current, kind).subjectId = current.subjects[1].id
+    const before = structuredClone(current)
+    const next = structuredClone(current)
+    next.projects[0].name = 'Renamed project'
+    contentFor(next, kind).room = 'New room'
+    if (kind === 'replacement') next.overrides[0].note = 'Updated note'
+    expect(isCompatibleAppDataV7(current)).toBe(true)
+    expect(isSafeAppDataV7Update(current, current)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(true)
+    expect(current).toEqual(before)
+  })
+
+  it.each(['copy', 'replace-id'] as const)('rejects a legacy anomaly with a new ID: %s', (mode) => {
+    const current = applicabilityData(kind)
+    contentFor(current, kind).subjectId = current.subjects[1].id
+    const next = structuredClone(current)
+    if (kind === 'recurring') {
+      const copy = { ...next.recurringLessons[0], id: 'copied', seriesId: 'copied' }
+      next.recurringLessons = mode === 'copy' ? [...next.recurringLessons, copy] : [copy]
+    } else {
+      const copy = { ...next.overrides[0], id: 'copied' }
+      next.overrides = mode === 'copy' ? [...next.overrides, copy] : [copy]
+    }
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+
+  it('rejects swapping valid and invalid subjects between stable IDs with the same anomaly count', () => {
+    const current = applicabilityData(kind)
+    if (kind === 'recurring') current.recurringLessons.push({ ...current.recurringLessons[0], id: 'second', seriesId: 'second', subjectId: current.subjects[1].id })
+    else current.overrides.push({ ...current.overrides[0], id: 'second', replacement: { ...current.overrides[0].replacement!, subjectId: current.subjects[1].id } })
+    const next = structuredClone(current)
+    contentFor(next, kind).subjectId = next.subjects[1].id
+    if (kind === 'recurring') next.recurringLessons[1].subjectId = next.subjects[0].id
+    else next.overrides[1].replacement!.subjectId = next.subjects[0].id
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+
+  it.each(['unit', 'project', 'timetable', 'level'] as const)('does not grandfather a legacy anomaly after changing its %s scope', (scope) => {
+    const current = applicabilityData(kind)
+    contentFor(current, kind).subjectId = current.subjects[1].id
+    current.timetables.push({ ...current.timetables[0], id: 'other-timetable' })
+    current.schools.push({ ...current.schools[0], id: 'other-school' })
+    current.teachingUnits.push({ ...current.teachingUnits[0], id: 'other-unit', schoolId: 'other-school' })
+    current.classes.push({ ...current.classes[0], id: 'other-class', teachingUnitId: 'other-unit' })
+    const next = structuredClone(current)
+    const reference = referenceFor(next, kind)
+    if (scope === 'unit') {
+      reference.teachingUnitId = 'other-unit'
+      contentFor(next, kind).classId = 'other-class'
+    }
+    if (scope === 'timetable') reference.timetableId = 'other-timetable'
+    if (scope === 'project') {
+      next.projects.push({ ...next.projects[0], id: 'other-project' })
+      next.schools[0].projectId = 'other-project'
+      next.teachingUnits[0].projectId = 'other-project'
+      next.classes.filter((item) => item.teachingUnitId === next.teachingUnits[0].id).forEach((item) => { item.projectId = 'other-project' })
+      next.timetables[0].projectId = 'other-project'
+      reference.projectId = 'other-project'
+    }
+    if (scope === 'level') next.teachingUnits[0].schoolLevel = 'other'
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+    next.subjects[1].applicableSchoolLevels.push(scope === 'level' ? 'other' : 'junior-high')
+    expect(isSafeAppDataV7Update(current, next)).toBe(true)
+  })
+
+  it('allows valid shared-subject references across schools, projects, timetables and archives', () => {
+    const current = applicabilityData(kind)
+    const next = structuredClone(current)
+    const projectId = 'archived-project'
+    next.projects.push({ ...next.projects[0], id: projectId, archivedAt: '2027-02-01T00:00:00.000Z' })
+    next.schools.push({ ...next.schools[0], id: 'other-school', projectId })
+    next.teachingUnits.push({ ...next.teachingUnits[0], id: 'other-unit', schoolId: 'other-school', projectId })
+    next.classes.push({ ...next.classes[0], id: 'other-class', teachingUnitId: 'other-unit', projectId })
+    next.timetables.push({ ...next.timetables[0], id: 'other-timetable', projectId })
+    const scope = { id: 'other-reference', projectId, timetableId: 'other-timetable', teachingUnitId: 'other-unit' }
+    if (kind === 'recurring') next.recurringLessons.push({ ...next.recurringLessons[0], ...scope, seriesId: 'other-series', classId: 'other-class' })
+    else next.overrides.push({ ...next.overrides[0], ...scope, replacement: { ...next.overrides[0].replacement!, classId: 'other-class' } })
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(true)
+    if (kind === 'recurring') next.recurringLessons.at(-1)!.subjectId = next.subjects[1].id
+    else next.overrides.at(-1)!.replacement!.subjectId = next.subjects[1].id
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+})
+
+describe('v7 replacement ownership and legacy boundaries', () => {
+  it('uses the replacement subject and the override unit, even for a historical original lesson', () => {
+    const current = applicabilityData('recurring')
+    const original = current.recurringLessons[0]
+    original.effectiveEnd = '2026-09-13'
+    current.recurringLessons.push({ ...original, id: 'later-version', effectiveStart: '2026-09-14', effectiveEnd: '2027-01-20' })
+    const next = structuredClone(current)
+    next.overrides.push({ id: 'historical-replacement', projectId: original.projectId, timetableId: original.timetableId,
+      teachingUnitId: original.teachingUnitId, originalLessonId: original.id, date: '2026-09-07', periodId: original.periodId,
+      action: 'replace', replacement: { subjectId: next.subjects[1].id, classId: original.classId } })
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+    next.subjects[1].applicableSchoolLevels.push('junior-high')
+    expect(isSafeAppDataV7Update(current, next)).toBe(true)
+  })
+
+  it('checks an inapplicable historical version even when the latest version is valid', () => {
+    const current = applicabilityData('recurring')
+    const original = current.recurringLessons[0]
+    original.effectiveEnd = '2026-09-13'
+    current.recurringLessons.push({ ...original, id: 'later-version', effectiveStart: '2026-09-14', effectiveEnd: '2027-01-20' })
+    const next = structuredClone(current)
+    next.recurringLessons[0].subjectId = next.subjects[1].id
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+
+  it('preserves an unassigned legacy replacement without inferring a unit from its original lesson', () => {
+    const current = withReference('unassigned')
+    const lesson = base().recurringLessons[0]
+    current.recurringLessons = [lesson]
+    current.overrides[0].originalLessonId = lesson.id
+    const next = structuredClone(current)
+    next.projects[0].name = 'Renamed'
+    next.overrides[0].note = 'Legacy note'
+    next.overrides[0].replacement!.room = 'New room'
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(true)
+    current.overrides = []
+    // Even an applicable subject and a resolvable original cannot authorize a new unassigned reference.
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+
+  it.each(['copy', 'subject', 'class', 'original', 'action'] as const)('rejects changes to an unresolved legacy replacement: %s', (change) => {
+    const current = withReference('unassigned')
+    const next = structuredClone(current)
+    if (change === 'copy') next.overrides[0].id = 'copied-unassigned'
+    if (change === 'subject') next.overrides[0].replacement!.subjectId = next.subjects[1].id
+    if (change === 'class') next.overrides[0].replacement!.classId = 'another-unknown-class'
+    if (change === 'original') next.overrides[0].originalLessonId = 'another-unknown-original'
+    if (change === 'action') next.overrides[0].action = 'cancel'
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+
+  it('allows explicitly assigning a legacy replacement only when the final subject is applicable', () => {
+    const current = withReference('unassigned')
+    current.subjects[0].applicableSchoolLevels = ['senior-high']
+    const next = structuredClone(current)
+    Object.assign(next.overrides[0], { projectId: next.projects[0].id, timetableId: next.timetables[0].id, teachingUnitId: next.teachingUnits[0].id })
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+    next.subjects[0].applicableSchoolLevels.push('junior-high')
+    expect(isSafeAppDataV7Update(current, next)).toBe(true)
+  })
+
+  it('does not borrow grandfather status from a recurring reference with the same ID', () => {
+    const current = applicabilityData('recurring')
+    const lesson = current.recurringLessons[0]
+    lesson.subjectId = current.subjects[1].id
+    const next = structuredClone(current)
+    next.recurringLessons = []
+    next.overrides.push({ id: lesson.id, projectId: lesson.projectId, timetableId: lesson.timetableId,
+      teachingUnitId: lesson.teachingUnitId, date: '2026-09-07', periodId: lesson.periodId,
+      action: 'replace', replacement: { subjectId: lesson.subjectId, classId: lesson.classId } })
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+})
+
+describe('v7 one-off applicability stays strict', () => {
+  it('rejects an existing inapplicable one-off even on unrelated writes', () => {
+    const current = withReference('one-off')
+    current.subjects[0].applicableSchoolLevels = ['senior-high']
+    const next = structuredClone(current)
+    next.projects[0].name = 'Renamed'
+    expect(isCompatibleAppDataV7(current)).toBe(false)
+    expect(isSafeAppDataV7Update(current, next)).toBe(false)
+  })
+
+  it('rejects invalid one-off subject and unit changes, allowing a same-batch applicability repair', () => {
+    const current = withReference('one-off')
+    current.subjects[0].applicableSchoolLevels = ['junior-high']
+    current.subjects[1].applicableSchoolLevels = ['senior-high']
+    const changedSubject = structuredClone(current)
+    changedSubject.oneOffLessons[0].subjectId = changedSubject.subjects[1].id
+    expect(isSafeAppDataV7Update(current, changedSubject)).toBe(false)
+    changedSubject.subjects[1].applicableSchoolLevels.push('junior-high')
+    expect(isSafeAppDataV7Update(current, changedSubject)).toBe(true)
+    const changedUnit = structuredClone(current)
+    changedUnit.teachingUnits[0].schoolLevel = 'senior-high'
+    expect(isSafeAppDataV7Update(current, changedUnit)).toBe(false)
+    changedUnit.subjects[0].applicableSchoolLevels.push('senior-high')
+    expect(isSafeAppDataV7Update(current, changedUnit)).toBe(true)
+  })
+})
+
 describe('v7 subject reference update safety', () => {
   it.each(['recurring', 'replacement', 'unassigned', 'one-off'] as const)(
     'blocks shrinking and deleting a subject referenced by %s, just like the API', (kind) => {

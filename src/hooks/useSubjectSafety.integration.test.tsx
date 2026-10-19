@@ -19,6 +19,18 @@ const validBatch = (data: AppDataV4): AppDataV4 => ({ ...data,
   subjects: [...data.subjects, { id: 'new-subject', name: 'New subject', shortName: 'NS', color: '#123456', applicableSchoolLevels: ['other'] }],
 })
 
+function invalidReferenceBatch(data: AppDataV7, kind: 'recurring' | 'replacement'): AppDataV4 {
+  const next = validBatch(data)
+  next.subjects.at(-1)!.applicableSchoolLevels = ['junior-high']
+  const lesson = data.recurringLessons[0]
+  if (kind === 'recurring') next.recurringLessons = [...data.recurringLessons,
+    { ...lesson, id: 'invalid-reference', seriesId: 'invalid-reference', subjectId: 'new-subject' }]
+  else next.overrides = [...data.overrides, { id: 'invalid-reference', projectId: lesson.projectId,
+    timetableId: lesson.timetableId, teachingUnitId: lesson.teachingUnitId, action: 'replace',
+    date: '2026-09-07', periodId: lesson.periodId, replacement: { subjectId: 'new-subject', classId: lesson.classId } }]
+  return next
+}
+
 function setup(data = base()) {
   const raw = JSON.stringify(data)
   localStorage.setItem(APP_DATA_V7_KEY, raw)
@@ -80,6 +92,56 @@ describe('v7 subject safety across persistence and synchronization', () => {
       expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
     },
   )
+
+  it.each(['recurring', 'replacement'] as const)('rejects a new inapplicable %s reference before changing state or storage', (kind) => {
+    const { result, data, raw } = setup()
+    const next = invalidReferenceBatch(data, kind)
+    expect(isCompatibleAppDataV7(next)).toBe(true)
+    act(() => result.current[1](next))
+    act(() => vi.advanceTimersByTime(200))
+    expect(result.current[2]).toBe('write-error')
+    expect(result.current[0]).toEqual(data)
+    expect(result.current[4]).toEqual({ pending: false, revision: 0 })
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+  })
+
+  it.each(['recurring', 'replacement'] as const)('rejects an external inapplicable %s reference without partially applying it', (kind) => {
+    const { result, data, raw } = setup()
+    const external = JSON.stringify(invalidReferenceBatch(data, kind))
+    receive(external, raw)
+    act(() => vi.advanceTimersByTime(200))
+    expect(result.current[2]).toBe('read-error')
+    expect(result.current[0]).toEqual(data)
+    expect(result.current[3].rawBackup).toBe(external)
+    expect(result.current[4]).toEqual({ pending: false, revision: 0 })
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(external)
+  })
+
+  it.each(['recurring', 'replacement'] as const)('loads a legacy %s anomaly unchanged and persists unrelated edits', (kind) => {
+    const data = base()
+    data.subjects[0].applicableSchoolLevels = ['junior-high']
+    if (kind === 'replacement') {
+      const lesson = data.recurringLessons[0]
+      data.recurringLessons = []
+      data.overrides.push({ id: 'legacy-replacement', projectId: lesson.projectId, timetableId: lesson.timetableId,
+        teachingUnitId: lesson.teachingUnitId, action: 'replace', date: '2026-09-07', periodId: lesson.periodId,
+        replacement: { subjectId: lesson.subjectId, classId: lesson.classId } })
+    }
+    const { result, raw } = setup(data)
+    act(() => vi.advanceTimersByTime(200))
+    expect(result.current[2]).toBe('saved')
+    expect(result.current[4].revision).toBe(0)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+    const next = structuredClone(data)
+    next.projects[0].name = 'Renamed'
+    if (kind === 'recurring') next.recurringLessons[0].room = 'New room'
+    else next.overrides[0].note = 'Updated note'
+    act(() => result.current[1](next))
+    act(() => vi.advanceTimersByTime(200))
+    expect(result.current[2]).toBe('saved')
+    expect(result.current[4]).toEqual({ pending: false, revision: 1 })
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)).toEqual(next)
+  })
 
   it('rejects an unsafe external subject update without partially applying the document', () => {
     const { result, data, raw } = setup()
