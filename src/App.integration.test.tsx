@@ -6,6 +6,7 @@ import { createProject } from './data/projectRuntime'
 import { createBlankProject } from './data/projectRuntime'
 import { createTimetable, updateTimetable } from './data/timetablesV6'
 import { createOneOffLesson } from './data/oneOffLessonsV7'
+import { deleteTimetable } from './data/deleteTimetableV7'
 import { createInitialAppDataV7 } from './hooks/useAppDataV4'
 import { initialData } from './data/seed'
 import { migrateV3ToV4 } from './data/migrationsV4'
@@ -112,12 +113,19 @@ describe('App v4 runtime', () => {
     expect(screen.getByRole('dialog', { name: '新增固定課程' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(screen.getByRole('dialog', { name: '新增課程' })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /新增固定課程/ }))
+    fireEvent.click(screen.getByRole('button', { name: /新增單日課程/ }))
+    const oneOffDialog = screen.getByRole('dialog', { name: '新增單日課程' })
+    expect(oneOffDialog).toBeTruthy()
+    fireEvent.click(within(oneOffDialog).getAllByRole('button', { name: '關閉' })[0])
+    expect(screen.getByRole('dialog', { name: '新增課程' })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /新增單日課程/ }))
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     act(() => vi.advanceTimersByTime(200))
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
   })
 
-  it('新增課程選單依序提供固定課、單日課、管理班級與全域科目', () => {
+  it('新增課程選單依序提供固定課、單日課、全域科目與班級管理', () => {
     const data = copyReadyData()
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<App />)
@@ -129,17 +137,136 @@ describe('App v4 runtime', () => {
     expect(dialog.querySelectorAll('.add-choice-divider')).toHaveLength(1)
     expect(within(dialog).getAllByRole('button').map((button) => button.textContent?.trim().split('。')[0]).filter(Boolean)).toEqual([
       expect.stringContaining('新增固定課程'), expect.stringContaining('新增單日課程'),
-      expect.stringContaining('管理班級'), expect.stringContaining('管理科目'), expect.stringContaining('取消'),
+      expect.stringContaining('管理科目'), expect.stringContaining('管理班級'), expect.stringContaining('取消'),
     ])
     fireEvent.click(within(dialog).getByRole('button', { name: /管理班級/ }))
     expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
     expect(screen.getByLabelText('學校')).toBeTruthy()
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    expect(screen.getByRole('dialog', { name: '新增課程' })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /管理班級/ }))
     fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
     expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
     expect(screen.getByText(/科目庫由所有專案共用/)).toBeTruthy()
+  })
+
+  it('專案沒有教師課表時仍可由新增課程選單管理科目與班級', () => {
+    const source = copyReadyData()
+    const data = deleteTimetable(source, source.projects[0].id, source.timetables[0].id)
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    expect((screen.getByRole('button', { name: /新增固定課程/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /新增單日課程/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getAllByText('請先建立教師課表。')).toHaveLength(2)
+    expect((screen.getByRole('button', { name: /管理科目/ }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: /管理班級/ }) as HTMLButtonElement).disabled).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: /管理班級/ }))
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+  })
+
+  it('從設定進入管理器後返回設定，焦點回到原管理入口', () => {
+    const data = copyReadyData()
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
+    const trigger = screen.getByRole('button', { name: '管理科目' })
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: '專案設定' })).toBeTruthy()
+    const restored = screen.getByRole('button', { name: '管理科目' })
+    expect(document.activeElement).toBe(restored)
+  })
+
+  it('缺少學校或學制時只提供既有設定引導，關閉設定後返回原管理器', () => {
+    const source = copyReadyData()
+    const data = { ...source, schools: [], teachingUnits: [], timetables: [], classes: [], courses: [], recurringLessons: [], overrides: [], oneOffLessons: [], events: [] }
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /管理班級/ }))
+    expect(screen.getByText(/目前專案尚無學校或學制/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /新增班級/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '前往專案設定' }))
+    expect(screen.getByRole('dialog', { name: '專案設定' })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    expect(screen.getByText(/目前專案尚無學校或學制/)).toBeTruthy()
+  })
+
+  it('拒絕捨棄資源草稿時不關閉管理器、不切頁也不清空輸入', () => {
+    const data = copyReadyData()
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
+    fireEvent.click(screen.getByRole('button', { name: '編輯科目 國文' }))
+    const name = screen.getByLabelText('國文名稱') as HTMLInputElement
+    fireEvent.change(name, { target: { value: '保留的科目草稿' } })
+    fireEvent.click(screen.getByRole('button', { name: '關閉對話框' }))
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    expect(name.value).toBe('保留的科目草稿')
+    expect(confirm).toHaveBeenCalledOnce()
+  })
+
+  it('資源提交 pending 或 blocked 時阻止 Sidebar 導航', () => {
+    const data = copyReadyData()
+    const raw = JSON.stringify(data)
+    localStorage.setItem(APP_DATA_V7_KEY, raw)
+    render(<App />)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
+    fireEvent.click(screen.getByRole('button', { name: '編輯科目 國文' }))
+    const form = screen.getByRole('form', { name: '管理科目 國文' })
+    fireEvent.change(within(form).getByLabelText('國文名稱'), { target: { value: '尚待儲存' } })
+    fireEvent.click(within(form).getByRole('button', { name: '儲存科目' }))
+    fireEvent.click(screen.getByRole('button', { name: '會議與活動' }))
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+
+    const external = JSON.stringify({ ...data, projects: data.projects.map((project) => ({ ...project, name: '其他分頁版本' })) })
+    localStorage.setItem(APP_DATA_V7_KEY, external)
+    act(() => window.dispatchEvent(new StorageEvent('storage', {
+      key: APP_DATA_V7_KEY, oldValue: raw, newValue: external, storageArea: localStorage,
+    })))
+    expect(screen.getByLabelText('資源儲存復原')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '會議與活動' }))
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 1, name: '會議與活動' })).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(external)
+  })
+
+  it('專案切換同樣受 dirty 草稿保護', () => {
+    const first = copyReadyData()
+    let index = 0
+    const next = createBlankProject(first, { name: '第二專案', teacherName: '王老師', academicYear: 116,
+      semester: 'first', startDate: '2027-08-30', endDate: '2028-01-20' }, () => `batch3-${++index}`)
+    const data = { ...next, activeProjectId: first.projects[0].id }
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
+    fireEvent.click(screen.getByRole('button', { name: '編輯科目 國文' }))
+    fireEvent.change(screen.getByLabelText('國文名稱'), { target: { value: '跨專案保留草稿' } })
+    fireEvent.change(screen.getByLabelText('課表專案'), { target: { value: next.projects.at(-1)!.id } })
+
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    expect((screen.getByLabelText('國文名稱') as HTMLInputElement).value).toBe('跨專案保留草稿')
+    expect(confirm).toHaveBeenCalledOnce()
   })
 
   it('Topbar 新專案表單沿用既有 Project 建立流程並建立必要關聯', () => {
@@ -586,24 +713,19 @@ describe('App v4 runtime', () => {
     expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).timetables).toHaveLength(2)
   })
 
-  it('舊 SubjectPanel 變更顏色須確認，且不經 legacy merge 改寫科目適用學制', () => {
-    const data = migrateV4ToV5(migrateV3ToV4(initialData))
-    data.subjects[0].applicableSchoolLevels = ['other']
-    localStorage.setItem(APP_DATA_V5_KEY, JSON.stringify(data))
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('移除舊科目與班級頁面，Sidebar 班級入口改開安全管理器', () => {
+    const data = copyReadyData()
+    const raw = JSON.stringify(data)
+    localStorage.setItem(APP_DATA_V7_KEY, raw)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
-    const input = screen.getByLabelText('國文 顏色')
-    fireEvent.change(input, { target: { value: '#123456' } })
-    expect(confirm).toHaveBeenCalledOnce()
-    act(() => vi.advanceTimersByTime(200))
-    expect(JSON.parse(localStorage.getItem(APP_DATA_V5_KEY)!).subjects[0].color).toBe(data.subjects[0].color)
-    confirm.mockReturnValue(true)
-    fireEvent.change(input, { target: { value: '#654321' } })
-    act(() => vi.advanceTimersByTime(200))
-    expect(JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!).subjects[0]).toMatchObject({
-      id: data.subjects[0].id, color: '#654321', applicableSchoolLevels: ['other'],
-    })
+    expect(screen.queryByRole('button', { name: '科目與班級' })).toBeNull()
+    const trigger = screen.getByRole('button', { name: '班級管理' })
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
   })
 
   it('首次使用不自動建立範例，預覽範例也不污染正式資料', () => {
@@ -875,7 +997,7 @@ describe('App one-off schedule and confirmed persistence', () => {
     act(() => vi.advanceTimersByTime(200))
     expect(screen.getByText('這個專案尚無教師課表')).toBeTruthy()
     expect(screen.getByRole('heading', { level: 1, name: '尚未建立課表' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: '新增課程' })).toBeNull()
+    expect(screen.getByRole('button', { name: '新增課程' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '編輯課表資訊' })).toBeNull()
     expect(screen.queryByRole('button', { name: '複製課表' })).toBeNull()
     const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!)

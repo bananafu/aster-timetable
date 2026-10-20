@@ -1,4 +1,5 @@
 import { AlertCircle, CalendarDays, Check, GraduationCap, LayoutDashboard, Settings, Shapes, Users, X } from 'lucide-react'
+import type { Ref } from 'react'
 import type { StorageStatus } from '../hooks/useLocalStorage'
 import type { TimetableProject } from '../types'
 
@@ -11,16 +12,18 @@ interface SidebarProps {
   projects: TimetableProject[]
   activeProjectId: string | null
   onProjectChange: (projectId: string) => void
+  canManageClasses?: boolean
+  classManagerButtonRef?: Ref<HTMLButtonElement>
 }
 
 const navItems = [
   { id: 'dashboard', label: '總覽', icon: LayoutDashboard },
   { id: 'timetable', label: '我的課表', icon: CalendarDays },
-  { id: 'subjects', label: '科目與班級', icon: Shapes },
+  { id: 'classes', label: '班級管理', icon: Shapes },
   { id: 'events', label: '會議與活動', icon: Users },
 ]
 
-export function Sidebar({ activePage, onNavigate, open, onClose, storageStatus, projects, activeProjectId, onProjectChange }: SidebarProps) {
+export function Sidebar({ activePage, onNavigate, open, onClose, storageStatus, projects, activeProjectId, onProjectChange, canManageClasses = Boolean(activeProjectId) && storageStatus === 'saved', classManagerButtonRef }: SidebarProps) {
   const statusLabel = storageStatus === 'saved' ? '已儲存至此裝置'
     : storageStatus === 'conflict' ? '偵測到多分頁衝突'
       : storageStatus === 'read-error' ? '資料讀取失敗，已暫停寫入'
@@ -38,7 +41,7 @@ export function Sidebar({ activePage, onNavigate, open, onClose, storageStatus, 
         <nav className="side-nav" aria-label="主要導覽">
           <p className="nav-label">工作空間</p>
           {navItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={activePage === id ? 'active' : ''} onClick={() => { onNavigate(id); onClose() }}>
+            <button ref={id === 'classes' ? classManagerButtonRef : undefined} key={id} className={activePage === id ? 'active' : ''} disabled={id === 'classes' && !canManageClasses} onClick={() => { onNavigate(id); onClose() }}>
               <Icon size={19} strokeWidth={1.8} />{label}
             </button>
           ))}

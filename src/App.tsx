@@ -12,9 +12,7 @@ import { CourseResourceManagerDialog } from './components/CourseResourceManager'
 import { projectToLegacyView, switchActiveProject } from './data/projectRuntime'
 import { copyTimetable, createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
 import { deleteTimetable } from './data/deleteTimetableV7'
-import { getSubjectImpact, updateSubject } from './data/subjectsV5'
 import { isCompatibleAppDataV7 } from './data/validators/v7'
-import { SCHOOL_LEVELS } from './types'
 import { useAppDataV4 } from './hooks/useAppDataV4'
 import { useOneOffPersistence } from './hooks/useOneOffPersistence'
 import { useResourceManagementSession } from './hooks/useResourceManagementSession'
@@ -42,6 +40,12 @@ type TimetableDialog = {
   deleteImpact: ReturnType<typeof timetableDeleteImpact>
   defaultDate: string
 }
+
+type ResourceMode = 'classes' | 'subjects'
+type ResourceDialogSource = 'add-choice' | 'settings' | 'sidebar'
+type ResourceDialogState = { mode: ResourceMode; source: ResourceDialogSource }
+type AddChoiceFocus = 'lesson' | 'one-off' | ResourceMode | null
+type OneOffEditorState = { projectId: string; timetableId: string; date?: string; id?: string; source: 'add-choice' | 'schedule' }
 
 function timetableCopySourceFingerprint(data: AppDataV4, projectId: string, timetableId: string): string | null {
   const project = data.projects.find((item) => item.id === projectId)
@@ -108,6 +112,9 @@ export default function App() {
     ? activeTimetableCandidate : null
   const data = useMemo(() => {
     if (!appData.activeProjectId) return EMPTY_LEGACY_DATA
+    const hasProjectRuntime = appData.schools.some((school) => school.projectId === appData.activeProjectId)
+      && appData.teachingUnits.some((unit) => unit.projectId === appData.activeProjectId)
+    if (!hasProjectRuntime) return EMPTY_LEGACY_DATA
     const view = projectToLegacyView(appData, appData.activeProjectId, activeTimetableId ?? undefined)
     return activeTimetableCandidate && !activeTimetableId ? { ...view, courses: [], overrides: [] } : view
   }, [appData, activeTimetableCandidate, activeTimetableId])
@@ -116,9 +123,12 @@ export default function App() {
   const [modal, setModal] = useState<ModalKind>(null)
   const [projectLifecycleInitialPage, setProjectLifecycleInitialPage] = useState<'root' | 'blank'>('root')
   const [addChoiceOpen, setAddChoiceOpen] = useState(false)
-  const [resourceDialog, setResourceDialog] = useState<'classes' | 'subjects' | null>(null)
+  const [addChoiceFocus, setAddChoiceFocus] = useState<AddChoiceFocus>(null)
+  const [resourceDialog, setResourceDialog] = useState<ResourceDialogState | null>(null)
+  const [settingsReturnResource, setSettingsReturnResource] = useState<ResourceDialogState | null>(null)
+  const [settingsResourceFocus, setSettingsResourceFocus] = useState<ResourceMode | null>(null)
   const [lessonEditorOpen, setLessonEditorOpen] = useState(false)
-  const [oneOffEditor, setOneOffEditor] = useState<{ projectId: string; timetableId: string; date?: string; id?: string } | null>(null)
+  const [oneOffEditor, setOneOffEditor] = useState<OneOffEditorState | null>(null)
   const [oneOffNotice, setOneOffNotice] = useState('')
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null)
   const [selectedLessonDate, setSelectedLessonDate] = useState<string | null>(null)
@@ -136,6 +146,15 @@ export default function App() {
   const editSubmittingRef = useRef(false)
   const deleteSubmittingRef = useRef(false)
   const lessonEditorFromAddRef = useRef(false)
+  const sidebarClassManagerButtonRef = useRef<HTMLButtonElement>(null)
+  const restoreSidebarResourceFocusRef = useRef(false)
+
+  useEffect(() => {
+    if (!resourceDialog && restoreSidebarResourceFocusRef.current) {
+      restoreSidebarResourceFocusRef.current = false
+      sidebarClassManagerButtonRef.current?.focus()
+    }
+  }, [resourceDialog])
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     setSelectedLessonId(null)
@@ -252,30 +271,25 @@ export default function App() {
   const canAddLesson = canCreateTimetable && Boolean(activeTimetable?.teacherName?.trim()) && !activeTimetable?.teacherNamePending
   const canAddOneOff = Boolean(displayProject && displayTimetable && !historicalProject && !displayProject.archivedAt
     && storageStatus === 'saved' && !storagePersistence.pending && !oneOffWrites.pending)
+  const canManageResources = Boolean(displayProject && !historicalProject && !displayProject.archivedAt
+    && storageStatus === 'saved' && !storagePersistence.pending)
+  const missingTimetableReason = displayTimetables.length === 0 ? '請先建立教師課表。' : '請先選擇教師課表。'
   const addLessonUnavailableReason = createTimetableUnavailableReason || (!activeTimetable
-    ? '請先選擇教師課表。'
+    ? missingTimetableReason
     : activeTimetable.teacherNamePending || !activeTimetable.teacherName?.trim()
       ? '目前課表的授課教師姓名尚待補齊。'
       : '')
+  const manageResourcesUnavailableReason = storagePersistence.pending
+    ? '目前資料仍在儲存，完成後才能管理科目或班級。'
+    : storageStatus !== 'saved'
+      ? '請先處理目前的儲存狀態。'
+      : historicalProject || displayProject?.archivedAt
+        ? '封存專案為唯讀，不能管理資源。'
+        : '請先建立課表專案。'
   const todaySummary = activeProject && (appData.schemaVersion < 6 || activeTimetable)
     ? getTodayTeachingSummaryV4(appData, activeProject.id, now, activeTimetable?.id)
     : { count: 0, state: 'idle' as const }
   const upcomingEvent = getNextUpcomingEvent(data.events, now)
-
-  const changeSubjectColor = (subjectId: string, color: string) => {
-    const subject = appData.subjects.find((item) => item.id === subjectId)
-    if (!subject) return
-    const impact = getSubjectImpact(appData, subjectId)
-    if (!window.confirm(`變更「${subject.name}」的全域顏色？科目庫會同步更新；目前有 ${impact.projectIds.length} 個專案、${impact.references.length} 筆課程或異動引用。`)) return
-    setAppData((current) => {
-      const latest = current.subjects.find((item) => item.id === subjectId)
-      if (!latest) return current
-      return updateSubject(current, subjectId, {
-        name: latest.name, shortName: latest.shortName, color,
-        applicableSchoolLevels: [...(latest.applicableSchoolLevels ?? SCHOOL_LEVELS)],
-      }, true)
-    })
-  }
 
   const chooseTimetable = (projectId: string, timetableId: string) => {
     if (!appData.timetables?.some((item) => item.id === timetableId && item.projectId === projectId)) return
@@ -296,19 +310,22 @@ export default function App() {
     setLessonEditorOpen(false)
     setOneOffEditor(null)
     lessonEditorFromAddRef.current = false
+    setAddChoiceFocus(null)
     setAddChoiceOpen(true)
   }
 
-  const openOneOff = (date?: string, id?: string) => {
+  const openOneOff = (date?: string, id?: string, source: OneOffEditorState['source'] = 'schedule') => {
     if (!canAddOneOff || !displayProject || !displayTimetable) return
     setAddChoiceOpen(false)
     setLessonEditorOpen(false)
     setOneOffNotice('')
-    setOneOffEditor({ projectId: displayProject.id, timetableId: displayTimetable.id, date, id })
+    setOneOffEditor({ projectId: displayProject.id, timetableId: displayTimetable.id, date, id, source })
   }
 
   const openNewProject = () => {
     if (historicalProject || storageStatus !== 'saved') return
+    setSettingsReturnResource(null)
+    setSettingsResourceFocus(null)
     setProjectLifecycleInitialPage('blank')
     setModal('settings')
   }
@@ -321,6 +338,7 @@ export default function App() {
   }
 
   const viewArchivedProject = (projectId: string) => {
+    setSettingsReturnResource(null)
     setHistoricalProjectId(projectId)
     setTimetableSelection({ projectId, timetableId: appData.timetables?.find((item) => item.projectId === projectId)?.id ?? null })
     setSelectedLessonId(null)
@@ -445,21 +463,86 @@ export default function App() {
   const switchProject = (projectId: string) => {
     const project = appData.projects.find((item) => item.id === projectId && !item.archivedAt)
     if (!project) return
-    if (resourceDialog && !resourceSession.requestTransition(() => {})) return
-    setResourceDialog(null)
-    setAppData((current) => switchActiveProject(current, projectId))
-    setHistoricalProjectId(null)
-    setTimetableSelection({ projectId, timetableId: appData.timetables?.find((item) => item.projectId === projectId)?.id ?? null })
-    setSelectedLessonId(null)
-    setSelectedLessonDate(null)
-    setLessonDragIntent(null)
-    setLessonEditorOpen(false)
-    setOneOffEditor(null)
-    setOneOffNotice('')
-    lessonEditorFromAddRef.current = false
+    const applySwitch = () => {
+      setResourceDialog(null)
+      setSettingsReturnResource(null)
+      setAppData((current) => switchActiveProject(current, projectId))
+      setHistoricalProjectId(null)
+      setTimetableSelection({ projectId, timetableId: appData.timetables?.find((item) => item.projectId === projectId)?.id ?? null })
+      setSelectedLessonId(null)
+      setSelectedLessonDate(null)
+      setLessonDragIntent(null)
+      setLessonEditorOpen(false)
+      setOneOffEditor(null)
+      setOneOffNotice('')
+      lessonEditorFromAddRef.current = false
+      setAddChoiceOpen(false)
+      setTimetableDialog(null)
+      setModal(null)
+    }
+    if (resourceDialog) resourceSession.requestTransition(applySwitch)
+    else applySwitch()
+  }
+
+  const openResourceManager = (mode: ResourceMode, source: ResourceDialogSource) => {
     setAddChoiceOpen(false)
-    setTimetableDialog(null)
     setModal(null)
+    setSettingsReturnResource(null)
+    setResourceDialog({ mode, source })
+  }
+
+  const closeResourceManager = () => {
+    if (!resourceDialog) return
+    const { mode, source } = resourceDialog
+    if (source === 'sidebar') restoreSidebarResourceFocusRef.current = true
+    setResourceDialog(null)
+    if (source === 'add-choice') {
+      setAddChoiceFocus(mode)
+      setAddChoiceOpen(true)
+    } else if (source === 'settings') {
+      setSettingsResourceFocus(mode)
+      setProjectLifecycleInitialPage('root')
+      setModal('settings')
+    }
+  }
+
+  const openSettingsFromResourceManager = () => {
+    if (!resourceDialog) return
+    setSettingsReturnResource(resourceDialog)
+    setSettingsResourceFocus(null)
+    setResourceDialog(null)
+    setProjectLifecycleInitialPage('root')
+    setModal('settings')
+  }
+
+  const closeProjectSettings = () => {
+    const returning = settingsReturnResource
+    setModal(null)
+    setProjectLifecycleInitialPage('root')
+    setSettingsReturnResource(null)
+    if (returning) setResourceDialog(returning)
+  }
+
+  const openProjectSettings = () => {
+    setSettingsReturnResource(null)
+    setSettingsResourceFocus(null)
+    setProjectLifecycleInitialPage('root')
+    setModal('settings')
+  }
+
+  const navigateFromSidebar = (page: string) => {
+    const navigate = () => {
+      setResourceDialog(null)
+      if (page === 'classes') {
+        if (canManageResources) setResourceDialog({ mode: 'classes', source: 'sidebar' })
+        return
+      }
+      if (page !== 'settings') setHistoricalProjectId(null)
+      setActivePage(page)
+      if (page === 'settings') openProjectSettings()
+    }
+    if (resourceDialog) resourceSession.requestTransition(navigate)
+    else navigate()
   }
 
   const handleAddEvent = (event: FormEvent<HTMLFormElement>) => {
@@ -482,7 +565,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar activePage={activePage} onNavigate={(page) => { if (resourceDialog && !resourceSession.requestTransition(() => {})) return; setResourceDialog(null); if (page !== 'settings') setHistoricalProjectId(null); setActivePage(page); if (page === 'settings') { setProjectLifecycleInitialPage('root'); setModal('settings') } }} open={sidebarOpen} onClose={() => setSidebarOpen(false)} storageStatus={storageStatus} projects={appData.projects} activeProjectId={appData.activeProjectId} onProjectChange={switchProject} />
+      <Sidebar activePage={activePage} onNavigate={navigateFromSidebar} open={sidebarOpen} onClose={() => setSidebarOpen(false)} storageStatus={storageStatus} projects={appData.projects} activeProjectId={appData.activeProjectId} onProjectChange={switchProject} canManageClasses={canManageResources} classManagerButtonRef={sidebarClassManagerButtonRef} />
       <main className="main-area">
         {storageStatus !== 'read-error' && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))} onAddProject={openNewProject} onAddTimetable={openBlankTimetable} canAddTimetable={canCreateTimetable} addTimetableReason={createTimetableUnavailableReason} onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject) || storageStatus !== 'saved'} />}
         {storageStatus !== 'saved' && <StorageSafetyNotice status={storageStatus} controls={storageControls} />}
@@ -491,7 +574,7 @@ export default function App() {
           {historicalProject && <section className="history-mode" role="status"><div><strong>歷史專案・唯讀</strong><span>目前查看「{historicalProject.name}」，不會修改此專案。</span></div><button onClick={() => { setHistoricalProjectId(null); setTimetableSelection({ projectId: appData.activeProjectId, timetableId: appData.timetables?.find((item) => item.projectId === appData.activeProjectId)?.id ?? null }) }}>返回目前專案</button></section>}
           {appData.migrationWarnings.length > 0 && <section className="migration-summary" role="status"><strong>有 {appData.migrationWarnings.length} 筆資料需要確認</strong><span>未歸屬資料已保留，且不會自動套用至課表。</span></section>}
           <section className="page-heading">
-            <div><p className="eyebrow">{activePage === 'timetable' ? displayProject.name : weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? timetablePageTitle : activePage === 'subjects' ? '科目與班級' : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>{historicalProject ? '封存專案僅供查看。' : '所有資料都會自動儲存在這台裝置。'}</p>}</div>
+            <div><p className="eyebrow">{activePage === 'timetable' ? displayProject.name : weekTermLabel}</p><h1>{activePage === 'dashboard' ? '總覽' : activePage === 'timetable' ? timetablePageTitle : '會議與活動'}</h1>{activePage !== 'dashboard' && <p>{historicalProject ? '封存專案僅供查看。' : '所有資料都會自動儲存在這台裝置。'}</p>}</div>
             <div className="page-heading-side">
               {(activePage === 'timetable' || activePage === 'dashboard') && displayTimetables.length > 0 && <TimetableControls timetables={displayTimetables} selected={displayTimetable} canManage={!historicalProject && storageStatus === 'saved'} notice={timetableNotice} onSelect={(id) => { setTimetableNotice(''); chooseTimetable(displayProject.id, id) }} onEdit={() => { if (!displayTimetable) return; const sourceFingerprint = timetableCopySourceFingerprint(appData, displayProject.id, displayTimetable.id); const deleteFingerprint = timetableDeleteFingerprint(appData, displayProject.id, displayTimetable.id); if (!sourceFingerprint || !deleteFingerprint) return; setTimetableNotice(''); setTimetableError(''); setTimetableDialog({ mode: 'edit', projectId: displayProject.id, timetableId: displayTimetable.id, source: displayTimetable, original: { name: displayTimetable.name, teacherName: displayTimetable.teacherName }, sourceFingerprint, deleteFingerprint, deleteImpact: timetableDeleteImpact(appData, displayProject.id, displayTimetable.id), defaultDate: toDateKey(new Date()) }) }} />}
               <div className="week-pill">{activePage === 'timetable' ? <><span>多校檢視</span><strong>實際時間</strong></> : <><span>{isMixedWeek ? '跨學期週' : weekInfo ? `第 ${weekInfo.number} 週` : '學期外'}</span><strong>{isMixedWeek ? '逐日' : weekInfo?.pattern ? `${weekInfo.pattern} 週` : '—'}</strong></>}</div>
@@ -500,12 +583,10 @@ export default function App() {
 
           {activePage === 'dashboard' && <DashboardCards summary={todaySummary} event={upcomingEvent} />}
 
-          {activePage === 'subjects' ? (
-            <SubjectPanel data={data} onColorChange={changeSubjectColor} />
-          ) : activePage === 'events' ? (
+          {activePage === 'events' ? (
             <EventsPanel data={data} onDelete={(eventId) => setAppData((current) => ({ ...current, events: current.events.filter((item) => item.id !== eventId) }))} onAdd={() => setModal('event')} />
           ) : displayTimetables.length === 0 ? (
-            <section className="panel timetable-empty-project"><h2>{storagePersistence.pending || storageStatus !== 'saved' ? '課表變更尚未確認儲存' : '這個專案尚無教師課表'}</h2><p>{storagePersistence.pending || storageStatus !== 'saved' ? '目前畫面反映記憶體中的資料；請先確認儲存狀態，勿將其視為永久刪除。' : '專案與學校、學制設定已保留。建立空白課表後，即可新增固定課程或單日課程。'}</p>{timetableNotice && <p role="status">{timetableNotice}</p>}<div><button type="button" className="primary-button" onClick={openBlankTimetable} disabled={!canCreateTimetable || storagePersistence.pending || Boolean(pendingTimetableDelete)}>新增空白課表</button><button type="button" onClick={() => { setProjectLifecycleInitialPage('root'); setModal('settings') }}>專案設定</button></div></section>
+            <section className="panel timetable-empty-project"><h2>{storagePersistence.pending || storageStatus !== 'saved' ? '課表變更尚未確認儲存' : '這個專案尚無教師課表'}</h2><p>{storagePersistence.pending || storageStatus !== 'saved' ? '目前畫面反映記憶體中的資料；請先確認儲存狀態，勿將其視為永久刪除。' : '專案與學校、學制設定已保留。仍可管理科目與班級；建立空白課表後即可新增固定課程或單日課程。'}</p>{timetableNotice && <p role="status">{timetableNotice}</p>}<div>{!historicalProject && <button type="button" data-course-add onClick={openAddChoice}>新增課程</button>}<button type="button" className="primary-button" onClick={openBlankTimetable} disabled={!canCreateTimetable || storagePersistence.pending || Boolean(pendingTimetableDelete)}>新增空白課表</button><button type="button" onClick={openProjectSettings}>專案設定</button></div></section>
           ) : (
             <section className="panel timetable-panel">
               <div className="panel-heading">
@@ -520,19 +601,19 @@ export default function App() {
       </main>
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
-      {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} initialPage={projectLifecycleInitialPage} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onClose={() => { setModal(null); setProjectLifecycleInitialPage('root') }} onViewArchived={viewArchivedProject} />}</>}
-      {addChoiceOpen && <AddChoiceDialog canAddLesson={canAddLesson} addLessonReason={addLessonUnavailableReason} canAddOneOff={canAddOneOff} addOneOffReason={createTimetableUnavailableReason || (!displayTimetable ? '請先選擇教師課表。' : '目前資料仍在儲存，請稍後再試。')} canManageResources={Boolean(displayProject && !historicalProject && !displayProject.archivedAt && storageStatus === 'saved')} onManage={(mode) => { setAddChoiceOpen(false); setResourceDialog(mode) }} onAddOneOff={() => openOneOff(toDateKey(new Date()))} onAddLesson={() => {
+      {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} initialPage={projectLifecycleInitialPage} initialResourceFocus={settingsResourceFocus} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onManageResources={(mode) => openResourceManager(mode, 'settings')} onClose={closeProjectSettings} onViewArchived={viewArchivedProject} />}</>}
+      {addChoiceOpen && <AddChoiceDialog initialFocus={addChoiceFocus} canAddLesson={canAddLesson} addLessonReason={addLessonUnavailableReason} canAddOneOff={canAddOneOff} addOneOffReason={createTimetableUnavailableReason || (!displayTimetable ? missingTimetableReason : '目前資料仍在儲存，請稍後再試。')} canManageResources={canManageResources} manageResourcesReason={manageResourcesUnavailableReason} onManage={(mode) => openResourceManager(mode, 'add-choice')} onAddOneOff={() => openOneOff(toDateKey(new Date()), undefined, 'add-choice')} onAddLesson={() => {
         if (!canAddLesson) return
         setAddChoiceOpen(false)
         lessonEditorFromAddRef.current = true
         setSelectedLessonOverrideId(null)
         setLessonEditorOpen(true)
-      }} onClose={() => setAddChoiceOpen(false)} />}
-      {resourceDialog && <CourseResourceManagerDialog data={appData} setData={setAppData} mode={resourceDialog} storageStatus={storageStatus} storagePersistence={storagePersistence} storageControls={storageControls} session={resourceSession} readOnly={Boolean(historicalProject)} onOpenSettings={() => { setResourceDialog(null); setProjectLifecycleInitialPage('root'); setModal('settings') }} onClose={() => setResourceDialog(null)} />}
+      }} onClose={() => { setAddChoiceOpen(false); setAddChoiceFocus(null) }} />}
+      {resourceDialog && <CourseResourceManagerDialog key={`${resourceDialog.source}:${resourceDialog.mode}`} data={appData} setData={setAppData} mode={resourceDialog.mode} storageStatus={storageStatus} storagePersistence={storagePersistence} storageControls={storageControls} session={resourceSession} readOnly={Boolean(historicalProject)} onOpenSettings={openSettingsFromResourceManager} onClose={closeResourceManager} />}
       {timetableDialog?.mode === 'edit' ? <TimetableInfoDialog key={`timetable-info:${timetableDialog.timetableId}`} timetable={timetableDialog.source} defaultDate={timetableDialog.defaultDate} error={timetableError} submitting={Boolean(pendingTimetableCopy || pendingTimetableEdit || pendingTimetableDelete)} deleteImpact={timetableDialog.deleteImpact} onEdit={submitTimetable} onCopy={submitTimetableCopy} onDelete={submitTimetableDelete} onClose={() => { setTimetableDialog(null); setTimetableError('') }} /> : timetableDialog && <TimetableForm key={`create:${timetableDialog.projectId}`} error={timetableError} onSubmit={submitTimetable} onClose={() => { setTimetableDialog(null); setTimetableError('') }} />}
-      {lessonEditorOpen && !historicalProject && <LessonEditor key={`lesson-editor:${activeTimetable?.id ?? activeProject?.id}`} data={appData} setData={setAppData} storageStatus={storageStatus} storagePersistence={storagePersistence} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} occurrenceOverrideId={selectedLessonOverrideId} dragIntent={lessonDragIntent} onOpenSettings={() => { lessonEditorFromAddRef.current = false; setLessonEditorOpen(false); setModal('settings') }} onClose={() => { setLessonEditorOpen(false); if (lessonEditorFromAddRef.current) setAddChoiceOpen(true); lessonEditorFromAddRef.current = false }} onSaved={(projectId) => { lessonEditorFromAddRef.current = false; if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
-      {oneOffEditor && !isCompatibleAppDataV7(appData) && <Modal title="單日課程暫停編輯" onClose={() => setOneOffEditor(null)}><div className="form-grid"><p className="full one-off-error" role="alert">目前資料不是有效的 AppDataV7，無法安全寫入單日課程。請先處理儲存狀態。</p><div className="full form-actions"><button type="button" onClick={() => setOneOffEditor(null)}>關閉</button></div></div></Modal>}
-      {oneOffEditor && isCompatibleAppDataV7(appData) && <OneOffLessonEditor key={`${oneOffEditor.timetableId}:${oneOffEditor.id ?? oneOffEditor.date ?? 'new'}`} data={appData} setData={setAppData} storageStatus={storageStatus} storagePersistence={storagePersistence} projectId={oneOffEditor.projectId} timetableId={oneOffEditor.timetableId} oneOffLessonId={oneOffEditor.id} initialDate={oneOffEditor.date} onClose={() => { if (!oneOffWrites.pending) setOneOffEditor(null) }} onSave={async (request) => {
+      {lessonEditorOpen && !historicalProject && <LessonEditor key={`lesson-editor:${activeTimetable?.id ?? activeProject?.id}`} data={appData} setData={setAppData} storageStatus={storageStatus} storagePersistence={storagePersistence} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} occurrenceOverrideId={selectedLessonOverrideId} dragIntent={lessonDragIntent} onOpenSettings={() => { lessonEditorFromAddRef.current = false; setLessonEditorOpen(false); openProjectSettings() }} onClose={() => { const returnToChoice = lessonEditorFromAddRef.current; setLessonEditorOpen(false); lessonEditorFromAddRef.current = false; if (returnToChoice) { setAddChoiceFocus('lesson'); setAddChoiceOpen(true) } }} onSaved={(projectId) => { lessonEditorFromAddRef.current = false; if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
+      {oneOffEditor && !isCompatibleAppDataV7(appData) && <Modal title="單日課程暫停編輯" onClose={() => { const returnToChoice = oneOffEditor.source === 'add-choice'; setOneOffEditor(null); if (returnToChoice) { setAddChoiceFocus('one-off'); setAddChoiceOpen(true) } }}><div className="form-grid"><p className="full one-off-error" role="alert">目前資料不是有效的 AppDataV7，無法安全寫入單日課程。請先處理儲存狀態。</p><div className="full form-actions"><button type="button" onClick={() => { const returnToChoice = oneOffEditor.source === 'add-choice'; setOneOffEditor(null); if (returnToChoice) { setAddChoiceFocus('one-off'); setAddChoiceOpen(true) } }}>關閉</button></div></div></Modal>}
+      {oneOffEditor && isCompatibleAppDataV7(appData) && <OneOffLessonEditor key={`${oneOffEditor.timetableId}:${oneOffEditor.id ?? oneOffEditor.date ?? 'new'}`} data={appData} setData={setAppData} storageStatus={storageStatus} storagePersistence={storagePersistence} projectId={oneOffEditor.projectId} timetableId={oneOffEditor.timetableId} oneOffLessonId={oneOffEditor.id} initialDate={oneOffEditor.date} onClose={() => { if (!oneOffWrites.pending) { const returnToChoice = oneOffEditor.source === 'add-choice'; setOneOffEditor(null); if (returnToChoice) { setAddChoiceFocus('one-off'); setAddChoiceOpen(true) } } }} onSave={async (request) => {
         if (historicalProject || oneOffEditor.projectId !== displayProject?.id || oneOffEditor.timetableId !== displayTimetable?.id) throw new Error('目前課表已切換，請重新開啟單日課程。')
         await oneOffWrites.save(oneOffEditor, request)
         setOneOffNotice(request.id ? '單日課程已儲存。' : '單日課程已新增並儲存。')
@@ -547,33 +628,49 @@ export default function App() {
   )
 }
 
-function AddChoiceDialog({ canAddLesson, addLessonReason, canAddOneOff, addOneOffReason, canManageResources, onManage, onAddLesson, onAddOneOff, onClose }: {
+function AddChoiceDialog({ initialFocus, canAddLesson, addLessonReason, canAddOneOff, addOneOffReason, canManageResources, manageResourcesReason, onManage, onAddLesson, onAddOneOff, onClose }: {
+  initialFocus: AddChoiceFocus
   canAddLesson: boolean
   addLessonReason: string
   canAddOneOff: boolean
   addOneOffReason: string
   canManageResources: boolean
-  onManage: (mode: 'classes' | 'subjects') => void
+  manageResourcesReason: string
+  onManage: (mode: ResourceMode) => void
   onAddLesson: () => void
   onAddOneOff: () => void
   onClose: () => void
 }) {
+  const lessonButton = useRef<HTMLButtonElement>(null)
+  const oneOffButton = useRef<HTMLButtonElement>(null)
+  const subjectButton = useRef<HTMLButtonElement>(null)
+  const classButton = useRef<HTMLButtonElement>(null)
+  const cancelButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const requested = initialFocus === 'lesson' ? lessonButton.current
+      : initialFocus === 'one-off' ? oneOffButton.current
+        : initialFocus === 'subjects' ? subjectButton.current
+          : initialFocus === 'classes' ? classButton.current : null
+    const fallback = canAddLesson ? lessonButton.current : canAddOneOff ? oneOffButton.current
+      : canManageResources ? subjectButton.current : cancelButton.current
+    ;(requested && !requested.disabled ? requested : fallback)?.focus()
+  }, [canAddLesson, canAddOneOff, canManageResources, initialFocus])
   return <Modal title="新增課程" subtitle="選擇要加入目前教師課表的課程。" onClose={onClose}>
     <div className="add-choice-dialog">
       <nav className="settings-menu" aria-label="新增項目">
         <section className="add-choice-group" aria-labelledby="add-course-group">
           <p id="add-course-group" className="add-choice-group-title">課程</p>
-          <button type="button" className="settings-menu-item" onClick={onAddLesson} disabled={!canAddLesson} autoFocus={canAddLesson}><BookOpenCheck aria-hidden="true" /><span><strong>新增固定課程</strong><small>{canAddLesson ? '使用目前的專案與教師課表。' : addLessonReason}</small></span></button>
-          <button type="button" className="settings-menu-item" onClick={onAddOneOff} disabled={!canAddOneOff} autoFocus={!canAddLesson && canAddOneOff}><CalendarPlus aria-hidden="true" /><span><strong>新增單日課程</strong><small>{canAddOneOff ? '只在指定日期加入目前教師課表。' : addOneOffReason}</small></span></button>
+          <button ref={lessonButton} type="button" className="settings-menu-item" onClick={onAddLesson} disabled={!canAddLesson}><BookOpenCheck aria-hidden="true" /><span><strong>新增固定課程</strong><small>{canAddLesson ? '使用目前的專案與教師課表。' : addLessonReason}</small></span></button>
+          <button ref={oneOffButton} type="button" className="settings-menu-item" onClick={onAddOneOff} disabled={!canAddOneOff}><CalendarPlus aria-hidden="true" /><span><strong>新增單日課程</strong><small>{canAddOneOff ? '只在指定日期加入目前教師課表。' : addOneOffReason}</small></span></button>
         </section>
         <hr className="add-choice-divider" aria-hidden="true" />
         <section className="add-choice-group" aria-labelledby="add-resource-group">
           <p id="add-resource-group" className="add-choice-group-title">基礎資料</p>
-          <button type="button" className="settings-menu-item" onClick={() => onManage('classes')} disabled={!canManageResources}><UsersRound aria-hidden="true" /><span><strong>管理班級</strong><small>管理目前專案各學校與學制的班級。</small></span></button>
-          <button type="button" className="settings-menu-item" onClick={() => onManage('subjects')} disabled={!canManageResources}><LibraryBig aria-hidden="true" /><span><strong>管理科目</strong><small>管理所有專案共用的科目庫。</small></span></button>
+          <button ref={subjectButton} data-add-choice-manage="subjects" type="button" className="settings-menu-item" onClick={() => onManage('subjects')} disabled={!canManageResources}><LibraryBig aria-hidden="true" /><span><strong>管理科目</strong><small>{canManageResources ? '管理所有專案共用的科目庫。' : manageResourcesReason}</small></span></button>
+          <button ref={classButton} data-add-choice-manage="classes" type="button" className="settings-menu-item" onClick={() => onManage('classes')} disabled={!canManageResources}><UsersRound aria-hidden="true" /><span><strong>管理班級</strong><small>{canManageResources ? '管理目前專案各學校與學制的班級。' : manageResourcesReason}</small></span></button>
         </section>
       </nav>
-      <div className="form-actions add-choice-actions"><button type="button" onClick={onClose} autoFocus={!canAddLesson && !canAddOneOff}>取消</button></div>
+      <div className="form-actions add-choice-actions"><button ref={cancelButton} type="button" onClick={onClose}>取消</button></div>
     </div>
   </Modal>
 }
@@ -630,11 +727,6 @@ function EventForm({ onSubmit, onClose, defaultDate }: { onSubmit: (e: FormEvent
 }
 
 function FormActions({ onClose }: { onClose: () => void }) { return <div className="form-actions full"><button type="button" onClick={onClose}>取消</button><button type="submit" className="primary-button">儲存</button></div> }
-
-function SubjectPanel({ data, onColorChange }: { data: AppData; onColorChange: (subjectId: string, color: string) => void }) {
-  return <div className="manage-grid"><section className="panel manage-panel"><div className="panel-heading"><div><h2>科目</h2><p>以顏色快速辨識課程。</p></div></div>{data.subjects.map((s) => <div className="manage-row" key={s.id}><i style={{ background: s.color }} /><div><strong>{s.name}</strong><span>{data.courses.filter((c) => c.subjectId === s.id).length} 門課</span></div><input aria-label={`${s.name} 顏色`} type="color" value={s.color} onChange={(e) => onColorChange(s.id, e.target.value)} /></div>)}</section>
-    <section className="panel manage-panel"><div className="panel-heading"><div><h2>班級</h2><p>班級與預設教室分開管理。</p></div></div>{data.classes.map((c) => <div className="manage-row" key={c.id}><div className="class-avatar">{c.name.slice(-2,-1)}</div><div><strong>{c.name}</strong><span>{c.room || '未設定教室'}</span></div></div>)}</section></div>
-}
 
 function EventsPanel({ data, onDelete, onAdd }: { data: AppData; onDelete: (eventId: string) => void; onAdd: () => void }) {
   const events = [...data.events].sort((a,b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`))

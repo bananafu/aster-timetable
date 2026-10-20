@@ -830,12 +830,13 @@ describe('resource session with real v7 storage', () => {
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
   })
 
-  it('App keeps the original page and close destination while wiring draft protection and recovery', () => {
+  it('App keeps draft protection while returning the manager to its source menu', () => {
     vi.useFakeTimers()
     localStorage.clear()
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(storageFixture()))
     render(<App />)
-    expect(screen.getByRole('button', { name: '科目與班級' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '科目與班級' })).toBeNull()
+    expect(screen.getByRole('button', { name: '班級管理' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
     fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
     openSubjectCreate()
@@ -845,7 +846,7 @@ describe('resource session with real v7 storage', () => {
     expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
     vi.mocked(window.confirm).mockReturnValue(true)
     fireEvent.keyDown(window, { key: 'Escape' })
-    expect(screen.queryByRole('dialog')).toBeNull()
-    expect(screen.queryByRole('dialog', { name: '新增課程' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '管理科目' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: '新增課程' })).toBeTruthy()
   })
 })

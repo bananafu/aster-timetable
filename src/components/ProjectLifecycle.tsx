@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import { Archive, ChevronLeft, ChevronRight, Copy, Eye, FolderPlus, RotateCcw, Trash2 } from 'lucide-react'
 import { archiveProject, copyProject, createBlankProject, deleteProject, reactivateProject, renameProject, type NewProjectInput } from '../data/projectRuntime'
 import { createExampleAppDataV4 } from '../hooks/useAppDataV4'
@@ -50,7 +50,7 @@ export function FirstUse({ data, setData, onViewArchived }: { data: AppDataV4; s
   </section>
 }
 
-export function ProjectLifecycleModal({ data, setData, initialPage = 'root', onClose, onViewArchived, storageStatus = 'saved', storagePersistence = { pending: false, revision: 0 }, readOnly = false }: { data: AppDataV4; setData: Dispatch<SetStateAction<AppDataV4>>; initialPage?: 'root' | 'blank'; onClose: () => void; onViewArchived: (id: string) => void; storageStatus?: StorageStatus; storagePersistence?: StoragePersistence; readOnly?: boolean }) {
+export function ProjectLifecycleModal({ data, setData, initialPage = 'root', initialResourceFocus = null, onClose, onViewArchived, onManageResources, storageStatus = 'saved', storagePersistence = { pending: false, revision: 0 }, readOnly = false }: { data: AppDataV4; setData: Dispatch<SetStateAction<AppDataV4>>; initialPage?: 'root' | 'blank'; initialResourceFocus?: 'classes' | 'subjects' | null; onClose: () => void; onViewArchived: (id: string) => void; onManageResources?: (mode: 'classes' | 'subjects') => void; storageStatus?: StorageStatus; storagePersistence?: StoragePersistence; readOnly?: boolean }) {
   const active = data.projects.find((item) => item.id === data.activeProjectId)
   const [name, setName] = useState(active?.name ?? '')
   const [draft, setDraft] = useState(blankDraft)
@@ -60,8 +60,14 @@ export function ProjectLifecycleModal({ data, setData, initialPage = 'root', onC
   const [unitDates, setUnitDates] = useState<Record<string, { startDate: string; endDate: string; anchorDate: string; anchorPattern: 'A' | 'B' }>>({})
   const [error, setError] = useState('')
   const [page, setPage] = useState<'root' | 'name' | 'schools' | 'schools-settings' | 'blank' | 'copy' | 'history' | Exclude<AcademicSettingsPage, 'classes' | 'subjects'>>(initialPage)
+  const subjectManagerButton = useRef<HTMLButtonElement>(null)
+  const classManagerButton = useRef<HTMLButtonElement>(null)
   useEffect(() => setName(active?.name ?? ''), [active])
   useEffect(() => setUnitDates(Object.fromEntries(sourceUnits.map((unit) => [unit.id, { startDate: '', endDate: '', anchorDate: '', anchorPattern: unit.weekCycle.anchorPattern }]))), [sourceUnits])
+  useEffect(() => {
+    if (page !== 'root') return
+    ;(initialResourceFocus === 'subjects' ? subjectManagerButton.current : initialResourceFocus === 'classes' ? classManagerButton.current : null)?.focus()
+  }, [initialResourceFocus, page])
 
   const submitBlank = (event: FormEvent) => {
     event.preventDefault()
@@ -100,7 +106,7 @@ export function ProjectLifecycleModal({ data, setData, initialPage = 'root', onC
 
   return <Modal title="專案設定" subtitle={page === 'root' ? '選擇要管理的項目。' : `目前位置：專案管理 / ${page === 'schools' ? '學校與學制管理' : page === 'schools-settings' ? '學校與學制管理 / 學校與學制' : page === 'periods' ? '學校與學制管理 / 課堂時間表' : page === 'name' ? '目前專案名稱' : page === 'blank' ? '建立新專案' : page === 'copy' ? '複製為新學期' : '歷史與專案管理'}`} onClose={onClose}><div className="project-settings">
     {page !== 'root' && <div className="settings-breadcrumb"><button type="button" onClick={goBack}><ChevronLeft size={15} />返回上一層</button></div>}
-    {page === 'root' && <nav className="settings-menu" aria-label="專案管理">{active && menuItem('目前專案名稱', active.name, 'name')}{active && menuItem('學校與學制管理', '學校、學制與課堂時間表', 'schools')}{menuItem('建立新專案', '使用明確預設建立全新專案', 'blank')}{data.projects.length > 0 && menuItem('複製為新學期', '複製固定設定並重新確認日期', 'copy')}{menuItem('歷史與專案管理', '封存、查看、重新啟用或刪除', 'history')}</nav>}
+    {page === 'root' && <nav className="settings-menu" aria-label="專案管理">{active && menuItem('目前專案名稱', active.name, 'name')}{active && menuItem('學校與學制管理', '學校、學制與課堂時間表', 'schools')}{active && onManageResources && <><button ref={subjectManagerButton} data-settings-resource="subjects" type="button" className="settings-menu-item" aria-label="管理科目" onClick={() => onManageResources('subjects')}><span><strong>管理科目</strong><small>開啟所有專案共用的科目管理。</small></span><ChevronRight size={17} /></button><button ref={classManagerButton} data-settings-resource="classes" type="button" className="settings-menu-item" aria-label="管理班級" onClick={() => onManageResources('classes')}><span><strong>管理班級</strong><small>開啟目前專案與學制的班級管理。</small></span><ChevronRight size={17} /></button></>}{menuItem('建立新專案', '使用明確預設建立全新專案', 'blank')}{data.projects.length > 0 && menuItem('複製為新學期', '複製固定設定並重新確認日期', 'copy')}{menuItem('歷史與專案管理', '封存、查看、重新啟用或刪除', 'history')}</nav>}
     {page === 'schools' && <nav className="settings-menu" aria-label="學校與學制管理">{menuItem('學校與學制', '建立或修改學校、識別色、日期與輪週規則', 'schools-settings')}{menuItem('課堂時間表', '管理所選學制的節次與起訖時間', 'periods')}</nav>}
     {page === 'schools-settings' && <AcademicSettingsV4 data={data} setData={setData} page="schools" storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={readOnly} />}
     {page === 'periods' && <AcademicSettingsV4 data={data} setData={setData} page="periods" storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={readOnly} />}
