@@ -17,6 +17,7 @@ import { isCompatibleAppDataV7 } from './data/validators/v7'
 import { SCHOOL_LEVELS } from './types'
 import { useAppDataV4 } from './hooks/useAppDataV4'
 import { useOneOffPersistence } from './hooks/useOneOffPersistence'
+import { useResourceManagementSession } from './hooks/useResourceManagementSession'
 import { type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
 import { addDays, getWeekInfo, startOfWeek, toDateKey } from './lib/date'
 import { getNextUpcomingEvent } from './lib/schedule'
@@ -94,6 +95,7 @@ function downloadRawData(raw: string) {
 
 export default function App() {
   const [appData, setAppData, storageStatus, storageControls, storagePersistence] = useAppDataV4()
+  const resourceSession = useResourceManagementSession(appData, setAppData, storageStatus, storagePersistence)
   const oneOffWrites = useOneOffPersistence(appData, setAppData, storageStatus, storagePersistence)
   // Timetable selection is view state; it must never update persisted AppData.
   const [timetableSelection, setTimetableSelection] = useState(() => ({
@@ -443,6 +445,8 @@ export default function App() {
   const switchProject = (projectId: string) => {
     const project = appData.projects.find((item) => item.id === projectId && !item.archivedAt)
     if (!project) return
+    if (resourceDialog && !resourceSession.requestTransition(() => {})) return
+    setResourceDialog(null)
     setAppData((current) => switchActiveProject(current, projectId))
     setHistoricalProjectId(null)
     setTimetableSelection({ projectId, timetableId: appData.timetables?.find((item) => item.projectId === projectId)?.id ?? null })
@@ -478,7 +482,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar activePage={activePage} onNavigate={(page) => { if (page !== 'settings') setHistoricalProjectId(null); setActivePage(page); if (page === 'settings') { setProjectLifecycleInitialPage('root'); setModal('settings') } }} open={sidebarOpen} onClose={() => setSidebarOpen(false)} storageStatus={storageStatus} projects={appData.projects} activeProjectId={appData.activeProjectId} onProjectChange={switchProject} />
+      <Sidebar activePage={activePage} onNavigate={(page) => { if (resourceDialog && !resourceSession.requestTransition(() => {})) return; setResourceDialog(null); if (page !== 'settings') setHistoricalProjectId(null); setActivePage(page); if (page === 'settings') { setProjectLifecycleInitialPage('root'); setModal('settings') } }} open={sidebarOpen} onClose={() => setSidebarOpen(false)} storageStatus={storageStatus} projects={appData.projects} activeProjectId={appData.activeProjectId} onProjectChange={switchProject} />
       <main className="main-area">
         {storageStatus !== 'read-error' && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))} onAddProject={openNewProject} onAddTimetable={openBlankTimetable} canAddTimetable={canCreateTimetable} addTimetableReason={createTimetableUnavailableReason} onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject) || storageStatus !== 'saved'} />}
         {storageStatus !== 'saved' && <StorageSafetyNotice status={storageStatus} controls={storageControls} />}
@@ -524,7 +528,7 @@ export default function App() {
         setSelectedLessonOverrideId(null)
         setLessonEditorOpen(true)
       }} onClose={() => setAddChoiceOpen(false)} />}
-      {resourceDialog && <CourseResourceManagerDialog data={appData} setData={setAppData} mode={resourceDialog} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onOpenSettings={() => { setResourceDialog(null); setProjectLifecycleInitialPage('root'); setModal('settings') }} onClose={() => setResourceDialog(null)} />}
+      {resourceDialog && <CourseResourceManagerDialog data={appData} setData={setAppData} mode={resourceDialog} storageStatus={storageStatus} storagePersistence={storagePersistence} storageControls={storageControls} session={resourceSession} readOnly={Boolean(historicalProject)} onOpenSettings={() => { setResourceDialog(null); setProjectLifecycleInitialPage('root'); setModal('settings') }} onClose={() => setResourceDialog(null)} />}
       {timetableDialog?.mode === 'edit' ? <TimetableInfoDialog key={`timetable-info:${timetableDialog.timetableId}`} timetable={timetableDialog.source} defaultDate={timetableDialog.defaultDate} error={timetableError} submitting={Boolean(pendingTimetableCopy || pendingTimetableEdit || pendingTimetableDelete)} deleteImpact={timetableDialog.deleteImpact} onEdit={submitTimetable} onCopy={submitTimetableCopy} onDelete={submitTimetableDelete} onClose={() => { setTimetableDialog(null); setTimetableError('') }} /> : timetableDialog && <TimetableForm key={`create:${timetableDialog.projectId}`} error={timetableError} onSubmit={submitTimetable} onClose={() => { setTimetableDialog(null); setTimetableError('') }} />}
       {lessonEditorOpen && !historicalProject && <LessonEditor key={`lesson-editor:${activeTimetable?.id ?? activeProject?.id}`} data={appData} setData={setAppData} storageStatus={storageStatus} storagePersistence={storagePersistence} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} occurrenceOverrideId={selectedLessonOverrideId} dragIntent={lessonDragIntent} onOpenSettings={() => { lessonEditorFromAddRef.current = false; setLessonEditorOpen(false); setModal('settings') }} onClose={() => { setLessonEditorOpen(false); if (lessonEditorFromAddRef.current) setAddChoiceOpen(true); lessonEditorFromAddRef.current = false }} onSaved={(projectId) => { lessonEditorFromAddRef.current = false; if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
       {oneOffEditor && !isCompatibleAppDataV7(appData) && <Modal title="單日課程暫停編輯" onClose={() => setOneOffEditor(null)}><div className="form-grid"><p className="full one-off-error" role="alert">目前資料不是有效的 AppDataV7，無法安全寫入單日課程。請先處理儲存狀態。</p><div className="full form-actions"><button type="button" onClick={() => setOneOffEditor(null)}>關閉</button></div></div></Modal>}
