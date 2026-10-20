@@ -51,7 +51,14 @@ function start(data = fixture()) {
   render(<Harness />)
   return { data, raw }
 }
-const row = () => screen.getByRole('form', { name: '管理科目 國文' })
+const row = () => {
+  const open = screen.queryByRole('form', { name: '管理科目 國文' })
+  if (open) return open
+  const back = screen.queryByRole('button', { name: /返回科目清單/ })
+  if (back) fireEvent.click(back)
+  fireEvent.click(screen.getByRole('button', { name: '編輯科目 國文' }))
+  return screen.getByRole('form', { name: '管理科目 國文' })
+}
 const remove = (label = '國中部') => fireEvent.click(within(row()).getByRole('button', { name: `解除${label}適用` }))
 const flush = () => act(() => vi.advanceTimersByTime(200))
 const success = () => screen.queryByText(/^已儲存：已解除/)
@@ -75,8 +82,8 @@ describe('subject school-level removal UI', () => {
     data.subjects[0].applicableSchoolLevels = ['junior-high', 'senior-high', 'other']
     const { raw } = start(data)
     remove(label)
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining(`此操作將從所有${label}的可用科目中移除此科目，不會刪除科目本身，也不會影響其他學制。`))
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('所有專案、學校與課表'))
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining(`所有${label}課程無法再選用這個科目`))
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('若目前仍有課程使用，系統會阻止這項變更'))
     expect(success()).toBeNull()
     expect(screen.getByText('正在儲存解除適用關係…')).toBeTruthy()
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
@@ -187,7 +194,7 @@ describe('subject school-level removal UI', () => {
     const data = fixture()
     data.subjects[0].applicableSchoolLevels = ['senior-high']
     start(data)
-    fireEvent.click(screen.getByLabelText('顯示全域所有科目'))
+    fireEvent.change(screen.getByLabelText('適用學制篩選'), { target: { value: 'all' } })
     expect(within(row()).queryByRole('button', { name: '解除國中部適用' })).toBeNull()
     fireEvent.change(screen.getByLabelText('目前學制'), { target: { value: 'senior-unit' } })
     expect(within(row()).getByRole('button', { name: '解除高中部適用' })).toBeTruthy()

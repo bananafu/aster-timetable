@@ -1,8 +1,8 @@
-import { useEffect, useRef, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
 import { addClass, removeClass, updateClass, type ClassDraft } from '../data/academicSettingsV4'
-import { addSubjectForLevel, deleteSubject, getSubjectImpact, removeSubjectSchoolLevel, updateSubject, type SubjectDraft } from '../data/subjectsV5'
+import { createSubject, deleteSubject, getSubjectImpact, removeSubjectSchoolLevel, updateSubject, type SubjectDraft } from '../data/subjectsV5'
 import { classDisplayName, gradeLabel, gradesForLevel } from '../lib/classes'
-import { subjectsForLevel } from '../lib/subjects'
+import { normalizeSubjectText } from '../lib/subjectSearch'
 import { SCHOOL_LEVELS, type AppDataV4, type ProjectClass, type SchoolLevel, type Subject, type TeachingUnit } from '../types'
 import type { StorageControls, StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
 import { useResourceManagementSession, type ResourceManagementSession } from '../hooks/useResourceManagementSession'
@@ -13,6 +13,7 @@ const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const CLASS_ROOM_MAX_LENGTH = 15
 const classRoomError = (room?: string) => (room?.length ?? 0) > CLASS_ROOM_MAX_LENGTH ? `預設教室最多 ${CLASS_ROOM_MAX_LENGTH} 個字元；既有內容已保留，請修正後再儲存。` : ''
 const emptyClassDraft = (unit?: TeachingUnit): ClassDraft => ({ teachingUnitId: unit?.id ?? '', grade: gradesForLevel(unit?.schoolLevel ?? 'other')[0], classNumber: undefined, room: '' })
+const emptySubjectDraft = (unit?: TeachingUnit): SubjectDraft => ({ name: '', shortName: '', color: '#A66D52', applicableSchoolLevels: unit ? [unit.schoolLevel] : [] })
 const levelLabel: Record<SchoolLevel, string> = { 'junior-high': '國中部', 'senior-high': '高中部', other: '其他' }
 const unitLabel = (unit: TeachingUnit, units: TeachingUnit[]) => {
   const peers = units.filter((item) => item.schoolId === unit.schoolId && item.schoolLevel === unit.schoolLevel)
@@ -21,6 +22,9 @@ const unitLabel = (unit: TeachingUnit, units: TeachingUnit[]) => {
 }
 const subjectDraft = (subject: Subject): SubjectDraft => ({ name: subject.name, shortName: subject.shortName, color: subject.color, applicableSchoolLevels: [...(subject.applicableSchoolLevels ?? SCHOOL_LEVELS)] })
 const classDraft = (item: ProjectClass): ClassDraft => ({ name: item.name, grade: item.grade, classNumber: item.classNumber, room: item.room ?? '', teachingUnitId: item.teachingUnitId })
+
+type SubjectLevelFilter = 'current' | 'all' | SchoolLevel
+type EditorSelection = { kind: 'subject' | 'class'; id: string } | { kind: 'subject-create' | 'class-create' } | null
 
 interface Props {
   data: AppDataV4
@@ -64,28 +68,40 @@ export function CourseResourceManager(props: Props) {
 }
 
 function ResourceManagerContent({ data, setData, mode, storageStatus = 'saved', storagePersistence, storageControls, readOnly = false, onOpenSettings, session }: Props & { session: ResourceManagementSession }) {
-  const { schoolId, unitId, showClassCreate, showAllSubjects, projectId } = session.view
+  const { schoolId, unitId, showClassCreate, projectId } = session.view
+  const [editor, setEditor] = useState<EditorSelection>(() => mode === 'classes' && showClassCreate ? { kind: 'class-create' } : null)
+  const [subjectQuery, setSubjectQuery] = useState('')
+  const [subjectLevelFilter, setSubjectLevelFilter] = useState<SubjectLevelFilter>('current')
+  const handledPersistedOperation = useRef(session.operation)
+  const managerContent = useRef<HTMLElement>(null)
+  const editorTrigger = useRef<HTMLElement | null>(null)
+  const previousEditor = useRef<EditorSelection>(null)
   const project = data.projects.find((item) => item.id === projectId)
   const schools = data.schools.filter((item) => item.projectId === projectId)
   const units = data.teachingUnits.filter((item) => item.projectId === projectId)
   const schoolUnits = units.filter((item) => item.schoolId === schoolId)
   const duplicate = schoolUnits.some((unit) => schoolUnits.some((item) => item.id !== unit.id && item.schoolLevel === unit.schoolLevel))
   const unit = schoolUnits.find((item) => item.id === unitId)
-  const editable = !readOnly && Boolean(project && !project.archivedAt) && data.activeProjectId === projectId
-    && storageStatus === 'saved' && !session.locked
+  const editable = !readOnly && Boolean(project && !project.archivedAt) && data.activeProjectId === projectId && storageStatus === 'saved' && !session.locked
   const subjectCreateKey = `subject-create:${projectId}:${unitId}`
   const classCreateKey = `class-create:${projectId}:${unitId}`
-  const subjectName = session.draft(subjectCreateKey, '')
+  const newSubject = session.draft(subjectCreateKey, emptySubjectDraft(unit))
   const newClass = session.draft(classCreateKey, emptyClassDraft(unit))
   const subjectCreateLocked = !editable || Boolean(session.drafts[subjectCreateKey]?.submittedTargetId)
   const classCreateLocked = !editable || Boolean(session.drafts[classCreateKey]?.submittedTargetId)
-  const subjects = unit ? (showAllSubjects ? data.subjects : subjectsForLevel(data.subjects, unit.schoolLevel)) : []
   const classes = data.classes.filter((item) => item.projectId === projectId && item.teachingUnitId === unitId)
+  const subjectsInScope = !unit ? [] : data.subjects.filter((subject) => {
+    const levels = subject.applicableSchoolLevels ?? SCHOOL_LEVELS
+    if (subjectLevelFilter === 'all') return true
+    return levels.includes(subjectLevelFilter === 'current' ? unit.schoolLevel : subjectLevelFilter)
+  })
+  const needle = normalizeSubjectText(subjectQuery)
+  const visibleSubjects = subjectsInScope.filter((subject) => !needle || normalizeSubjectText(subject.name).includes(needle) || normalizeSubjectText(subject.shortName).includes(needle))
   const retained = Object.entries(session.drafts).filter(([key, entry]) => mode === 'subjects'
-    ? (entry.kind === 'subject' && !subjects.some((item) => `subject:${item.id}` === key))
-      || (entry.kind === 'subject-create' && (!unit || key !== subjectCreateKey))
-    : (entry.kind === 'class' && !classes.some((item) => `class:${item.id}` === key))
-      || (entry.kind === 'class-create' && (!unit || key !== classCreateKey)))
+    ? (entry.kind === 'subject' && !data.subjects.some((item) => `subject:${item.id}` === key)) || (entry.kind === 'subject-create' && (!unit || key !== subjectCreateKey))
+    : (entry.kind === 'class' && !classes.some((item) => `class:${item.id}` === key)) || (entry.kind === 'class-create' && (!unit || key !== classCreateKey)))
+  const dirtyCount = Object.values(session.drafts).filter((entry) => mode === 'subjects'
+    ? entry.kind === 'subject' || entry.kind === 'subject-create' : entry.kind === 'class' || entry.kind === 'class-create').length
 
   useEffect(() => {
     if (session.dirtyKeys.length || session.locked) return
@@ -99,17 +115,44 @@ function ResourceManagerContent({ data, setData, mode, storageStatus = 'saved', 
       if (unitId !== nextUnit) session.setView({ unitId: nextUnit })
     }
   }, [session, schools, units, schoolId, unitId, schoolUnits, duplicate])
-  const changeScope = (nextSchoolId: string, nextUnitId: string, nextAll = showAllSubjects) => {
-    const nextUnit = units.find((item) => item.id === nextUnitId)
-    const nextSubjects = new Set((nextUnit ? (nextAll ? data.subjects : subjectsForLevel(data.subjects, nextUnit.schoolLevel)) : []).map((item) => `subject:${item.id}`))
+
+  useEffect(() => {
+    const operation = session.operation
+    if (operation?.status === 'persisted' && handledPersistedOperation.current !== operation) {
+      handledPersistedOperation.current = operation
+      if (editor?.kind === 'subject-create' && operation.type === 'create-subject') setEditor(null)
+      if (editor?.kind === 'class-create' && operation.type === 'create-class') setEditor(null)
+    }
+    if (editor?.kind === 'subject' && !data.subjects.some((item) => item.id === editor.id) && !session.drafts[`subject:${editor.id}`]) setEditor(null)
+    if (editor?.kind === 'class' && !data.classes.some((item) => item.id === editor.id) && !session.drafts[`class:${editor.id}`]) setEditor(null)
+  }, [data.classes, data.subjects, editor, session.drafts, session.operation])
+
+  useEffect(() => {
+    if (editor && previousEditor.current !== editor) managerContent.current?.querySelector<HTMLButtonElement>('.resource-editor-heading > button')?.focus()
+    else if (!editor && previousEditor.current) {
+      const fallback = managerContent.current?.querySelector<HTMLElement>('.resource-browser button:not(:disabled), .resource-browser input:not(:disabled)')
+      ;(editorTrigger.current?.isConnected ? editorTrigger.current : fallback)?.focus()
+    }
+    previousEditor.current = editor
+  }, [editor])
+
+  const openEditor = (selection: Exclude<EditorSelection, null>) => {
+    editorTrigger.current = document.activeElement as HTMLElement | null
+    setEditor(selection)
+  }
+
+  const changeScope = (nextSchoolId: string, nextUnitId: string) => {
     const affected = session.dirtyKeys.filter((key) => {
       const entry = session.drafts[key]
-      if (entry.kind === 'subject') return mode === 'subjects' && !nextSubjects.has(key)
+      if (entry.kind === 'subject') return false
       if (entry.kind === 'class') return mode === 'classes' && entry.teachingUnitId !== nextUnitId
       return entry.teachingUnitId !== nextUnitId || nextSchoolId !== schoolId
     })
-    session.requestTransition(() => session.setView({ schoolId: nextSchoolId, unitId: nextUnitId, showAllSubjects: nextAll,
-      showClassCreate: nextUnitId === unitId ? showClassCreate : false }), affected)
+    session.requestTransition(() => {
+      session.setView({ schoolId: nextSchoolId, unitId: nextUnitId, showAllSubjects: false, showClassCreate: false })
+      setSubjectLevelFilter('current')
+      setEditor(null)
+    }, affected)
   }
   const createClass = (event: FormEvent) => {
     event.preventDefault()
@@ -119,23 +162,33 @@ function ResourceManagerContent({ data, setData, mode, storageStatus = 'saved', 
     const id = session.drafts[classCreateKey]?.submittedTargetId ?? uid()
     session.submit({ type: 'create-class', targetId: id, projectId, teachingUnitId: unit.id, draftKeys: [classCreateKey], success: '已儲存：已新增班級。' }, (current) => addClass(current, projectId, newClass, id))
   }
-  const createSubject = (event: FormEvent) => {
+  const createNewSubject = (event: FormEvent) => {
     event.preventDefault()
     if (!editable || !unit || !projectId) return
     const id = session.drafts[subjectCreateKey]?.submittedTargetId ?? uid()
-    session.submit({ type: 'create-subject', targetId: id, projectId, teachingUnitId: unit.id, draftKeys: [subjectCreateKey], success: '已儲存：已新增科目。' }, (current) => addSubjectForLevel(current, subjectName, unit.schoolLevel, id))
+    session.submit({ type: 'create-subject', targetId: id, projectId, teachingUnitId: unit.id, draftKeys: [subjectCreateKey], success: '已儲存：已新增科目。' }, (current) => createSubject(current, newSubject, id))
   }
   const removeSubjectLevel = (subject: Subject, level: SchoolLevel) => {
     if (!editable || !storagePersistence || !projectId) return
     try {
       removeSubjectSchoolLevel(data, subject.id, level, true)
-      if (!window.confirm(`解除「${subject.name}」的${levelLabel[level]}適用關係？\n此操作將從所有${levelLabel[level]}的可用科目中移除此科目，不會刪除科目本身，也不會影響其他學制。\n適用範圍包含所有專案、學校與課表。`)) return
-      session.submit({ type: 'remove-subject-level', targetId: subject.id, projectId, source: subject, draftKeys: [],
-        success: `已儲存：已解除「${subject.name}」的${levelLabel[level]}適用關係；科目與其他學制均已保留。` }, (current) => removeSubjectSchoolLevel(current, subject.id, level, true))
-    } catch (cause) { session.fail(cause instanceof Error ? cause.message : '無法解除適用關係，請重新確認。') }
+      if (!window.confirm(`解除「${subject.name}」的${levelLabel[level]}適用關係？\n此操作會讓所有${levelLabel[level]}課程無法再選用這個科目，但會保留科目本身及其他學制。\n若目前仍有課程使用，系統會阻止這項變更。`)) return
+      session.submit({ type: 'remove-subject-level', targetId: subject.id, projectId, source: subject, draftKeys: [], success: `已儲存：已解除「${subject.name}」的${levelLabel[level]}適用關係；科目與其他學制均已保留。` }, (current) => removeSubjectSchoolLevel(current, subject.id, level, true))
+    } catch (cause) { session.fail(cause instanceof Error ? cause.message : '目前無法取消這個學制，請確認是否仍有課程使用此科目。') }
   }
   const openSettings = onOpenSettings ? () => session.requestTransition(onOpenSettings) : undefined
-  return <section className="academic-settings resource-manager" data-resource-state={session.status}>
+  const returnToList = () => {
+    if (session.locked) { session.fail('這筆變更尚未完成儲存，請先完成儲存或處理復原。'); return }
+    if (editor?.kind === 'class-create') session.setView({ showClassCreate: false })
+    setEditor(null)
+  }
+  const selectedSubjectEntry = editor?.kind === 'subject' ? session.drafts[`subject:${editor.id}`] : undefined
+  const selectedSubject = editor?.kind === 'subject' ? (selectedSubjectEntry?.source as Subject | undefined) ?? data.subjects.find((item) => item.id === editor.id) : undefined
+  const selectedClassEntry = editor?.kind === 'class' ? session.drafts[`class:${editor.id}`] : undefined
+  const selectedClass = editor?.kind === 'class' ? (selectedClassEntry?.source as ProjectClass | undefined) ?? data.classes.find((item) => item.id === editor.id) : undefined
+  const selectedClassUnit = selectedClassEntry?.unitSnapshot ?? units.find((item) => item.id === selectedClass?.teachingUnitId)
+
+  return <section ref={managerContent} className="academic-settings resource-manager" data-resource-state={session.status}>
     {projectId !== data.activeProjectId && <p role="status">使用中專案已變更；原操作脈絡與草稿已保留，請確認後關閉並重新開啟管理視窗。</p>}
     <div className="academic-context-selectors">
       <label>學校<select aria-label="學校" value={schoolId} onChange={(event) => {
@@ -149,85 +202,127 @@ function ResourceManagerContent({ data, setData, mode, storageStatus = 'saved', 
       </select></label>
     </div>
     {(!schools.length || !units.length) && <div className="settings-empty">目前專案尚無學校或學制。請先前往專案設定建立學校與學制。{openSettings && <button type="button" onClick={openSettings}>前往專案設定</button>}</div>}
-    {mode === 'classes' && <section className="class-settings"><div><strong>班級</strong><p>顯示目前學校與學制的班級；不受教師課表篩選影響。</p></div>
-      {classes.map((item) => unit && <ClassRow key={item.id} schoolClass={item} unit={unit} editable={editable} data={data} session={session} />)}
-      {unit && !showClassCreate && <div className="class-add-row"><button type="button" className="class-add-trigger" disabled={!editable} onClick={() => session.setView({ showClassCreate: true })}>＋ 新增班級</button></div>}
-      {unit && showClassCreate ? <form className="inline-create class-create" aria-label="新增班級表單" onSubmit={createClass}>
+
+    {mode === 'subjects' && unit && !editor && <section className="resource-browser" aria-label="科目清單">
+      <ResourceBrowserHeading title="科目" description="先從清單選擇一筆科目，再進行編輯。" dirtyCount={dirtyCount} action={<button type="button" className="resource-add-button" disabled={!editable} onClick={() => openEditor({ kind: 'subject-create' })}>＋ 新增科目{session.drafts[subjectCreateKey] ? '（未儲存）' : ''}</button>} />
+      <div className="resource-list-tools">
+        <label>搜尋科目<input type="search" aria-label="搜尋科目" value={subjectQuery} onChange={(event) => setSubjectQuery(event.target.value)} placeholder="輸入名稱或簡稱" /></label>
+        <label>適用學制<select aria-label="適用學制篩選" value={subjectLevelFilter} onChange={(event) => { const next = event.target.value as SubjectLevelFilter; setSubjectLevelFilter(next); session.setView({ showAllSubjects: next === 'all' }) }}><option value="current">目前學制（{levelLabel[unit.schoolLevel]}）</option><option value="all">全部學制</option>{SCHOOL_LEVELS.map((level) => <option key={level} value={level}>{levelLabel[level]}</option>)}</select></label>
+      </div>
+      <div className="resource-list">
+        {visibleSubjects.map((subject) => <SubjectListItem key={subject.id} subject={subject} session={session} onSelect={() => openEditor({ kind: 'subject', id: subject.id })} />)}
+        {!visibleSubjects.length && <p className="resource-list-empty">{subjectsInScope.length ? '找不到符合搜尋或篩選條件的科目。' : '目前範圍尚無科目，可新增科目或補齊預設科目。'}</p>}
+      </div>
+    </section>}
+
+    {mode === 'subjects' && unit && editor?.kind === 'subject-create' && <section className="resource-editor-shell">
+      <EditorHeading title="新增科目" dirty={Boolean(session.drafts[subjectCreateKey])} locked={session.locked} onBack={returnToList} backLabel="返回科目清單" />
+      <form className="resource-editor subject-management-row" aria-label="新增科目表單" onSubmit={createNewSubject}>
+        <SubjectFields draft={newSubject} prefix="新科目" disabled={subjectCreateLocked} onChange={(value) => session.edit(subjectCreateKey, { kind: 'subject-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptySubjectDraft(unit), value })} />
+        <div className="subject-management-actions"><button type="submit" className="primary-button" disabled={subjectCreateLocked}>儲存新增科目</button>{session.drafts[subjectCreateKey] && <button type="button" onClick={() => session.requestTransition(() => setEditor(null), [subjectCreateKey])}>捨棄草稿</button>}</div>
+      </form>
+    </section>}
+    {mode === 'subjects' && selectedSubject && <section className="resource-editor-shell">
+      <EditorHeading title={`編輯科目｜${selectedSubject.name}`} dirty={Boolean(selectedSubjectEntry)} locked={session.locked} onBack={returnToList} backLabel="返回科目清單" />
+      <SubjectEditor subject={selectedSubject} editable={editable} data={data} session={session} schoolLevel={unit?.schoolLevel ?? 'other'} canConfirmRemoval={Boolean(storagePersistence)} onRemoveLevel={removeSubjectLevel} />
+    </section>}
+    {mode === 'subjects' && !unit && units.length > 0 && <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p>}
+    {mode === 'subjects' && unit && !editor && <SubjectCatalogInstaller data={data} setData={setData} storageStatus={storageStatus} storagePersistence={storagePersistence ?? { pending: false, revision: 0 }} readOnly={!editable} />}
+
+    {mode === 'classes' && unit && !editor && <section className="resource-browser" aria-label="班級清單">
+      <ResourceBrowserHeading title="班級" description="班級屬於目前專案與學制，不受教師課表篩選影響。" dirtyCount={dirtyCount} action={<button type="button" className="resource-add-button" disabled={!editable} onClick={() => { session.setView({ showClassCreate: true }); openEditor({ kind: 'class-create' }) }}>＋ 新增班級{session.drafts[classCreateKey] ? '（未儲存）' : ''}</button>} />
+      <div className="resource-list">
+        {classes.map((item) => <ClassListItem key={item.id} item={item} session={session} onSelect={() => openEditor({ kind: 'class', id: item.id })} />)}
+        {!classes.length && <p className="resource-list-empty">目前學制尚無班級。</p>}
+      </div>
+    </section>}
+    {mode === 'classes' && unit && editor?.kind === 'class-create' && <section className="resource-editor-shell">
+      <EditorHeading title="新增班級" dirty={Boolean(session.drafts[classCreateKey])} locked={session.locked} onBack={returnToList} backLabel="返回班級清單" />
+      <form className="resource-editor class-editor-row class-create" aria-label="新增班級表單" onSubmit={createClass}>
         <ClassIdentityFields draft={newClass} unit={unit} onChange={(value) => session.edit(classCreateKey, { kind: 'class-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptyClassDraft(unit), value })} prefix="新班級" disabled={classCreateLocked} />
         <ClassRoomField id="new-class-room-help" prefix="新班級" room={newClass.room ?? ''} disabled={classCreateLocked} onChange={(room) => session.edit(classCreateKey, { kind: 'class-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptyClassDraft(unit), value: { ...newClass, room } })} />
-        <div className="class-create-actions"><button type="button" onClick={() => session.requestTransition(() => session.setView({ showClassCreate: false }), [classCreateKey])}>取消</button><button type="submit" disabled={classCreateLocked}>{session.locked ? '儲存中…' : '新增班級'}</button></div>
-      </form> : !unit && units.length > 0 && <p className="settings-empty">請選擇學制，才能管理班級。</p>}
+        <span className="class-code-preview">顯示：{classDisplayName({ name: newClass.name ?? '', grade: newClass.grade, classNumber: newClass.classNumber })}</span>
+        <div className="class-create-actions"><button type="submit" className="primary-button" disabled={classCreateLocked}>{session.locked ? '儲存中…' : '新增班級'}</button>{session.drafts[classCreateKey] && <button type="button" onClick={() => session.requestTransition(() => { session.setView({ showClassCreate: false }); setEditor(null) }, [classCreateKey])}>捨棄草稿</button>}</div>
+      </form>
     </section>}
-    {mode === 'subjects' && <><section className="subject-settings"><div><strong>科目</strong><p>科目庫由所有課表專案共用；目前顯示所選學制適用科目，修改名稱、簡稱、顏色或適用學制會影響其他專案。</p></div>
-      {unit ? <><label className="resource-all-subjects"><input type="checkbox" checked={showAllSubjects} onChange={(event) => changeScope(schoolId, unitId, event.target.checked)} />顯示全域所有科目</label>
-        {subjects.map((subject) => <SubjectRow key={subject.id} subject={subject} editable={editable} data={data} session={session} schoolLevel={unit.schoolLevel} canConfirmRemoval={Boolean(storagePersistence)} onRemoveLevel={removeSubjectLevel} />)}
-        <form className="inline-create" onSubmit={createSubject}><input aria-label="新科目名稱" value={subjectName} onChange={(event) => session.edit(subjectCreateKey, { kind: 'subject-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: '', value: event.target.value })} placeholder="新科目名稱" disabled={subjectCreateLocked} required /><button type="submit" disabled={subjectCreateLocked}>新增科目</button></form>
-      </> : units.length > 0 && <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p>}
-    </section><SubjectCatalogInstaller data={data} setData={setData} storageStatus={storageStatus} storagePersistence={storagePersistence ?? { pending: false, revision: 0 }} readOnly={!editable} /></>}
-    {retained.length > 0 && <section aria-label="保留的資源草稿"><p>來源資料已變更、刪除或不在目前範圍；草稿已保留，不會自動重建資源。</p>{retained.map(([key, entry]) => <div key={key}>
-      {entry.kind === 'subject' ? <SubjectRow subject={entry.source as Subject} data={data} session={session} editable={editable} schoolLevel={unit?.schoolLevel ?? 'other'} canConfirmRemoval={false} onRemoveLevel={removeSubjectLevel} />
-        : entry.kind === 'class' && entry.unitSnapshot ? <ClassRow schoolClass={entry.source as ProjectClass} unit={entry.unitSnapshot} data={data} session={session} editable={editable} />
-          : <><pre aria-label="保留的新增草稿">{JSON.stringify(entry.value)}</pre><button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄此筆新增草稿</button></>}
-    </div>)}</section>}
-    {session.unconfirmedCreations.length > 0 && <section aria-label="未確認的新增操作"><p>請先核對原新增 ID。結束這次未確認新增只會清除該筆輸入，保留目前文件中的資源；不會認定本地儲存成功。</p>
-      {session.unconfirmedCreations.map((entry) => <div key={entry.key}><p>{entry.message}</p><button type="button" onClick={() => session.requestTransition(() => {
-        if (entry.kind === 'class-create' && entry.key === classCreateKey) session.setView({ showClassCreate: false })
-      }, [entry.key])}>結束這次未確認新增並清除輸入</button></div>)}
+    {mode === 'classes' && selectedClass && selectedClassUnit && <section className="resource-editor-shell">
+      <EditorHeading title={`編輯班級｜${classDisplayName(selectedClass)}`} dirty={Boolean(selectedClassEntry)} locked={session.locked} onBack={returnToList} backLabel="返回班級清單" />
+      <ClassEditor schoolClass={selectedClass} unit={selectedClassUnit} editable={editable} data={data} session={session} />
     </section>}
+    {mode === 'classes' && !unit && units.length > 0 && <p className="settings-empty">請選擇學制，才能管理班級。</p>}
+
+    {retained.length > 0 && <section className="retained-resource-drafts" aria-label="保留的資源草稿"><p>來源資料已變更、刪除或不在目前範圍；草稿已保留，不會自動重建資源。</p>{retained.map(([key, entry]) => <div key={key}>{(entry.kind === 'subject' || entry.kind === 'class') && entry.source ? <button type="button" onClick={() => openEditor({ kind: entry.kind, id: entry.source!.id })}>檢視「{entry.source.name}」草稿</button> : <><span aria-label="保留的新增草稿">{entry.kind === 'subject-create' ? String((entry.value as SubjectDraft).name) : String((entry.value as ClassDraft).name ?? '')}</span><button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄此筆新增草稿</button></>}</div>)}</section>}
+    {session.unconfirmedCreations.length > 0 && <section aria-label="未確認的新增操作"><p>請先核對原新增 ID。結束這次未確認新增只會清除該筆輸入，保留目前文件中的資源；不會認定本地儲存成功。</p>{session.unconfirmedCreations.map((entry) => <div key={entry.key}><p>{entry.message}</p><button type="button" onClick={() => session.requestTransition(() => { if (entry.kind === 'class-create' && entry.key === classCreateKey) session.setView({ showClassCreate: false }); if (entry.key === subjectCreateKey || entry.key === classCreateKey) setEditor(null) }, [entry.key])}>結束這次未確認新增並清除輸入</button></div>)}</section>}
     {session.error && <p className="form-error" role="alert">{session.error}</p>}
     {session.locked && storageStatus === 'saved' && <p role="status">{session.operation?.type === 'remove-subject-level' ? '正在儲存解除適用關係…' : '正在儲存資源變更，尚未確認持久化…'}</p>}
     {session.success && <p role="status">{session.success}</p>}
-    {storageControls && storageStatus !== 'saved' && <section aria-label="資源儲存復原"><p>以下復原操作會套用整份 AppData（所有專案、課表與資源），不是只處理目前這筆科目或班級。尚未提交的草稿仍會保留。</p>
-      <button type="button" onClick={() => { if (window.confirm('保留本頁整份 AppData 並寫入此裝置？此操作可能取代其他分頁版本；請先核對資料。')) storageControls.keepLocal() }}>保留本頁完整資料並重試儲存</button>
-      {storageStatus === 'conflict' && storageControls.conflictSource === 'current' && <button type="button" onClick={() => { if (window.confirm('採用其他分頁的整份 AppData？本頁已提交但未寫入的變更將被取代；未提交草稿仍保留。')) session.adoptExternal(storageControls.acceptExternal) }}>採用其他分頁版本</button>}
-      {storageControls.conflictSource === 'legacy' && <p>舊版分頁變更無法自動合併；請先關閉舊分頁並核對備份，再決定是否保留本頁 v7。</p>}
-    </section>}
+    {storageControls && storageStatus !== 'saved' && <section aria-label="資源儲存復原"><p>以下復原操作會套用整份 AppData（所有專案、課表與資源），不是只處理目前這筆科目或班級。尚未提交的草稿仍會保留。</p><button type="button" onClick={() => { if (window.confirm('保留本頁整份 AppData 並寫入此裝置？此操作可能取代其他分頁版本；請先核對資料。')) storageControls.keepLocal() }}>保留本頁完整資料並重試儲存</button>{storageStatus === 'conflict' && storageControls.conflictSource === 'current' && <button type="button" onClick={() => { if (window.confirm('採用其他分頁的整份 AppData？本頁已提交但未寫入的變更將被取代；未提交草稿仍保留。')) session.adoptExternal(storageControls.acceptExternal) }}>採用其他分頁版本</button>}{storageControls.conflictSource === 'legacy' && <p>舊版分頁變更無法自動合併；請先關閉舊分頁並核對備份，再決定是否保留本頁 v7。</p>}</section>}
   </section>
 }
 
-function ClassRow({ schoolClass, unit, editable, data, session }: { schoolClass: ProjectClass; unit: TeachingUnit; editable: boolean; data: AppDataV4; session: ResourceManagementSession }) {
+function ResourceBrowserHeading({ title, description, dirtyCount, action }: { title: string; description: string; dirtyCount: number; action: ReactNode }) {
+  return <header className="resource-browser-heading"><div><h3>{title}</h3><p>{description}</p></div><div>{dirtyCount > 0 && <span className="resource-dirty-count">{dirtyCount} 筆未儲存</span>}{action}</div></header>
+}
+
+function EditorHeading({ title, dirty, locked, onBack, backLabel }: { title: string; dirty: boolean; locked: boolean; onBack: () => void; backLabel: string }) {
+  return <header className="resource-editor-heading"><button type="button" onClick={onBack} disabled={locked}>← {backLabel}</button><div><h3>{title}</h3>{dirty && <span className="resource-dirty-badge">未儲存</span>}</div></header>
+}
+
+function SubjectListItem({ subject, session, onSelect }: { subject: Subject; session: ResourceManagementSession; onSelect: () => void }) {
+  const key = `subject:${subject.id}`
+  const preview = session.draft(key, subjectDraft(subject))
+  return <button type="button" className="resource-list-item" aria-label={`編輯科目 ${subject.name}`} onClick={onSelect}>
+    <i className="resource-color" style={{ background: preview.color }} aria-hidden="true" /><span><strong>{preview.name}</strong><small>{preview.shortName}</small></span>
+    <span className="resource-levels">{preview.applicableSchoolLevels.map((level) => levelLabel[level]).join('、')}</span>{session.drafts[key] && <em>未儲存</em>}
+  </button>
+}
+
+function ClassListItem({ item, session, onSelect }: { item: ProjectClass; session: ResourceManagementSession; onSelect: () => void }) {
+  const key = `class:${item.id}`
+  const preview = session.draft(key, classDraft(item))
+  return <button type="button" className="resource-list-item class-resource-item" aria-label={`編輯班級 ${classDisplayName(item)}`} onClick={onSelect}>
+    <span><strong>{classDisplayName({ ...item, ...preview })}</strong><small>{preview.room || '未設定教室'}</small></span>{session.drafts[key] && <em>未儲存</em>}
+  </button>
+}
+
+function ClassEditor({ schoolClass, unit, editable, data, session }: { schoolClass: ProjectClass; unit: TeachingUnit; editable: boolean; data: AppDataV4; session: ResourceManagementSession }) {
   const key = `class:${schoolClass.id}`
   const initial = classDraft(schoolClass)
   const draft = session.draft(key, initial)
   const entry = session.drafts[key]
   const latest = data.classes.find((item) => item.id === schoolClass.id)
-  const stale = !latest || Boolean(entry?.source && JSON.stringify(entry.source) !== JSON.stringify(latest))
-    || Boolean(entry?.unitSnapshot && JSON.stringify(entry.unitSnapshot) !== JSON.stringify(data.teachingUnits.find((item) => item.id === unit.id)))
+  const stale = !latest || Boolean(entry?.source && JSON.stringify(entry.source) !== JSON.stringify(latest)) || Boolean(entry?.unitSnapshot && JSON.stringify(entry.unitSnapshot) !== JSON.stringify(data.teachingUnits.find((item) => item.id === unit.id)))
   const context = { projectId: schoolClass.projectId, teachingUnitId: schoolClass.teachingUnitId }
-  return <form className="class-editor-row" aria-label={`管理班級 ${schoolClass.name}`} onSubmit={(event) => {
+  return <form className="resource-editor class-editor-row" aria-label={`管理班級 ${schoolClass.name}`} onSubmit={(event) => {
     event.preventDefault()
     if (!editable) return
     const roomError = classRoomError(draft.room)
     if (roomError) { session.fail(roomError); return }
-    if (!entry) return
-    session.submit({ ...context, type: 'update-class', targetId: schoolClass.id, source: schoolClass, draftKeys: [key], success: '已儲存：已更新班級。' }, (current) => updateClass(current, schoolClass.id, draft))
+    if (entry) session.submit({ ...context, type: 'update-class', targetId: schoolClass.id, source: schoolClass, draftKeys: [key], success: '已儲存：已更新班級。' }, (current) => updateClass(current, schoolClass.id, draft))
   }}>
     <ClassIdentityFields draft={draft} unit={unit} onChange={(value) => session.edit(key, { ...context, kind: 'class', source: schoolClass, unitSnapshot: unit, initial, value })} prefix="班級" legacyName={schoolClass.grade === undefined || schoolClass.classNumber === undefined} disabled={!editable} />
     <ClassRoomField id={`class-room-help-${schoolClass.id}`} prefix="班級" room={draft.room ?? ''} disabled={!editable} onChange={(room) => session.edit(key, { ...context, kind: 'class', source: schoolClass, unitSnapshot: unit, initial, value: { ...draft, room } })} />
     <span className="class-code-preview">顯示：{classDisplayName({ name: draft.name ?? schoolClass.name, grade: draft.grade, classNumber: draft.classNumber })}</span>
-    {stale && <p role="status">來源資料已變更或刪除；草稿保留，請先確認最新資料。</p>}
-    <button type="submit" disabled={!editable || stale}>儲存</button><button type="button" className="danger-outline" disabled={!editable || stale} onClick={() => {
-      if (window.confirm(`確定刪除「${classDisplayName(schoolClass)}」？`)) session.submit({ ...context, type: 'delete-class', targetId: schoolClass.id, source: schoolClass, draftKeys: [key], success: '已儲存：已刪除班級。' }, (current) => removeClass(current, schoolClass.id))
-    }}>刪除</button>
-    {entry && <button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄此筆班級草稿</button>}
+    {stale && <p className="resource-editor-message" role="status">這筆班級已在其他地方變更或刪除。草稿仍保留，但不能直接覆寫，請先核對最新資料。</p>}
+    <div className="resource-editor-actions"><button type="submit" className="primary-button" disabled={!editable || stale || !entry}>儲存班級</button><button type="button" className="danger-outline" disabled={!editable || stale} onClick={() => { if (window.confirm(`確定刪除「${classDisplayName(schoolClass)}」？如果仍有課程使用這個班級，系統會阻止刪除。`)) session.submit({ ...context, type: 'delete-class', targetId: schoolClass.id, source: schoolClass, draftKeys: [key], success: '已儲存：已刪除班級。' }, (current) => removeClass(current, schoolClass.id)) }}>刪除班級</button>{entry && <button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄草稿</button>}</div>
   </form>
 }
 
 function ClassIdentityFields({ draft, unit, onChange, prefix, legacyName = false, disabled = false }: { draft: ClassDraft; unit: TeachingUnit; onChange: (draft: ClassDraft) => void; prefix: string; legacyName?: boolean; disabled?: boolean }) {
   const grades = gradesForLevel(unit.schoolLevel)
-  return <>{grades.length > 0 && !legacyName ? <><select className="class-grade-field" aria-label={`${prefix}年級`} value={draft.grade ?? ''} onChange={(event) => onChange({ ...draft, teachingUnitId: unit.id, grade: Number(event.target.value), name: undefined })} disabled={disabled}>{grades.map((grade) => <option key={grade} value={grade}>{gradeLabel(unit.schoolLevel, grade)}</option>)}</select><input className="class-number-field" aria-label={`${prefix}班號`} type="number" inputMode="numeric" min="1" step="1" value={draft.classNumber ?? ''} onChange={(event) => onChange({ ...draft, teachingUnitId: unit.id, classNumber: event.target.value ? Number(event.target.value) : undefined, name: undefined })} placeholder="班號" required disabled={disabled} /></> : <input className="class-name-field" aria-label={`${prefix}名稱`} value={draft.name ?? ''} onChange={(event) => onChange({ ...draft, teachingUnitId: unit.id, name: event.target.value, grade: undefined, classNumber: undefined })} placeholder="班級名稱" required disabled={disabled} />}
-  </>
+  return <div className="class-identity-fields">{grades.length > 0 && !legacyName ? <><label>年級<select className="class-grade-field" aria-label={`${prefix}年級`} value={draft.grade ?? ''} onChange={(event) => onChange({ ...draft, teachingUnitId: unit.id, grade: Number(event.target.value), name: undefined })} disabled={disabled}>{grades.map((grade) => <option key={grade} value={grade}>{gradeLabel(unit.schoolLevel, grade)}</option>)}</select></label><label>班號<input className="class-number-field" aria-label={`${prefix}班號`} type="number" inputMode="numeric" min="1" step="1" value={draft.classNumber ?? ''} onChange={(event) => onChange({ ...draft, teachingUnitId: unit.id, classNumber: event.target.value ? Number(event.target.value) : undefined, name: undefined })} placeholder="班號" required disabled={disabled} /></label></> : <label>班級名稱<input className="class-name-field" aria-label={`${prefix}名稱`} value={draft.name ?? ''} onChange={(event) => onChange({ ...draft, teachingUnitId: unit.id, name: event.target.value, grade: undefined, classNumber: undefined })} placeholder="班級名稱" required disabled={disabled} /></label>}</div>
 }
 
 function ClassRoomField({ id, prefix, room, disabled, onChange }: { id: string; prefix: string; room: string; disabled: boolean; onChange: (room: string) => void }) {
   const validation = classRoomError(room)
-  return <div className="class-room-field"><input aria-label={`${prefix}教室`} aria-invalid={Boolean(validation)} aria-describedby={validation ? id : undefined} maxLength={CLASS_ROOM_MAX_LENGTH} value={room} onChange={(event) => onChange(event.target.value)} placeholder="預設教室" disabled={disabled} />{validation && <small id={id} role="alert">{validation}</small>}</div>
+  return <label className="class-room-field">教室（選填）<input aria-label={`${prefix}教室`} aria-invalid={Boolean(validation)} aria-describedby={validation ? id : undefined} maxLength={CLASS_ROOM_MAX_LENGTH} value={room} onChange={(event) => onChange(event.target.value)} placeholder="預設教室" disabled={disabled} />{validation && <small id={id} role="alert">{validation}</small>}</label>
 }
 
-function SubjectRow({ subject, editable, data, session, schoolLevel, canConfirmRemoval, onRemoveLevel }: {
-  subject: Subject; editable: boolean; data: AppDataV4; session: ResourceManagementSession; schoolLevel: SchoolLevel
-  canConfirmRemoval: boolean; onRemoveLevel: (subject: Subject, level: SchoolLevel) => void
-}) {
+function SubjectFields({ draft, prefix, disabled, onChange }: { draft: SubjectDraft; prefix: string; disabled: boolean; onChange: (draft: SubjectDraft) => void }) {
+  return <><label>名稱<input aria-label={`${prefix}名稱`} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} disabled={disabled} required /></label><label>簡稱<input aria-label={`${prefix}簡稱`} value={draft.shortName} onChange={(event) => onChange({ ...draft, shortName: event.target.value })} disabled={disabled} required /></label><label>顏色<input aria-label={`${prefix}顏色`} type="color" value={draft.color} onChange={(event) => onChange({ ...draft, color: event.target.value })} disabled={disabled} /></label><fieldset><legend>適用學制</legend>{SCHOOL_LEVELS.map((level) => <label key={level}><input type="checkbox" checked={draft.applicableSchoolLevels.includes(level)} disabled={disabled} onChange={(event) => onChange({ ...draft, applicableSchoolLevels: event.target.checked ? [...draft.applicableSchoolLevels, level] : draft.applicableSchoolLevels.filter((item) => item !== level) })} />{levelLabel[level]}</label>)}</fieldset></>
+}
+
+function SubjectEditor({ subject, editable, data, session, schoolLevel, canConfirmRemoval, onRemoveLevel }: { subject: Subject; editable: boolean; data: AppDataV4; session: ResourceManagementSession; schoolLevel: SchoolLevel; canConfirmRemoval: boolean; onRemoveLevel: (subject: Subject, level: SchoolLevel) => void }) {
   const key = `subject:${subject.id}`
   const initial = subjectDraft(subject)
   const draft = session.draft(key, initial)
@@ -240,20 +335,8 @@ function SubjectRow({ subject, editable, data, session, schoolLevel, canConfirmR
   const save = (event: FormEvent) => {
     event.preventDefault()
     if (!editable || !entry || !impact) return
-    if (!window.confirm(`變更全域科目「${subject.name}」？此科目被 ${impact.projectIds.length} 個專案、${impact.references.length} 筆課程或異動引用；名稱、簡稱、顏色與適用學制會同步影響所有專案。${!subject.applicableSchoolLevels ? '舊資料未指定適用學制，本次會明確設為所有學制。' : ''}`)) return
+    if (!window.confirm(`儲存全域科目「${subject.name}」的變更？這會同步影響 ${impact.projectIds.length} 個專案及 ${impact.references.length} 筆使用中的課程或異動。${!subject.applicableSchoolLevels ? '這筆舊資料尚未標示適用學制，儲存後會明確設為目前勾選的學制。' : ''}`)) return
     session.submit({ ...context, type: 'update-subject', targetId: subject.id, source: subject, draftKeys: [key], success: '已儲存：已更新科目。' }, (current) => updateSubject(current, subject.id, draft, true))
   }
-  return <form className="subject-management-row" onSubmit={save} aria-label={`管理科目 ${subject.name}`}>
-    <label>名稱<input aria-label={`${subject.name}名稱`} value={draft.name} onChange={(event) => edit({ ...draft, name: event.target.value })} disabled={!editable} /></label>
-    <label>簡稱<input aria-label={`${subject.name}簡稱`} value={draft.shortName} onChange={(event) => edit({ ...draft, shortName: event.target.value })} disabled={!editable} /></label>
-    <label>顏色<input aria-label={`${subject.name}顏色`} type="color" value={draft.color} onChange={(event) => edit({ ...draft, color: event.target.value })} disabled={!editable} /></label>
-    <fieldset><legend>適用學制</legend>{SCHOOL_LEVELS.map((level) => <label key={level}><input type="checkbox" checked={draft.applicableSchoolLevels.includes(level)} disabled={!editable} onChange={(event) => edit({ ...draft, applicableSchoolLevels: event.target.checked ? [...draft.applicableSchoolLevels, level] : draft.applicableSchoolLevels.filter((item) => item !== level) })} />{levelLabel[level]}</label>)}</fieldset>
-    {stale && <p role="status">來源資料已變更或刪除；草稿保留，請先確認最新資料，不能直接回寫。</p>}
-    <div className="subject-management-actions">{(subject.applicableSchoolLevels ?? SCHOOL_LEVELS).includes(schoolLevel) && <button type="button" disabled={!editable || !canConfirmRemoval || stale} title={!canConfirmRemoval ? '無法確認儲存狀態，請重新開啟管理視窗。' : undefined} onClick={() => onRemoveLevel(subject, schoolLevel)}>解除{levelLabel[schoolLevel]}適用</button>}
-      <button type="submit" disabled={!editable || stale}>儲存科目</button><button type="button" className="danger-outline" disabled={!editable || stale} onClick={() => {
-        if (window.confirm(`確定刪除全域科目「${subject.name}」？目前有 ${impact?.references.length ?? 0} 筆課程或異動引用；有引用時系統會拒絕刪除。`)) session.submit({ ...context, type: 'delete-subject', targetId: subject.id, source: subject, draftKeys: [key], success: '已儲存：已刪除科目。' }, (current) => deleteSubject(current, subject.id, true))
-      }}>刪除科目</button>
-      {entry && <button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄此筆科目草稿</button>}
-    </div>
-  </form>
+  return <form className="resource-editor subject-management-row" onSubmit={save} aria-label={`管理科目 ${subject.name}`}><SubjectFields draft={draft} prefix={subject.name} disabled={!editable} onChange={edit} />{stale && <p className="resource-editor-message" role="status">這筆科目已在其他地方變更或刪除。草稿仍保留，但不能直接覆寫，請先核對最新資料。</p>}<div className="subject-management-actions">{(subject.applicableSchoolLevels ?? SCHOOL_LEVELS).includes(schoolLevel) && <button type="button" disabled={!editable || !canConfirmRemoval || stale} title={!canConfirmRemoval ? '無法確認儲存狀態，請重新開啟管理視窗。' : undefined} onClick={() => onRemoveLevel(subject, schoolLevel)}>解除{levelLabel[schoolLevel]}適用</button>}<button type="submit" className="primary-button" disabled={!editable || stale || !entry}>儲存科目</button><button type="button" className="danger-outline" disabled={!editable || stale} onClick={() => { if (window.confirm(`確定刪除全域科目「${subject.name}」？如果仍有課程使用這個科目，系統會阻止刪除。`)) session.submit({ ...context, type: 'delete-subject', targetId: subject.id, source: subject, draftKeys: [key], success: '已儲存：已刪除科目。' }, (current) => deleteSubject(current, subject.id, true)) }}>刪除科目</button>{entry && <button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄草稿</button>}</div></form>
 }
