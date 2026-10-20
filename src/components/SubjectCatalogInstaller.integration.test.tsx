@@ -5,8 +5,8 @@ import { createBlankProject } from '../data/projectRuntime'
 import { migrateV6ToV7 } from '../data/migrationsV7'
 import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { createInitialAppDataV6, useAppDataV4 } from '../hooks/useAppDataV4'
-import { AcademicSettingsV4 } from './AcademicSettingsV4'
 import { LessonEditor } from './LessonEditor'
+import { SubjectCatalogInstaller } from './SubjectCatalogInstaller'
 
 function setup() {
   let index = 0
@@ -20,7 +20,7 @@ function Harness({ readOnly = false, showLesson = false, allowMutation = false }
   const [data, setData, status, , persistence] = useAppDataV4()
   return <><output data-testid="storage-status">{status}</output><output data-testid="subject-count">{data.subjects.length}</output>
     {allowMutation && <button onClick={() => setData((current) => ({ ...current, subjects: [...current.subjects, { id: 'outside-change', name: '外部新增', shortName: '外增', color: '#123456', applicableSchoolLevels: ['junior-high'] }] }))}>其他更新</button>}
-    <AcademicSettingsV4 data={data} setData={setData} page="subjects" storageStatus={status} storagePersistence={persistence} readOnly={readOnly} />
+    <SubjectCatalogInstaller data={data} setData={setData} storageStatus={status} storagePersistence={persistence} readOnly={readOnly} />
     {showLesson && <LessonEditor data={data} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />}
   </>
 }

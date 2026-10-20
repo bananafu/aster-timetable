@@ -16,7 +16,7 @@ describe('ProjectLifecycleModal hierarchical settings', () => {
     const data = migrateV3ToV4(structuredClone(initialData))
     render(<ProjectLifecycleModal data={data} setData={vi.fn()} onClose={vi.fn()} onViewArchived={vi.fn()} />)
     expect(screen.getByRole('button', { name: /學校與學制管理/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /建立新專案/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /建立新專案|管理科目|管理班級/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /建立空白課表/ })).toBeNull()
     expect(screen.queryByText('課堂時間表')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /學校與學制管理/ }))

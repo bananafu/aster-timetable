@@ -262,7 +262,7 @@ describe('CourseResourceManager', () => {
     const before = structuredClone(data.subjects)
     const setData = vi.fn()
     render(<CourseResourceManager data={data} setData={setData} mode="subjects" />)
-    expect(screen.getAllByText(/科目庫由所有課表專案共用/).length).toBeGreaterThan(0)
+    expect(screen.getByRole('heading', { name: '我的科目' })).toBeTruthy()
     openSubjectCreate()
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '新科目' } })
     fireEvent.change(screen.getByLabelText('新科目簡稱'), { target: { value: '新科' } })
@@ -284,7 +284,7 @@ describe('CourseResourceManager', () => {
     expect(data.subjects.find((item) => item.id === subject.id)).toEqual(subject)
   })
 
-  it('科目編輯需確認全域影響，並可查看其他學制的科目', () => {
+  it('科目編輯需確認全域影響，且我的科目只顯示目前學制適用項目', () => {
     const data = fixture()
     const subject = data.subjects[0]
     const setData = vi.fn()
@@ -292,8 +292,7 @@ describe('CourseResourceManager', () => {
     data.subjects.push({ id: 'senior-only', name: '高中限定', shortName: '高限', color: '#123456', applicableSchoolLevels: ['senior-high'] })
     render(<CourseResourceManager data={data} setData={setData} mode="subjects" />)
     expect(screen.queryByRole('button', { name: '編輯科目 高中限定' })).toBeNull()
-    fireEvent.change(screen.getByLabelText('適用學制篩選'), { target: { value: 'all' } })
-    expect(screen.getByRole('button', { name: '編輯科目 高中限定' })).toBeTruthy()
+    expect(screen.getByText(/目前其他可使用的科目/)).toBeTruthy()
     const form = subjectRow(subject.name)
     fireEvent.change(within(form).getByLabelText(`${subject.name}顏色`), { target: { value: '#123456' } })
     fireEvent.click(within(form).getByRole('button', { name: '儲存科目' }))
@@ -331,6 +330,86 @@ describe('CourseResourceManager', () => {
 })
 
 describe('resource session with real v7 storage', () => {
+  it('零科目時依目前學制顯示預設目錄，＋ 僅新增一次並等待持久化確認', () => {
+    const data = storageFixture()
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    data.subjects = []
+    data.recurringLessons = []
+    data.overrides = []
+    data.oneOffLessons = []
+    startStorage('subjects', data)
+    expect(screen.getByText('目前學制尚未選用科目，請從下方預設目錄加入。')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '化學' } })
+    const add = screen.getByRole('button', { name: '加入預設科目 化學' })
+    fireEvent.click(add)
+    expect(memory().subjects.filter((item) => item.name === '化學')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: '編輯科目 化學' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '加入預設科目 化學' })).toBeNull()
+    expect(screen.getByText('已選')).toBeTruthy()
+    expect(sessionState()).toMatchObject({ state: 'pending', operation: 'create-subject', pending: true })
+    flush()
+    expect(stored().subjects.filter((item) => item.name === '化學')).toHaveLength(1)
+    expect(screen.getByText('已儲存：已加入預設科目「化學」。')).toBeTruthy()
+  })
+
+  it('預設科目寫入失敗時保留可恢復操作且不重複寫入原文件', () => {
+    const data = storageFixture()
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    data.subjects = []
+    data.recurringLessons = []
+    data.overrides = []
+    data.oneOffLessons = []
+    const { raw } = startStorage('subjects', data)
+    const setItem = Storage.prototype.setItem
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === APP_DATA_V7_KEY) throw new DOMException('full', 'QuotaExceededError')
+      return setItem.call(this, key, value)
+    })
+    fireEvent.click(screen.getByRole('button', { name: '加入預設科目 化學' }))
+    const id = sessionState().targetId
+    flush()
+    expect(sessionState()).toMatchObject({ state: 'blocked', operation: 'create-subject' })
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+    expect(memory().subjects.filter((item) => item.id === id)).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: '加入預設科目 化學' })).toBeNull()
+    write.mockRestore()
+    fireEvent.click(screen.getByRole('button', { name: '保留本頁完整資料並重試儲存' }))
+    expect(stored().subjects.filter((item) => item.id === id)).toHaveLength(1)
+    expect(sessionState().state).toBe('persisted')
+  })
+
+  it('預設科目提交後遇到外部替換會標示未確認並阻止再次新增', () => {
+    const data = storageFixture()
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    data.subjects = []
+    data.recurringLessons = []
+    data.overrides = []
+    data.oneOffLessons = []
+    startStorage('subjects', data)
+    fireEvent.click(screen.getByRole('button', { name: '加入預設科目 化學' }))
+    const originalId = sessionState().targetId
+    receive({ ...data, projects: data.projects.map((project) => ({ ...project, name: '外部專案版本' })) })
+    flush()
+    fireEvent.click(screen.getByRole('button', { name: '採用其他分頁版本' }))
+    expect(sessionState().state).toBe('unconfirmed')
+    expect(screen.getByRole('region', { name: '未確認的新增操作' }).textContent).toContain(originalId)
+    fireEvent.click(screen.getByRole('button', { name: '加入預設科目 化學' }))
+    expect(screen.getByRole('alert').textContent).toContain('不能直接再次新增')
+    expect(memory().subjects.filter((item) => item.name === '化學')).toHaveLength(0)
+  })
+
+  it('我的科目 × 沿用跨歷史引用保護，不會把取消適用誤當安全刪除', () => {
+    const data = migrateV6ToV7(migrateV5ToV6(fixture()))
+    const subject = data.subjects.find((item) => data.recurringLessons.some((lesson) => lesson.subjectId === item.id))!
+    subject.applicableSchoolLevels = [data.teachingUnits[0].schoolLevel]
+    const { raw } = startStorage('subjects', data)
+    fireEvent.click(screen.getByRole('button', { name: `永久刪除科目「${subject.name}」` }))
+    expect(screen.getByRole('alert').textContent).toContain('引用')
+    expect(window.confirm).not.toHaveBeenCalled()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+    expect(memory().subjects.some((item) => item.id === subject.id)).toBe(true)
+  })
+
   it.each(['subjects', 'classes'] as const)('%s returns to clean after restoring the original editable values', (mode) => {
     startStorage(mode)
     const field = mode === 'subjects' ? within(subjectRow()).getByLabelText('國文名稱') : within(classRow()).getByLabelText('班級教室')
@@ -478,21 +557,21 @@ describe('resource session with real v7 storage', () => {
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
   })
 
-  it('search and school-level filters hide rows without discarding their independent drafts', () => {
+  it('搜尋與學制切換隱藏項目時不會丟棄獨立科目草稿', () => {
     const data = storageFixture()
+    data.teachingUnits.push({ ...data.teachingUnits[0], id: 'senior-unit', name: '高中部', schoolLevel: 'senior-high' })
     data.subjects.push({ id: 'senior-only', name: '高中專用', shortName: '高專', color: '#123456', applicableSchoolLevels: ['senior-high'] })
     startStorage('subjects', data)
-    fireEvent.change(screen.getByLabelText('適用學制篩選'), { target: { value: 'all' } })
-    fireEvent.change(within(subjectRow('高中專用')).getByLabelText('高中專用名稱'), { target: { value: '高中草稿' } })
     fireEvent.change(within(subjectRow()).getByLabelText('國文名稱'), { target: { value: '仍可見草稿' } })
     returnToResourceList()
     fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '國文' } })
     expect(screen.queryByRole('button', { name: '編輯科目 高中專用' })).toBeNull()
-    fireEvent.change(screen.getByLabelText('適用學制篩選'), { target: { value: 'current' } })
-    expect(sessionState().keys).toHaveLength(2)
+    fireEvent.change(screen.getByLabelText('目前學制'), { target: { value: 'senior-unit' } })
     fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '' } })
-    fireEvent.change(screen.getByLabelText('適用學制篩選'), { target: { value: 'all' } })
+    fireEvent.change(within(subjectRow('高中專用')).getByLabelText('高中專用名稱'), { target: { value: '高中草稿' } })
+    expect(sessionState().keys).toHaveLength(2)
     expect((within(subjectRow('高中專用')).getByLabelText('高中專用名稱') as HTMLInputElement).value).toBe('高中草稿')
+    fireEvent.change(screen.getByLabelText('目前學制'), { target: { value: data.teachingUnits[0].id } })
     expect((within(subjectRow()).getByLabelText('國文名稱') as HTMLInputElement).value).toBe('仍可見草稿')
   })
 
@@ -830,15 +909,15 @@ describe('resource session with real v7 storage', () => {
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
   })
 
-  it('App keeps draft protection while returning the manager to its source menu', () => {
+  it('App keeps draft protection while returning the manager to its Sidebar source', () => {
     vi.useFakeTimers()
     localStorage.clear()
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(storageFixture()))
     render(<App />)
     expect(screen.queryByRole('button', { name: '科目與班級' })).toBeNull()
-    expect(screen.getByRole('button', { name: '班級管理' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
-    fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
+    expect(screen.getByRole('button', { name: /管理班級/ })).toBeTruthy()
+    const trigger = screen.getByRole('button', { name: /管理科目/ })
+    fireEvent.click(trigger)
     openSubjectCreate()
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: 'App 草稿' } })
     vi.mocked(window.confirm).mockReturnValue(false)
@@ -847,6 +926,6 @@ describe('resource session with real v7 storage', () => {
     vi.mocked(window.confirm).mockReturnValue(true)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: '管理科目' })).toBeNull()
-    expect(screen.getByRole('dialog', { name: '新增課程' })).toBeTruthy()
+    expect(document.activeElement).toBe(trigger)
   })
 })

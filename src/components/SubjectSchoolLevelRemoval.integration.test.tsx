@@ -194,8 +194,7 @@ describe('subject school-level removal UI', () => {
     const data = fixture()
     data.subjects[0].applicableSchoolLevels = ['senior-high']
     start(data)
-    fireEvent.change(screen.getByLabelText('適用學制篩選'), { target: { value: 'all' } })
-    expect(within(row()).queryByRole('button', { name: '解除國中部適用' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '編輯科目 國文' })).toBeNull()
     fireEvent.change(screen.getByLabelText('目前學制'), { target: { value: 'senior-unit' } })
     expect(within(row()).getByRole('button', { name: '解除高中部適用' })).toBeTruthy()
   })

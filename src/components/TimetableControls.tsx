@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { Check, ChevronDown } from 'lucide-react'
 import type { Timetable } from '../types'
 import type { TimetableDetails } from '../data/timetablesV6'
 import { Modal } from './Modal'
@@ -13,14 +14,68 @@ interface ControlsProps {
 }
 
 export function TimetableControls({ timetables, selected, canManage, onSelect, onEdit, notice }: ControlsProps) {
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  const switcherRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  useEffect(() => {
+    if (!switcherOpen) return
+    const selectedIndex = Math.max(0, timetables.findIndex((item) => item.id === selected?.id))
+    queueMicrotask(() => optionRefs.current[selectedIndex]?.focus())
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!switcherRef.current?.contains(event.target as Node)) setSwitcherOpen(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setSwitcherOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [selected?.id, switcherOpen, timetables])
+
+  const moveOptionFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || timetables.length === 0) return
+    event.preventDefault()
+    const currentIndex = optionRefs.current.findIndex((item) => item === document.activeElement)
+    const nextIndex = event.key === 'Home' ? 0
+      : event.key === 'End' ? timetables.length - 1
+        : event.key === 'ArrowDown' ? (currentIndex + 1 + timetables.length) % timetables.length
+          : (currentIndex - 1 + timetables.length) % timetables.length
+    optionRefs.current[nextIndex]?.focus()
+  }
+
   return <div className="timetable-controls">
     <div className="timetable-teacher"><span>授課教師</span><strong>{selected ? selected.teacherName ?? '待補授課教師' : '請選擇教師課表'}</strong></div>
     {notice && <p className="settings-empty" role="status">{notice}</p>}
     <div className="timetable-control-row">
-      <label>課表<select aria-label="教師課表" value="" onChange={(event) => { if (event.target.value) onSelect(event.target.value) }}>
-        <option value="">切換課表</option>
-        {timetables.map((item) => <option key={item.id} value={item.id}>{item.name}・{item.teacherName ?? '待補授課教師'}</option>)}
-      </select></label>
+      <div className="timetable-switcher" ref={switcherRef}>
+        <button ref={triggerRef} type="button" aria-label="切換課表" aria-haspopup="menu" aria-expanded={switcherOpen} onClick={() => setSwitcherOpen((value) => !value)} onKeyDown={(event) => {
+          if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+          event.preventDefault()
+          setSwitcherOpen(true)
+        }}>切換課表 <ChevronDown aria-hidden="true" /></button>
+        {switcherOpen && <div className="timetable-switcher-popover" role="menu" aria-label="教師課表" onKeyDown={moveOptionFocus}>
+          {timetables.map((item, index) => <button
+            ref={(element) => { optionRefs.current[index] = element }}
+            type="button"
+            role="menuitemradio"
+            data-timetable-id={item.id}
+            aria-checked={item.id === selected?.id}
+            key={item.id}
+            onClick={() => {
+              onSelect(item.id)
+              setSwitcherOpen(false)
+              triggerRef.current?.focus()
+            }}
+          ><span><strong>{item.name}</strong><small>{item.teacherName ?? '待補授課教師'}</small></span>{item.id === selected?.id && <Check aria-label="目前課表" />}</button>)}
+        </div>}
+      </div>
       {canManage && <button type="button" onClick={(event) => { event.currentTarget.focus(); onEdit() }} disabled={!selected}>編輯課表資訊</button>}
     </div>
   </div>
