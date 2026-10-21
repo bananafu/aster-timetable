@@ -147,9 +147,12 @@ function hasSafeSubjectReferences(current: AppDataV4, next: AppDataV7): boolean 
   return true
 }
 
-export function isSafeAppDataV7Update(current: AppDataV4, next: AppDataV4): boolean {
+/**
+ * V7 safety rules that do not depend on the global Subject ownership model.
+ * V8 reuses these guards and supplies its own project-scoped Subject rules.
+ */
+export function isSafeAppDataV7UpdateExceptSubjects(current: AppDataV4, next: AppDataV4): boolean {
   if (!isCompatibleAppDataV7(next) || !hasSafeV7TimetableUpdate(current, next)) return false
-  if (!hasSafeSubjectUpdate(current, next) || !hasSafeSubjectReferences(current, next)) return false
   if ((current.oneOffLessons ?? []).some((lesson) => {
     if (lesson.time.mode !== 'period') return false
     const retained = next.oneOffLessons.find((item) => item.id === lesson.id)
@@ -168,4 +171,10 @@ export function isSafeAppDataV7Update(current: AppDataV4, next: AppDataV4): bool
   return [...archivedIds].every((projectId) => !next.projects.some((project) => project.id === projectId)
     || JSON.stringify(current.oneOffLessons?.filter((item) => item.projectId === projectId) ?? [])
       === JSON.stringify(next.oneOffLessons.filter((item) => item.projectId === projectId)))
+}
+
+export function isSafeAppDataV7Update(current: AppDataV4, next: AppDataV4): boolean {
+  return isSafeAppDataV7UpdateExceptSubjects(current, next)
+    && hasSafeSubjectUpdate(current, next as AppDataV7)
+    && hasSafeSubjectReferences(current, next as AppDataV7)
 }

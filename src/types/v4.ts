@@ -140,9 +140,37 @@ export interface MigrationWarningV4 {
   message: string
 }
 
+export interface TeachingProgressContent {
+  chapter: string
+  unit: string
+  note: string
+}
+
+export interface PreviousProgressSnapshot {
+  content: TeachingProgressContent
+  updatedAt: string
+}
+
+export interface TeachingProgressScope {
+  projectId: string
+  timetableId: string
+  teachingUnitId: string
+  classId: string
+  subjectId: string
+}
+
+/** Exactly one record may exist for each complete TeachingProgressScope. */
+export interface TeachingProgress extends TeachingProgressScope {
+  id: string
+  content: TeachingProgressContent
+  previousProgress: PreviousProgressSnapshot | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface AppDataV4 {
   // Legacy data operations retain a common shape across persisted generations.
-  schemaVersion: 4 | 5 | 6 | 7
+  schemaVersion: 4 | 5 | 6 | 7 | 8
   activeProjectId: string | null
   projects: TimetableProject[]
   /** Required in v6; absent from the retained v4/v5 formats. */
@@ -160,6 +188,7 @@ export interface AppDataV4 {
 }
 
 export type SubjectV5 = Subject & { applicableSchoolLevels: SchoolLevel[] }
+export type SubjectV8 = SubjectV5 & { projectId: string }
 export type AppDataV5 = Omit<AppDataV4, 'schemaVersion' | 'subjects' | 'oneOffLessons'> & {
   schemaVersion: 5
   subjects: SubjectV5[]
@@ -175,4 +204,10 @@ export type AppDataV6 = Omit<AppDataV5, 'schemaVersion' | 'timetables' | 'recurr
 export type AppDataV7 = Omit<AppDataV6, 'schemaVersion' | 'oneOffLessons'> & {
   schemaVersion: 7
   oneOffLessons: OneOffLesson[]
+}
+
+export type AppDataV8 = Omit<AppDataV7, 'schemaVersion' | 'subjects'> & {
+  schemaVersion: 8
+  subjects: SubjectV8[]
+  teachingProgress: TeachingProgress[]
 }
