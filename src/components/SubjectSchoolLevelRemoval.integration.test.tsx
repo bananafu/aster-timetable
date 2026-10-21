@@ -38,9 +38,9 @@ function Harness() {
     {view === 'manager' && <CourseResourceManager data={data} setData={setData} mode="subjects" storageStatus={status} storagePersistence={persistence} />}
     {view === 'fixed' && <LessonEditor data={data} setData={setData} timetableId={data.timetables?.[0].id}
       storageStatus={status} storagePersistence={persistence} onClose={() => {}} onSaved={() => {}} />}
-    {view === 'one-off' && isCompatibleAppDataV7(data) && <OneOffLessonEditor data={data} setData={setData}
+    {view === 'one-off' && isCompatibleAppDataV7(data) && <OneOffLessonEditor data={data}
       projectId={data.projects[0].id} timetableId={data.timetables[0].id} initialTeachingUnitId={data.teachingUnits[0].id}
-      initialDate="2026-09-07" storageStatus={status} storagePersistence={persistence} onClose={() => {}} onSave={() => {}} />}
+      initialDate="2026-09-07" onClose={() => {}} onSave={() => {}} />}
   </>
 }
 

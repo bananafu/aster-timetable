@@ -12,10 +12,11 @@ interface Props {
   value: string
   onChange: (subjectId: string) => void
   onCreateRequest: () => void
+  createLabel?: string
   disabled?: boolean
 }
 
-export function SubjectCombobox({ subjects, schoolLevel, value, onChange, onCreateRequest, disabled = false }: Props) {
+export function SubjectCombobox({ subjects, schoolLevel, value, onChange, onCreateRequest, createLabel = '新增自訂科目', disabled = false }: Props) {
   const id = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -156,7 +157,7 @@ export function SubjectCombobox({ subjects, schoolLevel, value, onChange, onCrea
         ><i aria-hidden="true" style={{ background: subject.color }} /><span><strong>{subject.name}</strong><small>{subject.shortName}</small></span></div>)}
         {results.length === 0 && <p className="subject-combobox-empty" role="status">找不到符合的科目</p>}
       </div>
-      <button type="button" className="subject-combobox-create" onMouseDown={(event) => event.preventDefault()} onClick={() => { closeMenu(); onCreateRequest() }}><Plus size={14} />新增自訂科目</button>
+      <button type="button" className="subject-combobox-create" onMouseDown={(event) => event.preventDefault()} onClick={() => { closeMenu(); onCreateRequest() }}><Plus size={14} />{createLabel}</button>
     </div>}
   </div>
 }

@@ -43,7 +43,7 @@ type TimetableDialog = {
 }
 
 type ResourceMode = 'classes' | 'subjects'
-type ResourceDialogSource = 'sidebar'
+type ResourceDialogSource = 'sidebar' | 'lesson-editor' | 'one-off-editor'
 type ResourceDialogState = { mode: ResourceMode; source: ResourceDialogSource }
 type AddChoiceFocus = 'lesson' | 'one-off' | null
 type OneOffEditorState = { projectId: string; timetableId: string; date?: string; id?: string; source: 'add-choice' | 'schedule' }
@@ -147,6 +147,7 @@ export default function App() {
   const editSubmittingRef = useRef(false)
   const deleteSubmittingRef = useRef(false)
   const lessonEditorFromAddRef = useRef(false)
+  const resourceCreatedRef = useRef<((id: string) => void) | null>(null)
   const sidebarSubjectManagerButtonRef = useRef<HTMLButtonElement>(null)
   const sidebarClassManagerButtonRef = useRef<HTMLButtonElement>(null)
   const restoreSidebarResourceFocusRef = useRef<ResourceMode | null>(null)
@@ -488,7 +489,19 @@ export default function App() {
     if (!resourceDialog) return
     const { mode, source } = resourceDialog
     if (source === 'sidebar') restoreSidebarResourceFocusRef.current = mode
+    if (source === 'lesson-editor' || source === 'one-off-editor') resourceCreatedRef.current = null
     setResourceDialog(null)
+  }
+
+  const openResourceManagerFromEditor = (source: 'lesson-editor' | 'one-off-editor', mode: ResourceMode,
+    context: { projectId: string; teachingUnitId: string }, onCreated: (id: string) => void) => {
+    const unit = appData.teachingUnits.find((item) => item.id === context.teachingUnitId && item.projectId === context.projectId)
+    if (!unit || context.projectId !== appData.activeProjectId || storageStatus !== 'saved' || storagePersistence.pending) return
+    resourceSession.requestTransition(() => {
+      resourceSession.setView({ projectId: context.projectId, schoolId: unit.schoolId, unitId: unit.id, showClassCreate: false })
+      resourceCreatedRef.current = onCreated
+      setResourceDialog({ mode, source })
+    })
   }
 
   const openSettingsFromResourceManager = () => {
@@ -520,9 +533,12 @@ export default function App() {
         if (canManageResources) setResourceDialog({ mode: page, source: 'sidebar' })
         return
       }
-      if (page !== 'settings') setHistoricalProjectId(null)
+      if (page === 'settings') {
+        openProjectSettings()
+        return
+      }
+      setHistoricalProjectId(null)
       setActivePage(page)
-      if (page === 'settings') openProjectSettings()
     }
     if (resourceDialog) resourceSession.requestTransition(navigate)
     else navigate()
@@ -600,11 +616,10 @@ export default function App() {
         setSelectedLessonOverrideId(null)
         setLessonEditorOpen(true)
       }} onClose={() => { setAddChoiceOpen(false); setAddChoiceFocus(null) }} />}
-      {resourceDialog && <CourseResourceManagerDialog key={`${resourceDialog.source}:${resourceDialog.mode}`} data={appData} setData={setAppData} mode={resourceDialog.mode} storageStatus={storageStatus} storagePersistence={storagePersistence} storageControls={storageControls} session={resourceSession} readOnly={Boolean(historicalProject)} onOpenSettings={openSettingsFromResourceManager} onClose={closeResourceManager} />}
       {timetableDialog?.mode === 'edit' ? <TimetableInfoDialog key={`timetable-info:${timetableDialog.timetableId}`} timetable={timetableDialog.source} defaultDate={timetableDialog.defaultDate} error={timetableError} submitting={Boolean(pendingTimetableCopy || pendingTimetableEdit || pendingTimetableDelete)} deleteImpact={timetableDialog.deleteImpact} onEdit={submitTimetable} onCopy={submitTimetableCopy} onDelete={submitTimetableDelete} onClose={() => { setTimetableDialog(null); setTimetableError('') }} /> : timetableDialog && <TimetableForm key={`create:${timetableDialog.projectId}`} error={timetableError} onSubmit={submitTimetable} onClose={() => { setTimetableDialog(null); setTimetableError('') }} />}
-      {lessonEditorOpen && !historicalProject && <LessonEditor key={`lesson-editor:${activeTimetable?.id ?? activeProject?.id}`} data={appData} setData={setAppData} storageStatus={storageStatus} storagePersistence={storagePersistence} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} occurrenceOverrideId={selectedLessonOverrideId} dragIntent={lessonDragIntent} onOpenSettings={() => { lessonEditorFromAddRef.current = false; setLessonEditorOpen(false); openProjectSettings() }} onClose={() => { const returnToChoice = lessonEditorFromAddRef.current; setLessonEditorOpen(false); lessonEditorFromAddRef.current = false; if (returnToChoice) { setAddChoiceFocus('lesson'); setAddChoiceOpen(true) } }} onSaved={(projectId) => { lessonEditorFromAddRef.current = false; if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
+      {lessonEditorOpen && !historicalProject && <LessonEditor key={`lesson-editor:${activeTimetable?.id ?? activeProject?.id}`} data={appData} setData={setAppData} storageStatus={storageStatus} storagePersistence={storagePersistence} timetableId={activeTimetable?.id} lessonId={selectedLessonId} occurrenceDate={selectedLessonDate} occurrenceOverrideId={selectedLessonOverrideId} dragIntent={lessonDragIntent} onOpenSettings={() => { lessonEditorFromAddRef.current = false; setLessonEditorOpen(false); openProjectSettings() }} onManageResource={(mode, context, onCreated) => openResourceManagerFromEditor('lesson-editor', mode, context, onCreated)} onClose={() => { if (resourceDialog?.source === 'lesson-editor') return; const returnToChoice = lessonEditorFromAddRef.current; setLessonEditorOpen(false); lessonEditorFromAddRef.current = false; if (returnToChoice) { setAddChoiceFocus('lesson'); setAddChoiceOpen(true) } }} onSaved={(projectId) => { lessonEditorFromAddRef.current = false; if (projectId !== appData.activeProjectId) switchProject(projectId) }} />}
       {oneOffEditor && !isCompatibleAppDataV7(appData) && <Modal title="單日課程暫停編輯" onClose={() => { const returnToChoice = oneOffEditor.source === 'add-choice'; setOneOffEditor(null); if (returnToChoice) { setAddChoiceFocus('one-off'); setAddChoiceOpen(true) } }}><div className="form-grid"><p className="full one-off-error" role="alert">目前資料不是有效的 AppDataV7，無法安全寫入單日課程。請先處理儲存狀態。</p><div className="full form-actions"><button type="button" onClick={() => { const returnToChoice = oneOffEditor.source === 'add-choice'; setOneOffEditor(null); if (returnToChoice) { setAddChoiceFocus('one-off'); setAddChoiceOpen(true) } }}>關閉</button></div></div></Modal>}
-      {oneOffEditor && isCompatibleAppDataV7(appData) && <OneOffLessonEditor key={`${oneOffEditor.timetableId}:${oneOffEditor.id ?? oneOffEditor.date ?? 'new'}`} data={appData} setData={setAppData} storageStatus={storageStatus} storagePersistence={storagePersistence} projectId={oneOffEditor.projectId} timetableId={oneOffEditor.timetableId} oneOffLessonId={oneOffEditor.id} initialDate={oneOffEditor.date} onClose={() => { if (!oneOffWrites.pending) { const returnToChoice = oneOffEditor.source === 'add-choice'; setOneOffEditor(null); if (returnToChoice) { setAddChoiceFocus('one-off'); setAddChoiceOpen(true) } } }} onSave={async (request) => {
+      {oneOffEditor && isCompatibleAppDataV7(appData) && <OneOffLessonEditor key={`${oneOffEditor.timetableId}:${oneOffEditor.id ?? oneOffEditor.date ?? 'new'}`} data={appData} projectId={oneOffEditor.projectId} timetableId={oneOffEditor.timetableId} oneOffLessonId={oneOffEditor.id} initialDate={oneOffEditor.date} onManageResource={(mode, context, onCreated) => openResourceManagerFromEditor('one-off-editor', mode, context, onCreated)} onClose={() => { if (resourceDialog?.source === 'one-off-editor' || oneOffWrites.pending) return; const returnToChoice = oneOffEditor.source === 'add-choice'; setOneOffEditor(null); if (returnToChoice) { setAddChoiceFocus('one-off'); setAddChoiceOpen(true) } }} onSave={async (request) => {
         if (historicalProject || oneOffEditor.projectId !== displayProject?.id || oneOffEditor.timetableId !== displayTimetable?.id) throw new Error('目前課表已切換，請重新開啟單日課程。')
         await oneOffWrites.save(oneOffEditor, request)
         setOneOffNotice(request.id ? '單日課程已儲存。' : '單日課程已新增並儲存。')
@@ -615,6 +630,7 @@ export default function App() {
         setOneOffNotice('單日課程已刪除並儲存。')
         setOneOffEditor(null)
       }} />}
+      {resourceDialog && <CourseResourceManagerDialog key={`${resourceDialog.source}:${resourceDialog.mode}`} data={appData} setData={setAppData} mode={resourceDialog.mode} storageStatus={storageStatus} storagePersistence={storagePersistence} storageControls={storageControls} session={resourceSession} readOnly={Boolean(historicalProject)} onOpenSettings={openSettingsFromResourceManager} onCreated={(mode, id) => { if (mode !== resourceDialog.mode) return; resourceCreatedRef.current?.(id); resourceCreatedRef.current = null; setResourceDialog(null) }} onClose={closeResourceManager} />}
     </div>
   )
 }

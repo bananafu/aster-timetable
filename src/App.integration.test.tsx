@@ -231,6 +231,101 @@ describe('App v4 runtime', () => {
     expect(within(dialog).getByRole('button', { name: /學校與學制管理/ })).toBeTruthy()
   })
 
+  it.each(['original', 'second'].flatMap((project) => [
+    { project, page: '我的課表', heading: '課表', scroller: '.multi-schedule-scroll' },
+    { project, page: '總覽', heading: '總覽', scroller: '.overview-calendar-scroll' },
+    { project, page: '會議與活動', heading: '會議與活動', scroller: '.events-panel' },
+  ]))('專案管理開關保留 $project 專案的 $page 背景與檢視狀態', ({ project, page, heading, scroller }) => {
+    const first = copyReadyData()
+    let index = 0
+    const second = createBlankProject(first, { name: '第二專案', teacherName: '王老師', academicYear: 116,
+      semester: 'first', startDate: '2027-08-30', endDate: '2028-01-20' }, () => `modal-project-${++index}`)
+    const projectId = project === 'original' ? first.activeProjectId! : second.activeProjectId!
+    const data = createTimetable({ ...second, activeProjectId: first.activeProjectId }, projectId,
+      { name: '另一份課表', teacherName: '陳老師' }, 'modal-teacher')
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+    const projectSelector = screen.getByLabelText('課表專案') as HTMLSelectElement
+    fireEvent.change(projectSelector, { target: { value: projectId } })
+    act(() => vi.advanceTimersByTime(200))
+    switchTimetable('modal-teacher')
+    fireEvent.click(screen.getByRole('button', { name: page }))
+    fireEvent.click(screen.getByRole('button', { name: '下一週' }))
+    if (page === '我的課表') {
+      fireEvent.click(screen.getByRole('tab', { name: '各校課表' }))
+      fireEvent.change(screen.getByLabelText('篩選學制'), {
+        target: { value: data.teachingUnits.find((unit) => unit.projectId === projectId)!.id },
+      })
+      fireEvent.click(screen.getByRole('button', { name: '七天' }))
+    }
+    const main = screen.getByRole('main')
+    const pageHeading = within(main).getByRole('heading', { level: 1, name: heading })
+    const navigationButton = screen.getByRole('button', { name: page })
+    const background = main.innerHTML
+    const scrollArea = main.querySelector<HTMLElement>(scroller)!
+    const pageScroll = document.documentElement.scrollTop
+    scrollArea.scrollLeft = 240
+    scrollArea.scrollTop = 160
+    document.documentElement.scrollTop = 320
+    const raw = localStorage.getItem(APP_DATA_V7_KEY)
+    const write = vi.spyOn(Storage.prototype, 'setItem')
+    const trigger = screen.getByRole('button', { name: '專案設定' })
+    const assertBackground = () => {
+      expect(main.contains(pageHeading)).toBe(true)
+      expect(pageHeading.textContent).toBe(heading)
+      expect(main.innerHTML).toBe(background)
+      expect(navigationButton.getAttribute('aria-current')).toBe('page')
+      expect(projectSelector.value).toBe(projectId)
+      expect(main.querySelector(scroller)).toBe(scrollArea)
+      expect(scrollArea.scrollLeft).toBe(240)
+      expect(scrollArea.scrollTop).toBe(160)
+      expect(document.documentElement.scrollTop).toBe(320)
+    }
+    try {
+      for (const close of ['button', 'escape', 'backdrop']) {
+        trigger.focus()
+        fireEvent.click(trigger)
+        const dialog = screen.getByRole('dialog', { name: '專案設定' })
+        assertBackground()
+        // Clicking inside the dialog must not dismiss it.
+        fireEvent.mouseDown(dialog)
+        expect(dialog.isConnected).toBe(true)
+        if (close === 'button') fireEvent.click(within(dialog).getByRole('button', { name: '關閉對話框' }))
+        else if (close === 'escape') fireEvent.keyDown(window, { key: 'Escape' })
+        else fireEvent.mouseDown(dialog.parentElement!)
+        expect(dialog.isConnected).toBe(false)
+        assertBackground()
+      }
+      act(() => vi.advanceTimersByTime(200))
+      expect(write).not.toHaveBeenCalled()
+      expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+      if (page === '會議與活動') fireEvent.click(screen.getByRole('button', { name: '總覽' }))
+      expect(selectedTimetableId()).toBe('modal-teacher')
+    } finally {
+      document.documentElement.scrollTop = pageScroll
+    }
+  })
+
+  it('從資源草稿開啟專案管理仍須確認，拒絕後保留草稿與背景頁面', () => {
+    const data = copyReadyData()
+    const raw = JSON.stringify(data)
+    localStorage.setItem(APP_DATA_V7_KEY, raw)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
+    fireEvent.click(screen.getByRole('button', { name: '編輯科目 國文' }))
+    const name = screen.getByLabelText('國文名稱') as HTMLInputElement
+    fireEvent.change(name, { target: { value: '保留的科目草稿' } })
+    fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('dialog', { name: '專案設定' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    expect(name.value).toBe('保留的科目草稿')
+    expect(screen.getByRole('heading', { level: 1, name: '課表' })).toBeTruthy()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+  })
+
   it('缺少學校或學制時只提供既有設定引導，關閉設定後返回原管理器', () => {
     const source = copyReadyData()
     const data = { ...source, schools: [], teachingUnits: [], timetables: [], classes: [], courses: [], recurringLessons: [], overrides: [], oneOffLessons: [], events: [] }

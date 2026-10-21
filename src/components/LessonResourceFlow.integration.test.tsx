@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useRef, useState } from 'react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { migrateV4ToV5 } from '../data/migrationsV5'
@@ -9,11 +10,15 @@ import { initialData } from '../data/seed'
 import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { isCompatibleAppDataV7 } from '../data/validators/v7'
 import { useAppDataV4 } from '../hooks/useAppDataV4'
+import { useResourceManagementSession } from '../hooks/useResourceManagementSession'
 import type { AppDataV7 } from '../types'
+import { CourseResourceManagerDialog } from './CourseResourceManager'
 import { LessonEditor } from './LessonEditor'
 import { OneOffLessonEditor } from './OneOffLessonEditor'
 
 type Mode = 'fixed' | 'one-off'
+type ResourceMode = 'classes' | 'subjects'
+
 const base = (): AppDataV7 => {
   const data = migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))))
   data.recurringLessons = []
@@ -23,10 +28,31 @@ const base = (): AppDataV7 => {
 }
 
 function Harness({ mode }: { mode: Mode }) {
-  const [data, setData, status, , persistence] = useAppDataV4()
-  return <><output data-testid="storage-state">{status}</output>{mode === 'fixed'
-    ? <LessonEditor data={data} setData={setData} storageStatus={status} storagePersistence={persistence} timetableId={data.timetables?.[0]?.id} onClose={vi.fn()} onSaved={vi.fn()} />
-    : isCompatibleAppDataV7(data) && <OneOffLessonEditor data={data} setData={setData} storageStatus={status} storagePersistence={persistence} projectId={data.projects[0].id} timetableId={data.timetables[0].id} initialDate="2026-09-08" onSave={vi.fn()} onClose={vi.fn()} />}</>
+  const [data, setData, status, controls, persistence] = useAppDataV4()
+  const session = useResourceManagementSession(data, setData, status, persistence)
+  const [manager, setManager] = useState<ResourceMode | null>(null)
+  const created = useRef<((id: string) => void) | null>(null)
+  const editorClose = useRef(vi.fn())
+  const openManager = (resourceMode: ResourceMode, context: { projectId: string; teachingUnitId: string }, onCreated: (id: string) => void) => {
+    const unit = data.teachingUnits.find((item) => item.id === context.teachingUnitId && item.projectId === context.projectId)
+    if (!unit) return
+    session.requestTransition(() => {
+      session.setView({ projectId: context.projectId, schoolId: unit.schoolId, unitId: unit.id, showClassCreate: false })
+      created.current = onCreated
+      setManager(resourceMode)
+    })
+  }
+  const closeManager = () => { created.current = null; setManager(null) }
+  const closeEditor = () => { if (!manager) editorClose.current() }
+  return <>
+    <output data-testid="storage-state">{status}</output>
+    <output data-testid="editor-close-count">{editorClose.current.mock.calls.length}</output>
+    {mode === 'fixed'
+      ? <LessonEditor data={data} setData={setData} storageStatus={status} storagePersistence={persistence} timetableId={data.timetables?.[0]?.id} onManageResource={openManager} onClose={closeEditor} onSaved={vi.fn()} />
+      : isCompatibleAppDataV7(data) && <OneOffLessonEditor data={data} projectId={data.projects[0].id} timetableId={data.timetables[0].id} initialDate="2026-09-08" onManageResource={openManager} onSave={vi.fn()} onClose={closeEditor} />}
+    {manager && <CourseResourceManagerDialog data={data} setData={setData} mode={manager} storageStatus={status} storagePersistence={persistence} storageControls={controls} session={session}
+      onCreated={(resourceMode, id) => { if (resourceMode !== manager) return; created.current?.(id); created.current = null; setManager(null) }} onClose={closeManager} />}
+  </>
 }
 
 function start(data: AppDataV7, mode: Mode) {
@@ -39,41 +65,50 @@ function start(data: AppDataV7, mode: Mode) {
   }
 }
 
+function openManager(mode: ResourceMode) {
+  if (mode === 'subjects' && screen.queryAllByRole('button', { name: '管理科目' }).length === 0) {
+    fireEvent.click(screen.getByLabelText('課程科目'))
+  }
+  fireEvent.click(screen.getAllByRole('button', { name: mode === 'classes' ? '管理班級' : '管理科目' })[0])
+  return screen.getByRole('dialog', { name: mode === 'classes' ? '管理班級' : '管理科目' })
+}
+
 function createClass() {
-  fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
-  const group = screen.getByRole('group', { name: '新增班級' })
-  const number = within(group).queryByLabelText('新班級班號')
+  const dialog = openManager('classes')
+  fireEvent.click(within(dialog).getByRole('button', { name: '＋ 新增班級' }))
+  const form = within(dialog).getByRole('form', { name: '新增班級表單' })
+  const number = within(form).queryByLabelText('新班級班號')
   if (number) fireEvent.change(number, { target: { value: '9' } })
-  else fireEvent.change(within(group).getByLabelText('新班級名稱'), { target: { value: '新班級' } })
-  fireEvent.click(within(group).getByRole('button', { name: '建立班級' }))
+  else fireEvent.change(within(form).getByLabelText('新班級名稱'), { target: { value: '新班級' } })
+  fireEvent.click(within(form).getByRole('button', { name: '新增班級' }))
 }
 
 function createSubject(name = '閱讀策略') {
-  fireEvent.click(screen.getByRole('button', { name: '＋ 新增科目' }))
-  const group = screen.getByRole('group', { name: '新增科目' })
-  fireEvent.change(within(group).getByLabelText('新科目名稱'), { target: { value: name } })
-  fireEvent.click(within(group).getByRole('button', { name: '建立科目' }))
+  const dialog = openManager('subjects')
+  fireEvent.click(within(dialog).getByRole('button', { name: '＋ 新增科目' }))
+  const form = within(dialog).getByRole('form', { name: '新增科目表單' })
+  fireEvent.change(within(form).getByLabelText('新科目名稱'), { target: { value: name } })
+  fireEvent.change(within(form).getByLabelText('新科目簡稱'), { target: { value: '閱讀' } })
+  fireEvent.click(within(form).getByRole('button', { name: '儲存新增科目' }))
 }
 
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks() })
 
-describe('lesson editor inline resource creation', () => {
-  it.each<Mode>(['fixed', 'one-off'])('%s creates a missing class and preserves lesson fields without creating a lesson', async (mode) => {
+describe('lesson editor resource manager flow', () => {
+  it.each<Mode>(['fixed', 'one-off'])('%s creates and selects a missing class while preserving the lesson draft', async (mode) => {
     const data = base()
     data.classes = []
     start(data, mode)
-    expect(screen.getByText('目前學制尚未建立班級')).toBeTruthy()
     if (mode === 'fixed') {
       fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '3' } })
       fireEvent.change(screen.getByLabelText('課程輪週'), { target: { value: 'B' } })
-      fireEvent.change(screen.getByLabelText('課程節次'), { target: { value: String(data.teachingUnits[0].periods[1].id) } })
       fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '自訂教室' } })
     } else {
       fireEvent.change(screen.getByLabelText('教室（選填）'), { target: { value: '自訂教室' } })
       fireEvent.change(screen.getByLabelText('時間模式'), { target: { value: 'custom' } })
     }
     createClass()
-    await waitFor(() => expect(screen.queryByRole('group', { name: '新增班級' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull())
     const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV7
     expect(stored.classes).toHaveLength(1)
     expect(stored.recurringLessons).toEqual([])
@@ -82,7 +117,6 @@ describe('lesson editor inline resource creation', () => {
     if (mode === 'fixed') {
       expect((screen.getByLabelText('課程星期') as HTMLSelectElement).value).toBe('3')
       expect((screen.getByLabelText('課程輪週') as HTMLSelectElement).value).toBe('B')
-      expect((screen.getByLabelText('課程節次') as HTMLSelectElement).value).toBe(String(data.teachingUnits[0].periods[1].id))
       expect((screen.getByPlaceholderText('依班級預設') as HTMLInputElement).value).toBe('自訂教室')
     } else {
       expect((screen.getByLabelText('指定日期') as HTMLInputElement).value).toBe('2026-09-08')
@@ -91,13 +125,13 @@ describe('lesson editor inline resource creation', () => {
     }
   })
 
-  it.each<Mode>(['fixed', 'one-off'])('%s creates a missing subject with the current level', async (mode) => {
+  it.each<Mode>(['fixed', 'one-off'])('%s creates and selects a missing subject only after persistence succeeds', async (mode) => {
     const data = base()
     data.subjects = []
     start(data, mode)
-    expect(screen.getByText('目前學制尚未建立科目')).toBeTruthy()
     createSubject()
-    await waitFor(() => expect(screen.queryByRole('group', { name: '新增科目' })).toBeNull())
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '管理科目' })).toBeNull())
     const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV7
     expect(stored.subjects).toHaveLength(1)
     expect(stored.subjects[0]).toMatchObject({ name: '閱讀策略', applicableSchoolLevels: [data.teachingUnits[0].schoolLevel] })
@@ -107,58 +141,31 @@ describe('lesson editor inline resource creation', () => {
     else expect((screen.getByLabelText('科目') as HTMLSelectElement).value).toBe(stored.subjects[0].id)
   })
 
-  it.each<Mode>(['fixed', 'one-off'])('%s keeps the other empty-state entry after creating one resource', async (mode) => {
+  it.each<Mode>(['fixed', 'one-off'])('%s can open both managers from populated selectors', (mode) => {
     const data = base()
-    data.classes = []
-    data.subjects = []
     start(data, mode)
-    expect(screen.getByRole('button', { name: '＋ 新增班級' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '＋ 新增科目' })).toBeTruthy()
-    createClass()
-    await waitFor(() => expect(screen.queryByRole('group', { name: '新增班級' })).toBeNull())
-    expect(screen.getByRole('button', { name: '＋ 新增科目' })).toBeTruthy()
-    createSubject()
-    await waitFor(() => expect(screen.queryByRole('group', { name: '新增科目' })).toBeNull())
-    const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV7
-    expect(stored.classes).toHaveLength(1)
-    expect(stored.subjects).toHaveLength(1)
-    expect(stored.recurringLessons).toEqual([])
-    expect(stored.oneOffLessons).toEqual([])
+    const subjectManager = openManager('subjects')
+    fireEvent.click(within(subjectManager).getByRole('button', { name: '關閉對話框' }))
+    expect(openManager('classes')).toBeTruthy()
   })
 
-  it('cancelling inline creation leaves storage and the fixed lesson draft unchanged', () => {
+  it('Escape closes only the manager and preserves the fixed lesson editor draft', () => {
     const data = base()
-    data.classes = []
     start(data, 'fixed')
     fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '4' } })
-    const before = localStorage.getItem(APP_DATA_V7_KEY)
-    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
-    fireEvent.click(within(screen.getByRole('group', { name: '新增班級' })).getByRole('button', { name: '取消' }))
-    expect(screen.queryByRole('group', { name: '新增班級' })).toBeNull()
+    openManager('classes')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: '新增固定課程' })).toBeTruthy()
     expect((screen.getByLabelText('課程星期') as HTMLSelectElement).value).toBe('4')
-    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(before)
+    expect(screen.getByTestId('editor-close-count').textContent).toBe('0')
   })
 
-  it('Escape cancels inline creation and returns keyboard focus to its trigger', () => {
-    const data = base()
-    data.classes = []
-    start(data, 'one-off')
-    const trigger = screen.getByRole('button', { name: '＋ 新增班級' })
-    trigger.focus()
-    fireEvent.click(trigger)
-    const group = screen.getByRole('group', { name: '新增班級' })
-    const input = within(group).queryByLabelText('新班級班號') ?? within(group).getByLabelText('新班級名稱')
-    expect(document.activeElement).toBe(input)
-    fireEvent.keyDown(input, { key: 'Escape' })
-    expect(screen.queryByRole('group', { name: '新增班級' })).toBeNull()
-    expect(document.activeElement).toBe(trigger)
-    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(JSON.stringify(data))
-  })
-
-  it('does not close or claim success when storage writes fail', async () => {
+  it('keeps the manager, creation draft, and one-off lesson draft when storage writes fail', async () => {
     const data = base()
     data.subjects = []
     start(data, 'one-off')
+    fireEvent.change(screen.getByLabelText('教室（選填）'), { target: { value: '保留教室' } })
     const original = Storage.prototype.setItem
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
       if (key === APP_DATA_V7_KEY) throw new Error('quota')
@@ -166,26 +173,25 @@ describe('lesson editor inline resource creation', () => {
     })
     createSubject()
     await waitFor(() => expect(screen.getByTestId('storage-state').textContent).toBe('write-error'))
-    expect(screen.getByRole('group', { name: '新增科目' })).toBeTruthy()
-    await waitFor(() => expect(within(screen.getByRole('group', { name: '新增科目' })).getByRole('alert').textContent).toContain('尚未成功寫入'))
-    expect(screen.getByRole('dialog', { name: '新增單日課程' })).toBeTruthy()
-    expect(screen.queryByText('已建立科目')).toBeNull()
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe('閱讀策略')
+    expect((screen.getByLabelText('教室（選填）') as HTMLInputElement).value).toBe('保留教室')
+    expect(screen.queryByText('已儲存：已新增科目。')).toBeNull()
   })
 
-  it('keeps the fixed lesson draft on a cross-tab conflict', async () => {
+  it('does not auto-select a creation replaced by a cross-tab document', async () => {
     const data = base()
     data.classes = []
     start(data, 'fixed')
-    fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '5' } })
-    const originalRaw = localStorage.getItem(APP_DATA_V7_KEY)!
     createClass()
-    const external = { ...data, migrationWarnings: ['external'] }
-    const externalRaw = JSON.stringify(external)
-    localStorage.setItem(APP_DATA_V7_KEY, externalRaw)
-    fireEvent(window, new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue: originalRaw, newValue: externalRaw, storageArea: localStorage }))
+    const external = { ...data, migrationWarnings: [...data.migrationWarnings, { id: 'external', entityType: 'lesson' as const, entityId: 'external', message: 'external' }] }
+    const oldValue = localStorage.getItem(APP_DATA_V7_KEY)
+    const newValue = JSON.stringify(external)
+    localStorage.setItem(APP_DATA_V7_KEY, newValue)
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: APP_DATA_V7_KEY, oldValue, newValue, storageArea: localStorage })))
     await waitFor(() => expect(screen.getByTestId('storage-state').textContent).toBe('conflict'))
-    expect(screen.getByRole('group', { name: '新增班級' })).toBeTruthy()
-    expect((screen.getByLabelText('課程星期') as HTMLSelectElement).value).toBe('5')
-    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(externalRaw)
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    expect((screen.getByLabelText('課程班級') as HTMLSelectElement).value).toBe('')
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(newValue)
   })
 })

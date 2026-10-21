@@ -78,11 +78,11 @@ export function MultiSchoolSchedule({ data, weekDays, projectId: requestedProjec
   useEffect(() => { setDraggedLesson(null); setDragFeedback('') }, [timetableId])
   useEffect(() => {
     const cancelDrag = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setDraggedLesson(null); setDragFeedback('已取消拖曳，沒有修改任何資料。') }
+      if (event.key === 'Escape' && draggedLesson) { setDraggedLesson(null); setDragFeedback('已取消拖曳，沒有修改任何資料。') }
     }
     window.addEventListener('keydown', cancelDrag)
     return () => window.removeEventListener('keydown', cancelDrag)
-  }, [])
+  }, [draggedLesson])
 
   const schoolUnits = units.filter((item) => item.schoolId === schoolId)
   const fullWeekDays = useMemo(() => weekDays[0]

@@ -38,13 +38,21 @@ interface Props {
   readOnly?: boolean
   onOpenSettings?: () => void
   onClose?: () => void
+  onCreated?: (mode: 'classes' | 'subjects', id: string) => void
+}
+
+function persistedCreationKey(operation: ResourceManagementSession['operation']) {
+  return operation?.status === 'persisted' && (operation.type === 'create-class' || operation.type === 'create-subject')
+    ? `${operation.startedRevision}:${operation.type}:${operation.targetId}` : null
 }
 
 export function CourseResourceManagerDialog(props: Props & { onClose: () => void }) {
+  const { onCreated } = props
   const localSession = useResourceManagementSession(props.data, props.setData, props.storageStatus, props.storagePersistence)
   const session = props.session ?? localSession
   const trigger = useRef<HTMLElement | null>(null)
   const content = useRef<HTMLDivElement>(null)
+  const handledCreation = useRef(persistedCreationKey(session.operation))
   useEffect(() => {
     trigger.current = document.activeElement as HTMLElement | null
     ;(content.current?.querySelector<HTMLSelectElement>('select:not(:disabled)') ?? content.current?.closest('[role="dialog"]')?.querySelector<HTMLButtonElement>('button'))?.focus()
@@ -58,6 +66,13 @@ export function CourseResourceManagerDialog(props: Props & { onClose: () => void
     document.addEventListener('keydown', trap)
     return () => { document.removeEventListener('keydown', trap); if (trigger.current?.isConnected) trigger.current.focus(); else document.querySelector<HTMLButtonElement>('[data-course-add]')?.focus() }
   }, [])
+  useEffect(() => {
+    const operation = session.operation
+    const key = persistedCreationKey(operation)
+    if (!key || key === handledCreation.current || !operation || !onCreated) return
+    handledCreation.current = key
+    onCreated(operation.type === 'create-class' ? 'classes' : 'subjects', operation.targetId)
+  }, [onCreated, session.operation])
   return <Modal title={props.mode === 'classes' ? '管理班級' : '管理科目'} subtitle={props.mode === 'classes' ? '班級屬於所選專案與學制，不屬於教師課表。' : '科目庫由所有專案共用，變更會影響適用的課程。'} onClose={() => session.requestTransition(props.onClose)}>
     <div ref={content} className="resource-manager-dialog"><CourseResourceManager {...props} session={session} /></div>
   </Modal>

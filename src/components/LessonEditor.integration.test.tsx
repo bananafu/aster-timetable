@@ -30,24 +30,25 @@ describe('LessonEditor integrated experience', () => {
     expect([...level.options].map((option) => option.text)).toContain('雙語實驗課程')
   })
 
-  it('學制切換後清除不適用科目，空狀態可建立目前學制科目', () => {
+  it('學制切換後清除不適用科目，空狀態可開啟目前學制科目管理', () => {
     const base = migrateV4ToV5(setup())
     base.teachingUnits[0].schoolLevel = 'senior-high'
     base.subjects = base.subjects.map((subject, index) => ({ ...subject, name: index === 0 ? '高中科目' : subject.name, applicableSchoolLevels: ['senior-high'] }))
     const unit = { ...base.teachingUnits[0], id: 'unit-j', schoolLevel: 'junior-high' as const }
     base.teachingUnits.push(unit)
-    const setData = vi.fn()
-    render(<LessonEditor data={base} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const onManageResource = vi.fn()
+    render(<LessonEditor data={base} setData={vi.fn()} onManageResource={onManageResource} onClose={vi.fn()} onSaved={vi.fn()} />)
     expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('')
     fireEvent.change(screen.getByLabelText('課程學制'), { target: { value: 'unit-j' } })
     expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('')
     expect(screen.getByText('目前學制尚未建立科目')).toBeTruthy()
     expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.focus(screen.getByLabelText('課程科目'))
-    fireEvent.click(screen.getByRole('button', { name: '新增自訂科目' }))
-    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '國中科目' } })
-    fireEvent.click(screen.getByRole('button', { name: '建立科目' }))
-    expect(setData.mock.calls[0][0].subjects.at(-1)).toMatchObject({ name: '國中科目', applicableSchoolLevels: ['junior-high'] })
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    expect(onManageResource).toHaveBeenCalledWith('subjects', {
+      projectId: base.activeProjectId,
+      teachingUnitId: 'unit-j',
+    }, expect.any(Function))
   })
 
   it('既有不適用科目仍顯示課程脈絡，且不會靜默改選', () => {
@@ -83,44 +84,39 @@ describe('LessonEditor integrated experience', () => {
     expect(result.recurringLessons.at(-1)?.subjectId).toBe('history')
   })
 
-  it('新增自訂科目失敗時保留已選科目與其他課程欄位', () => {
+  it('開啟科目管理時保留已選科目與其他課程欄位', () => {
     const data = setup()
     const setData = vi.fn()
-    render(<LessonEditor data={data} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const onManageResource = vi.fn()
+    render(<LessonEditor data={data} setData={setData} onManageResource={onManageResource} onClose={vi.fn()} onSaved={vi.fn()} />)
     const subject = screen.getByLabelText('課程科目') as HTMLInputElement
     fireEvent.focus(subject)
     fireEvent.click(screen.getByText('歷史').closest('[role=option]')!)
     fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '專科教室' } })
 
     fireEvent.click(subject)
-    fireEvent.click(screen.getByRole('button', { name: '新增自訂科目' }))
-    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '國文' } })
-    fireEvent.click(screen.getByRole('button', { name: '建立科目' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
 
     expect(setData).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert').textContent).toContain('科目「國文」已存在')
+    expect(onManageResource).toHaveBeenCalledTimes(1)
     expect(subject.value).toBe('歷史')
     expect((screen.getByPlaceholderText('依班級預設') as HTMLInputElement).value).toBe('專科教室')
   })
 
-  it('有既有科目時仍可透過次要入口安全建立自訂科目', () => {
+  it('科目管理建立完成回呼會選取新科目', () => {
     const data = setup()
-    const setData = vi.fn()
-    render(<LessonEditor data={data} setData={setData} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const onManageResource = vi.fn((_mode, _context, onCreated: (id: string) => void) => onCreated('reading'))
+    render(<LessonEditor data={data} setData={vi.fn()} onManageResource={onManageResource} onClose={vi.fn()} onSaved={vi.fn()} />)
     fireEvent.focus(screen.getByLabelText('課程科目'))
-    fireEvent.click(screen.getByRole('button', { name: '新增自訂科目' }))
-    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '閱讀策略' } })
-    fireEvent.click(screen.getByRole('button', { name: '建立科目' }))
-    expect(setData.mock.calls[0][0].subjects.at(-1)).toMatchObject({
-      name: '閱讀策略', shortName: '閱讀', applicableSchoolLevels: [data.teachingUnits[0].schoolLevel],
-    })
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('閱讀素養')
   })
 
   it('未選學制時不顯示全域科目選單或新增入口', () => {
     const data = migrateV4ToV5(setup())
     data.teachingUnits = []
     render(<LessonEditor data={data} setData={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} />)
-    expect(screen.getByText('請先選擇學校與學制，才能選擇或新增科目。')).toBeTruthy()
+    expect(screen.getByText('請先選擇學校與學制，才能選擇或管理科目。')).toBeTruthy()
     expect(screen.queryByLabelText('課程科目')).toBeNull()
     expect(screen.queryByRole('button', { name: '建立科目' })).toBeNull()
   })
@@ -396,9 +392,14 @@ describe('LessonEditor integrated experience', () => {
     const withoutClasses = setup(); const unitId = withoutClasses.teachingUnits[0].id
     withoutClasses.classes = withoutClasses.classes.filter((item) => item.teachingUnitId !== unitId)
     const onOpenSettings = vi.fn()
-    const first = render(<LessonEditor data={withoutClasses} setData={vi.fn()} onOpenSettings={onOpenSettings} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const onManageResource = vi.fn()
+    const first = render(<LessonEditor data={withoutClasses} setData={vi.fn()} onOpenSettings={onOpenSettings} onManageResource={onManageResource} onClose={vi.fn()} onSaved={vi.fn()} />)
     expect(screen.getByText('目前學制尚未建立班級')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '＋ 新增班級' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '管理班級' }))
+    expect(onManageResource).toHaveBeenCalledWith('classes', {
+      projectId: withoutClasses.activeProjectId,
+      teachingUnitId: unitId,
+    }, expect.any(Function))
     expect((screen.getByRole('button', { name: '儲存' }) as HTMLButtonElement).disabled).toBe(true)
     expect(onOpenSettings).not.toHaveBeenCalled()
     first.unmount()
