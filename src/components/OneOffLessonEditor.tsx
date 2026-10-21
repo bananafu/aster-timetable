@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { getOneOffLessonConflicts, OneOffConflictError, type OneOffLessonDraft } from '../data/oneOffLessonsV7'
+import { findProjectSubject, selectProjectSubjectsForLevel } from '../data/subjectSelectorsV8'
 import { classDisplayName } from '../lib/classes'
-import { subjectsForLevel } from '../lib/subjects'
 import type { AppDataV7 } from '../types'
 import type { ResolvedScheduleOccurrence } from '../lib/scheduleV4'
 import { Modal } from './Modal'
@@ -69,7 +69,7 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
   const units = data.teachingUnits.filter((item) => item.projectId === projectId && item.schoolId === schoolId)
   const unit = units.find((item) => item.id === teachingUnitId)
   const classes = data.classes.filter((item) => item.projectId === projectId && item.teachingUnitId === teachingUnitId)
-  const subjects = subjectsForLevel(data.subjects, unit?.schoolLevel)
+  const subjects = selectProjectSubjectsForLevel(data, projectId, unit?.schoolLevel)
   const periods = [...(unit?.periods ?? [])].sort((left, right) => left.order - right.order)
   const sources = data.recurringLessons.filter((item) => item.projectId === projectId && item.timetableId === timetableId)
   const startTime = `${startHour}:${startMinute}`
@@ -153,7 +153,7 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
       {purpose === 'make-up' && <label className="full">補課來源（選填）<select value={sourceId} disabled={locked} onChange={(event) => change(() => setSourceId(event.target.value))}>
         <option value="">不指定來源</option>
         {sourceId && !sources.some((item) => item.id === sourceId) && <option value={sourceId}>原課已刪除・{sourceId}</option>}
-        {sources.map((item) => <option key={item.id} value={item.id}>{data.subjects.find((subject) => subject.id === item.subjectId)?.name ?? item.subjectId}・{data.classes.find((schoolClass) => schoolClass.id === item.classId)?.name ?? item.classId}（{item.id}）</option>)}
+        {sources.map((item) => <option key={item.id} value={item.id}>{findProjectSubject(data, item.projectId, item.subjectId)?.name ?? item.subjectId}・{data.classes.find((schoolClass) => schoolClass.id === item.classId)?.name ?? item.classId}（{item.id}）</option>)}
       </select></label>}
       <label>時間模式<select value={timeMode} disabled={locked} onChange={(event) => change(() => setTimeMode(event.target.value as OneOffLessonDraft['time']['mode']))}>
         <option value="period">學制節次</option><option value="custom">自訂時間</option>

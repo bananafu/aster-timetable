@@ -998,6 +998,28 @@ describe('App v4 runtime', () => {
     expect(localStorage.getItem(APP_DATA_V3_KEY)).toBeNull()
   })
 
+  it('切換專案會關閉舊 Project 的 Lesson 選取狀態', () => {
+    vi.setSystemTime(new Date(2026, 8, 7, 7, 0))
+    const first = copyReadyData()
+    let index = 0
+    const next = createBlankProject(first, {
+      name: '第二專案', teacherName: '王老師', academicYear: 116, semester: 'first',
+      startDate: '2027-08-30', endDate: '2028-01-20',
+    }, () => `switch-selection-${++index}`)
+    const data = { ...next, activeProjectId: first.projects[0].id }
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
+    render(<App />)
+    const projectSelector = screen.getByLabelText('課表專案') as HTMLSelectElement
+
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    fireEvent.click(screen.getAllByRole('button', { name: /編輯 國文/ })[0])
+    expect(screen.getByRole('dialog', { name: '編輯課程' })).toBeTruthy()
+    fireEvent.change(projectSelector, { target: { value: next.activeProjectId } })
+
+    expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull()
+    expect(projectSelector.value).toBe(next.activeProjectId)
+  })
+
   it('v3 migration 失敗時鎖定課表編輯且不建立 v4', () => {
     localStorage.setItem(APP_DATA_V3_KEY, '{broken-v3')
     render(<App />)

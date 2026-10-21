@@ -1,7 +1,8 @@
 import type { AppDataV4, SchoolLevel } from '../types'
 import { DEFAULT_SUBJECT_CATALOG, OPTIONAL_SUBJECT_CATALOG, type SubjectCatalogEntry } from './defaultSubjects'
 import { analyzeSubjectCatalog } from './subjectCatalogAnalysis'
-import { createSubject } from './subjectsV5'
+import { createProjectSubject } from './subjectManagementAdapter'
+import { selectProjectSubjects } from './subjectSelectorsV8'
 
 export type CatalogSchoolLevel = Extract<SchoolLevel, 'junior-high' | 'senior-high'>
 export type CatalogItemStatus = 'safe-to-add' | 'exists-applicable' | 'needs-review'
@@ -54,7 +55,8 @@ function editableProject(data: AppDataV4): boolean {
 
 export function previewSubjectCatalogInstall(data: AppDataV4, levels: readonly CatalogSchoolLevel[], optionalKeys: readonly string[] = []): CatalogInstallPreview {
   const { orderedLevels, orderedOptionalKeys, entries } = selection(levels, optionalKeys)
-  const reports = orderedLevels.map((level) => analyzeSubjectCatalog(data.subjects, level, entries))
+  const projectSubjects = selectProjectSubjects(data, data.activeProjectId)
+  const reports = orderedLevels.map((level) => analyzeSubjectCatalog(projectSubjects, level, entries))
   const items = entries.flatMap((entry): CatalogInstallItem[] => {
     const applicable = orderedLevels.filter((level) => entry.applicableSchoolLevels.includes(level))
     if (!applicable.length) return []
@@ -102,10 +104,11 @@ export function installSafeSubjectCatalog(data: AppDataV4, preview: CatalogInsta
       const entry = CATALOG.find((candidateEntry) => candidateEntry.catalogKey === item.catalogKey)!
       const id = createId()
       if (!id.trim() || CATALOG_KEYS.has(id)) throw new CatalogInstallError('invalid-id', '新科目 ID 無效或與內建 catalogKey 相同，整批未寫入。')
-      candidate = createSubject(candidate, {
+      const draft = {
         name: entry.name, shortName: entry.shortName, color: entry.color,
         applicableSchoolLevels: [...item.levels],
-      }, id)
+      }
+      candidate = createProjectSubject(candidate, candidate.activeProjectId!, draft, id)
       addedSubjectIds.push(id)
     }
   } catch (error) {

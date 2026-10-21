@@ -8,8 +8,10 @@ import type {
   SchoolClass,
   SchoolPeriod,
   SemesterKind,
+  Subject,
 } from '../types'
 import { subjectChoiceAllowed } from '../lib/subjects'
+import { selectProjectSubjects } from './subjectSelectorsV8'
 import { singleTimetableId } from './timetableCompatibility'
 
 export interface NewProjectInput {
@@ -220,7 +222,11 @@ export function projectToLegacyView(data: AppDataV4, requestedProjectId = data.a
     },
     academicTerms,
     activeTermId: firstUnit.id,
-    subjects: data.subjects.map((subject) => ({ ...subject })),
+    subjects: selectProjectSubjects(data, project.id).map((subject) => {
+      const legacySubject: Subject & { projectId?: string } = { ...subject }
+      delete legacySubject.projectId
+      return legacySubject
+    }),
     classes,
     courses,
     events,

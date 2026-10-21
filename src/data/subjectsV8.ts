@@ -28,6 +28,13 @@ export interface TeachingProgressSubjectReference {
 
 export type SubjectV8Reference = SubjectReference | TeachingProgressSubjectReference
 
+export interface SubjectV8Impact {
+  subject: SubjectV8
+  references: SubjectV8Reference[]
+  projectIds: string[]
+  archivedProjectIds: string[]
+}
+
 export class SubjectV8ManagementError extends Error {
   constructor(
     public readonly code:
@@ -147,6 +154,18 @@ function subjectReferences(data: AppDataV8, subject: SubjectV8): SubjectV8Refere
     ...data.teachingProgress.filter((progress) => progress.subjectId === subject.id)
       .map((progress) => progressReference(data, progress)),
   ]
+}
+
+export function getSubjectImpact(data: AppDataV8, projectId: string, subjectId: string): SubjectV8Impact {
+  assertData(data)
+  const subject = subjectForProject(data, projectId, subjectId)
+  const references = subjectReferences(data, subject)
+  return {
+    subject: cloneSubject(subject),
+    references,
+    projectIds: [...new Set(references.flatMap((reference) => reference.projectId ? [reference.projectId] : []))],
+    archivedProjectIds: [...new Set(references.flatMap((reference) => reference.archived && reference.projectId ? [reference.projectId] : []))],
+  }
 }
 
 export function listSubjects(data: AppDataV8, projectId: string): SubjectV8[] {

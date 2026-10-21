@@ -13,6 +13,7 @@ import { CourseResourceManagerDialog } from './components/CourseResourceManager'
 import { projectToLegacyView, switchActiveProject } from './data/projectRuntime'
 import { copyTimetable, createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
 import { deleteTimetable } from './data/deleteTimetableV7'
+import { selectDisplayProject, selectProjectSubjectsForLevel } from './data/subjectSelectorsV8'
 import { isCompatibleAppDataV7 } from './data/validators/v7'
 import { useAppDataV4 } from './hooks/useAppDataV4'
 import { useOneOffPersistence } from './hooks/useOneOffPersistence'
@@ -23,7 +24,7 @@ import { getNextUpcomingEvent } from './lib/schedule'
 import { classifyEventTerm, getTermForDate } from './lib/academic'
 import { getTodayTeachingSummaryV4, type TodayTeachingSummaryV4 } from './lib/scheduleV4'
 import type { LessonDragIntent } from './lib/lessonDrag'
-import { SCHOOL_LEVELS, type AppData, type AppDataV4, type CalendarEvent, type ModalKind, type Timetable } from './types'
+import { type AppData, type AppDataV4, type CalendarEvent, type ModalKind, type Timetable } from './types'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
@@ -163,6 +164,7 @@ export default function App() {
   useEffect(() => {
     setSelectedLessonId(null)
     setSelectedLessonDate(null)
+    setSelectedLessonOverrideId(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
     setOneOffEditor(null)
@@ -194,6 +196,7 @@ export default function App() {
     setTimetableSelection({ projectId: pendingTimetableCopy.projectId, timetableId: pendingTimetableCopy.timetableId })
     setSelectedLessonId(null)
     setSelectedLessonDate(null)
+    setSelectedLessonOverrideId(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
     setTimetableDialog(null)
@@ -249,7 +252,7 @@ export default function App() {
   const weekDays = useMemo(() => Array.from({ length: 5 }, (_, index) => addDays(weekStart, index)), [weekStart])
   const activeProject = appData.projects.find((project) => project.id === appData.activeProjectId)
   const historicalProject = appData.projects.find((project) => project.id === historicalProjectId && project.archivedAt)
-  const displayProject = historicalProject ?? activeProject
+  const displayProject = selectDisplayProject(appData, historicalProjectId)
   const displayTimetables = appData.timetables?.filter((item) => item.projectId === displayProject?.id) ?? []
   const displayTimetableCandidate = timetableSelection.projectId === displayProject?.id
     ? timetableSelection.timetableId : displayTimetables[0]?.id ?? null
@@ -283,8 +286,8 @@ export default function App() {
       : '')
   const currentResourceUnit = appData.teachingUnits.find((item) => item.id === resourceSession.view.unitId
     && item.projectId === appData.activeProjectId)
-  const selectedSubjectCount = currentResourceUnit ? appData.subjects.filter((subject) =>
-    (subject.applicableSchoolLevels ?? SCHOOL_LEVELS).includes(currentResourceUnit.schoolLevel)).length : 0
+  const selectedSubjectCount = currentResourceUnit
+    ? selectProjectSubjectsForLevel(appData, appData.activeProjectId, currentResourceUnit.schoolLevel).length : 0
   const activeProjectUnitIds = new Set(appData.teachingUnits.filter((item) => item.projectId === appData.activeProjectId).map((item) => item.id))
   const activeClassCount = appData.classes.filter((item) => item.projectId === appData.activeProjectId
     && activeProjectUnitIds.has(item.teachingUnitId)).length
@@ -298,6 +301,7 @@ export default function App() {
     setTimetableSelection({ projectId, timetableId })
     setSelectedLessonId(null)
     setSelectedLessonDate(null)
+    setSelectedLessonOverrideId(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
     setOneOffEditor(null)
@@ -308,6 +312,7 @@ export default function App() {
   const openAddChoice = () => {
     setSelectedLessonId(null)
     setSelectedLessonDate(null)
+    setSelectedLessonOverrideId(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
     setOneOffEditor(null)
@@ -344,9 +349,14 @@ export default function App() {
     setTimetableSelection({ projectId, timetableId: appData.timetables?.find((item) => item.projectId === projectId)?.id ?? null })
     setSelectedLessonId(null)
     setSelectedLessonDate(null)
+    setSelectedLessonOverrideId(null)
     setLessonDragIntent(null)
     setLessonEditorOpen(false)
     setOneOffEditor(null)
+    setOneOffNotice('')
+    setTimetableError('')
+    setTimetableNotice('')
+    setTimetableDialog(null)
     lessonEditorFromAddRef.current = false
     setAddChoiceOpen(false)
     setActivePage('timetable')
@@ -363,6 +373,7 @@ export default function App() {
         setTimetableSelection({ projectId: timetableDialog.projectId, timetableId: id })
         setSelectedLessonId(null)
         setSelectedLessonDate(null)
+        setSelectedLessonOverrideId(null)
         setLessonDragIntent(null)
         setLessonEditorOpen(false)
       } else {
@@ -472,10 +483,13 @@ export default function App() {
       setTimetableSelection({ projectId, timetableId: appData.timetables?.find((item) => item.projectId === projectId)?.id ?? null })
       setSelectedLessonId(null)
       setSelectedLessonDate(null)
+      setSelectedLessonOverrideId(null)
       setLessonDragIntent(null)
       setLessonEditorOpen(false)
       setOneOffEditor(null)
       setOneOffNotice('')
+      setTimetableError('')
+      setTimetableNotice('')
       lessonEditorFromAddRef.current = false
       setAddChoiceOpen(false)
       setTimetableDialog(null)

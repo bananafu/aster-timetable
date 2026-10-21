@@ -12,6 +12,20 @@ import { ProjectLifecycleModal } from './ProjectLifecycle'
 afterEach(cleanup)
 
 describe('ProjectLifecycleModal hierarchical settings', () => {
+  it('一般新增與複製為新學期維持不同入口與表單語意', () => {
+    const data = migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))))
+    const first = render(<ProjectLifecycleModal data={data} setData={vi.fn()} initialPage="blank" onClose={vi.fn()} onViewArchived={vi.fn()} />)
+    expect(screen.getByText('使用固定預設，不沿用目前專案的學校、節次、班級或課程。')).toBeTruthy()
+    expect(screen.queryByLabelText('來源專案')).toBeNull()
+    first.unmount()
+
+    render(<ProjectLifecycleModal data={data} setData={vi.fn()} onClose={vi.fn()} onViewArchived={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /複製為新學期/ }))
+    expect(screen.getByLabelText('來源專案')).toBeTruthy()
+    expect(screen.getByText('複製學校、學制設定、節次、班級與固定課程；不複製事件、取消或單日異動。')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /複製並切換/ })).toBeTruthy()
+  })
+
   it('母層只顯示直接子項目，進入學校管理後才顯示孫項目', () => {
     const data = migrateV3ToV4(structuredClone(initialData))
     render(<ProjectLifecycleModal data={data} setData={vi.fn()} onClose={vi.fn()} onViewArchived={vi.fn()} />)
