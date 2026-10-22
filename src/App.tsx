@@ -644,7 +644,7 @@ export default function App() {
         setOneOffNotice('單日課程已刪除並儲存。')
         setOneOffEditor(null)
       }} />}
-      {resourceDialog && <CourseResourceManagerDialog key={`${resourceDialog.source}:${resourceDialog.mode}`} data={appData} setData={setAppData} mode={resourceDialog.mode} storageStatus={storageStatus} storagePersistence={storagePersistence} storageControls={storageControls} session={resourceSession} readOnly={Boolean(historicalProject)} onOpenSettings={openSettingsFromResourceManager} onCreated={(mode, id) => { if (mode !== resourceDialog.mode) return; resourceCreatedRef.current?.(id); resourceCreatedRef.current = null; setResourceDialog(null) }} onClose={closeResourceManager} />}
+      {resourceDialog && <CourseResourceManagerDialog key={`${resourceDialog.source}:${resourceDialog.mode}`} data={appData} setData={setAppData} mode={resourceDialog.mode} storageStatus={storageStatus} storagePersistence={storagePersistence} storageControls={storageControls} session={resourceSession} readOnly={Boolean(historicalProject)} onOpenSettings={openSettingsFromResourceManager} onCreated={(mode, id) => { if (mode === resourceDialog.mode) resourceCreatedRef.current?.(id) }} onClose={closeResourceManager} />}
     </div>
   )
 }

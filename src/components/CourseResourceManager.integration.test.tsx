@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
+import { readFileSync } from 'node:fs'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initialData } from '../data/seed'
@@ -91,7 +92,7 @@ function addSubject(name = '閱讀策略') {
   openSubjectCreate()
   fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: name } })
   fireEvent.change(screen.getByLabelText('新科目簡稱'), { target: { value: name.slice(0, 2) } })
-  fireEvent.click(screen.getByRole('button', { name: '儲存新增科目' }))
+  fireEvent.click(screen.getByRole('button', { name: '新增科目' }))
 }
 beforeEach(() => { vi.spyOn(window, 'confirm').mockReturnValue(true) })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers() })
@@ -207,16 +208,86 @@ describe('CourseResourceManager', () => {
     expect(setData.mock.calls[0][0](data).classes.at(-1)).toMatchObject({ teachingUnitId: 'second-unit', grade: 1, classNumber: 9 })
   })
 
-  it('確認持久化成功後才收起表單，且不自動開下一筆空白表單', () => {
+  it('確認持久化成功後保留同一份新增表單並清空已儲存欄位', () => {
     startStorage('classes')
     fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
     fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: '新建立班級' } })
     fireEvent.submit(screen.getByRole('form', { name: '新增班級表單' }))
     expect(screen.getByRole('form', { name: '新增班級表單' })).toBeTruthy()
     flush()
-    expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
-    expect(screen.getByRole('button', { name: '＋ 新增班級' })).toBeTruthy()
+    expect(screen.getAllByRole('form', { name: '新增班級表單' })).toHaveLength(1)
+    expect((screen.getByLabelText('新班級名稱') as HTMLInputElement).value).toBe('')
     expect(stored().classes.at(-1)?.name).toBe('新建立班級')
+  })
+
+  it('可連續新增三個科目，只有建立會結束管理且捨棄後續草稿不回滾已儲存科目', () => {
+    startStorage('subjects')
+    openSubjectCreate()
+    const names = ['閱讀策略一', '閱讀策略二', '閱讀策略三']
+    names.forEach((name, index) => {
+      fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: name } })
+      fireEvent.change(screen.getByLabelText('新科目簡稱'), { target: { value: `閱${index + 1}` } })
+      fireEvent.click(screen.getByRole('button', { name: '新增科目' }))
+      expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+      flush()
+      expect(screen.getAllByRole('form', { name: '新增科目表單' })).toHaveLength(1)
+      expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe('')
+      expect((screen.getByLabelText('新科目簡稱') as HTMLInputElement).value).toBe('')
+    })
+    expect(stored().subjects.filter((item) => names.includes(item.name)).map((item) => item.name)).toEqual(names)
+
+    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '未儲存第四科' } })
+    vi.mocked(window.confirm).mockReturnValue(false)
+    fireEvent.click(screen.getByRole('button', { name: '建立' }))
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe('未儲存第四科')
+    expect(stored().subjects.filter((item) => names.includes(item.name))).toHaveLength(3)
+
+    vi.mocked(window.confirm).mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: '建立' }))
+    expect(screen.queryByRole('dialog', { name: '管理科目' })).toBeNull()
+    expect(stored().subjects.filter((item) => names.includes(item.name))).toHaveLength(3)
+  })
+
+  it('可連續新增三個班級，只有建立會結束管理且捨棄後續草稿不回滾已儲存班級', () => {
+    startStorage('classes')
+    openClassCreate()
+    const names = ['連續班級一', '連續班級二', '連續班級三']
+    names.forEach((name) => {
+      fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: name } })
+      fireEvent.click(screen.getByRole('button', { name: '新增班級' }))
+      expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+      flush()
+      expect(screen.getAllByRole('form', { name: '新增班級表單' })).toHaveLength(1)
+      expect((screen.getByLabelText('新班級名稱') as HTMLInputElement).value).toBe('')
+      expect((screen.getByLabelText('新班級教室') as HTMLInputElement).value).toBe('')
+    })
+    expect(stored().classes.filter((item) => names.includes(item.name)).map((item) => item.name)).toEqual(names)
+
+    fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: '未儲存第四班' } })
+    vi.mocked(window.confirm).mockReturnValue(false)
+    fireEvent.click(screen.getByRole('button', { name: '建立' }))
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    expect((screen.getByLabelText('新班級名稱') as HTMLInputElement).value).toBe('未儲存第四班')
+    expect(stored().classes.filter((item) => names.includes(item.name))).toHaveLength(3)
+
+    vi.mocked(window.confirm).mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: '建立' }))
+    expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull()
+    expect(stored().classes.filter((item) => names.includes(item.name))).toHaveLength(3)
+  })
+
+  it('新增班級使用專屬深咖啡 token，並定義 hover、focus、disabled 與窄視窗樣式', () => {
+    render(<CourseResourceManager data={fixture()} setData={vi.fn()} mode="classes" />)
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
+    expect(screen.getByRole('button', { name: '新增班級' }).classList.contains('class-create-submit')).toBe(true)
+    const css = readFileSync('src/styles.css', 'utf8')
+    expect(css).toContain('--color-accent-hover: #3F2E22;')
+    expect(css).toContain('.class-create-actions .class-create-submit { color: var(--color-surface-strong); background: var(--color-accent);')
+    expect(css).toContain('.class-create-actions .class-create-submit:hover:not(:disabled)')
+    expect(css).toContain('.class-create-actions .class-create-submit:focus-visible')
+    expect(css).toContain('.class-create-actions .class-create-submit:disabled')
+    expect(css).toContain('.class-create-actions button { min-height: 40px; }')
   })
 
   it('持久化失敗時保留新增表單與輸入內容', () => {
@@ -266,7 +337,7 @@ describe('CourseResourceManager', () => {
     openSubjectCreate()
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '新科目' } })
     fireEvent.change(screen.getByLabelText('新科目簡稱'), { target: { value: '新科' } })
-    fireEvent.click(screen.getByRole('button', { name: '儲存新增科目' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增科目' }))
     const next = setData.mock.calls[0][0](data)
     expect(next.subjects.at(-1)).toMatchObject({ name: '新科目', applicableSchoolLevels: [data.teachingUnits[0].schoolLevel] })
     expect(next.subjects.slice(0, -1)).toEqual(before)
@@ -589,8 +660,8 @@ describe('resource session with real v7 storage', () => {
     expect(memory().subjects.filter((item) => item.id === id)).toHaveLength(1)
     flush()
     expect(stored().subjects.filter((item) => item.id === id)).toHaveLength(1)
-    fireEvent.click(screen.getByRole('button', { name: '＋ 新增科目' }))
     expect(screen.getByRole('form', { name: '新增科目表單' })).toBeTruthy()
+    expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe('')
     fireEvent.click(screen.getByRole('button', { name: /返回科目清單/ }))
     expect((within(subjectRow()).getByLabelText('國文名稱') as HTMLInputElement).value).toBe('另一筆草稿')
     expect(screen.getByText('已儲存：已新增科目。')).toBeTruthy()
@@ -719,7 +790,7 @@ describe('resource session with real v7 storage', () => {
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '原學制科目' } })
     fireEvent.change(screen.getByLabelText('新科目簡稱'), { target: { value: '原科' } })
     const raw = receive({ ...data, teachingUnits: data.teachingUnits.map((item) => ({ ...item, schoolLevel: 'junior-high' })) })
-    fireEvent.click(screen.getByRole('button', { name: '儲存新增科目' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增科目' }))
     expect(screen.getByRole('alert').textContent).toContain('草稿所屬學制已變更或刪除')
     expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe('原學制科目')
     flush()
@@ -886,7 +957,8 @@ describe('resource session with real v7 storage', () => {
     expect(sessionState()).toMatchObject({ state: 'persisted', targetId: id, storageStatus: 'saved', pending: false, revision: 1, keys: [] })
     expect(stored()).toEqual(expected)
     expect(stored().classes.filter((item) => item.name === '待復原班級').map((item) => item.id)).toEqual([id])
-    expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
+    expect(screen.getByRole('form', { name: '新增班級表單' })).toBeTruthy()
+    expect((screen.getByLabelText('新班級名稱') as HTMLInputElement).value).toBe('')
     expect(screen.getByText('已儲存：已新增班級。')).toBeTruthy()
   })
 

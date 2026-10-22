@@ -129,7 +129,7 @@ describe('AcademicSettingsV4 class roster', () => {
     fireEvent.click(screen.getByRole('button', { name: '＋ 新增科目' }))
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '新科目' } })
     fireEvent.change(screen.getByLabelText('新科目簡稱'), { target: { value: '新科' } })
-    fireEvent.click(screen.getByRole('button', { name: '儲存新增科目' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增科目' }))
     expect(setData.mock.calls[0][0](data).subjects.at(-1)).toMatchObject({ name: '新科目', applicableSchoolLevels: ['junior-high'] })
   })
 

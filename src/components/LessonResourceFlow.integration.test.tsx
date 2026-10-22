@@ -51,7 +51,7 @@ function Harness({ mode }: { mode: Mode }) {
       ? <LessonEditor data={data} setData={setData} storageStatus={status} storagePersistence={persistence} timetableId={data.timetables?.[0]?.id} onManageResource={openManager} onClose={closeEditor} onSaved={vi.fn()} />
       : isCompatibleAppDataV7(data) && <OneOffLessonEditor data={data} projectId={data.projects[0].id} timetableId={data.timetables[0].id} initialDate="2026-09-08" onManageResource={openManager} onSave={vi.fn()} onClose={closeEditor} />}
     {manager && <CourseResourceManagerDialog data={data} setData={setData} mode={manager} storageStatus={status} storagePersistence={persistence} storageControls={controls} session={session}
-      onCreated={(resourceMode, id) => { if (resourceMode !== manager) return; created.current?.(id); created.current = null; setManager(null) }} onClose={closeManager} />}
+      onCreated={(resourceMode, id) => { if (resourceMode === manager) created.current?.(id) }} onClose={closeManager} />}
   </>
 }
 
@@ -89,7 +89,7 @@ function createSubject(name = '閱讀策略') {
   const form = within(dialog).getByRole('form', { name: '新增科目表單' })
   fireEvent.change(within(form).getByLabelText('新科目名稱'), { target: { value: name } })
   fireEvent.change(within(form).getByLabelText('新科目簡稱'), { target: { value: '閱讀' } })
-  fireEvent.click(within(form).getByRole('button', { name: '儲存新增科目' }))
+  fireEvent.click(within(form).getByRole('button', { name: '新增科目' }))
 }
 
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks() })
@@ -108,8 +108,12 @@ describe('lesson editor resource manager flow', () => {
       fireEvent.change(screen.getByLabelText('時間模式'), { target: { value: 'custom' } })
     }
     createClass()
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull())
+    await waitFor(() => expect((screen.getByLabelText('新班級名稱') as HTMLInputElement).value).toBe(''))
     const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV7
+    await waitFor(() => expect((screen.getByLabelText(mode === 'fixed' ? '課程班級' : '班級') as HTMLSelectElement).value).toBe(stored.classes[0].id))
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '建立' }))
+    expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull()
     expect(stored.classes).toHaveLength(1)
     expect(stored.recurringLessons).toEqual([])
     expect(stored.oneOffLessons).toEqual([])
@@ -131,13 +135,18 @@ describe('lesson editor resource manager flow', () => {
     start(data, mode)
     createSubject()
     expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '管理科目' })).toBeNull())
+    await waitFor(() => expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe(''))
     const stored = JSON.parse(localStorage.getItem(APP_DATA_V7_KEY)!) as AppDataV7
+    if (mode === 'fixed') await waitFor(() => expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('閱讀策略'))
+    else await waitFor(() => expect((screen.getByLabelText('科目') as HTMLSelectElement).value).toBe(stored.subjects[0].id))
+    expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '建立' }))
+    expect(screen.queryByRole('dialog', { name: '管理科目' })).toBeNull()
     expect(stored.subjects).toHaveLength(1)
     expect(stored.subjects[0]).toMatchObject({ name: '閱讀策略', applicableSchoolLevels: [data.teachingUnits[0].schoolLevel] })
     expect(stored.recurringLessons).toEqual([])
     expect(stored.oneOffLessons).toEqual([])
-    if (mode === 'fixed') await waitFor(() => expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('閱讀策略'))
+    if (mode === 'fixed') expect((screen.getByLabelText('課程科目') as HTMLInputElement).value).toBe('閱讀策略')
     else expect((screen.getByLabelText('科目') as HTMLSelectElement).value).toBe(stored.subjects[0].id)
   })
 

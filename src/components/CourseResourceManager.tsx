@@ -76,7 +76,13 @@ export function CourseResourceManagerDialog(props: Props & { onClose: () => void
     onCreated(operation.type === 'create-class' ? 'classes' : 'subjects', operation.targetId)
   }, [onCreated, session.operation])
   return <Modal title={props.mode === 'classes' ? '管理班級' : '管理科目'} subtitle={props.mode === 'classes' ? '班級屬於所選專案與學制，不屬於教師課表。' : props.data.schemaVersion === 8 ? '科目庫屬於所選專案，變更只會影響該專案內的課程。' : '科目庫由所有專案共用，變更會影響適用的課程。'} onClose={() => session.requestTransition(props.onClose)}>
-    <div ref={content} className="resource-manager-dialog"><CourseResourceManager {...props} session={session} /></div>
+    <div ref={content} className="resource-manager-dialog">
+      <CourseResourceManager {...props} session={session} />
+      <div className="resource-manager-complete">
+        <p>「新增{props.mode === 'classes' ? '班級' : '科目'}」會儲存目前這一筆；「建立」會完成管理並返回原流程。</p>
+        <button type="button" className="primary-button" disabled={session.locked} onClick={() => session.requestTransition(props.onClose)}>建立</button>
+      </div>
+    </div>
   </Modal>
 }
 
@@ -89,7 +95,6 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
   const { schoolId, unitId, showClassCreate, projectId } = session.view
   const [editor, setEditor] = useState<EditorSelection>(() => mode === 'classes' && showClassCreate ? { kind: 'class-create' } : null)
   const [subjectQuery, setSubjectQuery] = useState('')
-  const handledPersistedOperation = useRef(session.operation)
   const managerContent = useRef<HTMLElement>(null)
   const editorTrigger = useRef<HTMLElement | null>(null)
   const previousEditor = useRef<EditorSelection>(null)
@@ -134,15 +139,9 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
   }, [session, schools, units, schoolId, unitId, schoolUnits, duplicate])
 
   useEffect(() => {
-    const operation = session.operation
-    if (operation?.status === 'persisted' && handledPersistedOperation.current !== operation) {
-      handledPersistedOperation.current = operation
-      if (editor?.kind === 'subject-create' && operation.type === 'create-subject') setEditor(null)
-      if (editor?.kind === 'class-create' && operation.type === 'create-class') setEditor(null)
-    }
     if (editor?.kind === 'subject' && !projectSubjects.some((item) => item.id === editor.id) && !session.drafts[`subject:${editor.id}`]) setEditor(null)
     if (editor?.kind === 'class' && !data.classes.some((item) => item.id === editor.id) && !session.drafts[`class:${editor.id}`]) setEditor(null)
-  }, [data.classes, editor, projectSubjects, session.drafts, session.operation])
+  }, [data.classes, editor, projectSubjects, session.drafts])
 
   useEffect(() => {
     if (editor && previousEditor.current !== editor) managerContent.current?.querySelector<HTMLButtonElement>('.resource-editor-heading > button')?.focus()
@@ -271,7 +270,7 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
       <EditorHeading title="新增科目" dirty={Boolean(session.drafts[subjectCreateKey])} locked={session.locked} onBack={returnToList} backLabel="返回科目清單" />
       <form className="resource-editor subject-management-row" aria-label="新增科目表單" onSubmit={createNewSubject}>
         <SubjectFields draft={newSubject} prefix="新科目" disabled={subjectCreateLocked} onChange={(value) => session.edit(subjectCreateKey, { kind: 'subject-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptySubjectDraft(unit), value })} />
-        <div className="subject-management-actions"><button type="submit" className="primary-button" disabled={subjectCreateLocked}>儲存新增科目</button>{session.drafts[subjectCreateKey] && <button type="button" onClick={() => session.requestTransition(() => setEditor(null), [subjectCreateKey])}>捨棄草稿</button>}</div>
+        <div className="subject-management-actions"><button type="submit" className="primary-button" disabled={subjectCreateLocked}>{session.locked ? '儲存中…' : '新增科目'}</button>{session.drafts[subjectCreateKey] && <button type="button" onClick={() => session.requestTransition(() => setEditor(null), [subjectCreateKey])}>捨棄草稿</button>}</div>
       </form>
     </section>}
     {mode === 'subjects' && selectedSubject && <section className="resource-editor-shell">
@@ -293,7 +292,7 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
         <ClassIdentityFields draft={newClass} unit={unit} onChange={(value) => session.edit(classCreateKey, { kind: 'class-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptyClassDraft(unit), value })} prefix="新班級" disabled={classCreateLocked} />
         <ClassRoomField id="new-class-room-help" prefix="新班級" room={newClass.room ?? ''} disabled={classCreateLocked} onChange={(room) => session.edit(classCreateKey, { kind: 'class-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptyClassDraft(unit), value: { ...newClass, room } })} />
         <span className="class-code-preview">顯示：{classDisplayName({ name: newClass.name ?? '', grade: newClass.grade, classNumber: newClass.classNumber })}</span>
-        <div className="class-create-actions"><button type="submit" className="primary-button" disabled={classCreateLocked}>{session.locked ? '儲存中…' : '新增班級'}</button>{session.drafts[classCreateKey] && <button type="button" onClick={() => session.requestTransition(() => { session.setView({ showClassCreate: false }); setEditor(null) }, [classCreateKey])}>捨棄草稿</button>}</div>
+        <div className="class-create-actions"><button type="submit" className="primary-button class-create-submit" disabled={classCreateLocked}>{session.locked ? '儲存中…' : '新增班級'}</button>{session.drafts[classCreateKey] && <button type="button" onClick={() => session.requestTransition(() => { session.setView({ showClassCreate: false }); setEditor(null) }, [classCreateKey])}>捨棄草稿</button>}</div>
       </form>
     </section>}
     {mode === 'classes' && selectedClass && selectedClassUnit && <section className="resource-editor-shell">

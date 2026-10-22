@@ -107,8 +107,8 @@ export function useResourceManagementSession(data: AppDataV4, setData: Dispatch<
     if (status === op.status && message === op.message) return
     const drafts = { ...current.drafts }
     if (status === 'persisted') op.draftKeys.forEach((key) => { delete drafts[key] })
-    const next = { ...current, drafts, error: status === 'persisted' ? '' : current.error, view: status === 'persisted' && op.type === 'create-class'
-      ? { ...current.view, showClassCreate: false } : current.view, operation: { ...op, status, message } }
+    const next = { ...current, drafts, error: status === 'persisted' ? '' : current.error,
+      operation: { ...op, status, message } }
     stateRef.current = next
     setState(next)
   }, [data, storageStatus, persistence, operation])
