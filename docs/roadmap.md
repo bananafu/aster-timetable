@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R1 — V7→V8 migration safety and preflight（完成）
+
+已建立唯讀 migration preflight、結構化 blocking／review／informational issue 與持久化前 reconciliation。零 Project 但仍有舊 Subject 時會明確阻擋，不建立 Project、不猜測科目歸屬，也不寫入 V8 key；unresolved Event 則完整保留並列為 review。成功遷移必須通過 V8 validator，並核對 Project-scoped Subject mapping、既有 collection IDs、課程引用、Event 內容與 TeachingUnitSubject relation。
+
+正式 V7 Runtime／storage key 尚未切換，V7 與 V8 不雙寫。A2 仍需提供 Event Repair 資料操作與 UI；R2／正式 cutover 尚需把結構化 issue 接入使用者可操作的備份、修復、啟用與回滾流程。
+
 ## Phase 4D S1-A — TeachingUnit–Subject configuration foundation（資料層完成）
 
 已建立 Project-scoped Subject catalog 與 `TeachingUnitSubject` relation，包含確定性 V7 遷移、既有 V8 缺欄位升級、scope／適用學制／引用 Validator、TeachingUnit selector、安全配置 CRUD，以及新學期複製與 Project 刪除的 relation lifecycle。跨學校與跨學制的同名科目可共用 catalog 定義並獨立配置，不會依名稱自動合併或互相啟用。

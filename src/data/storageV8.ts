@@ -1,7 +1,13 @@
 import type { StorageStatus } from '../hooks/useLocalStorage'
 import type { AppDataV7, AppDataV8 } from '../types'
 import { upgradeLegacyV8EventOwnership } from './eventOwnershipV8'
-import { migrateV7ToV8, upgradeLegacyV8TeachingUnitSubjects } from './migrationsV8'
+import type { V8MigrationPreflightReport, V8MigrationReconciliationReport } from './migrationPreflightV8'
+import {
+  migrateV7ToV8WithReport,
+  upgradeLegacyV8TeachingUnitSubjects,
+  V8MigrationError,
+  type V8MigrationErrorCode,
+} from './migrationsV8'
 import { APP_DATA_V7_KEY, loadAppDataV7, type AppDataV7LoadResult } from './storageV7'
 import { isCompatibleAppDataV8, isSafeAppDataV8Update } from './validators/v8'
 
@@ -20,6 +26,17 @@ export interface AppDataV8LoadResult {
   shouldPersist: boolean
   /** Exact v7 snapshot observed before migration, used to reject older-tab writes. */
   legacyGuardRaw: string | null
+  /** Structured, read-only evidence for a V7 migration attempt. */
+  migration?: {
+    preflight: V8MigrationPreflightReport
+    reconciliation: V8MigrationReconciliationReport | null
+  }
+  migrationFailure?: {
+    code: V8MigrationErrorCode
+    message: string
+    entityId?: string
+    subjectId?: string
+  }
 }
 
 export type AppDataV8StorageErrorCode =
@@ -117,13 +134,22 @@ export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): Ap
     legacyGuardRaw,
   }
 
-  let migrated: AppDataV8
+  let migration: ReturnType<typeof migrateV7ToV8WithReport>
   try {
-    migrated = migrateV7ToV8(legacy.value)
-  } catch {
+    migration = migrateV7ToV8WithReport(legacy.value)
+  } catch (cause) {
     return {
       value: initialValue, status: 'read-error', source: legacy.source, issue: 'migration-failure', raw: null,
       rawBackup: legacy.rawBackup, shouldPersist: false, legacyGuardRaw,
+      ...(cause instanceof V8MigrationError && cause.preflight
+        ? { migration: { preflight: cause.preflight, reconciliation: cause.reconciliation ?? null } }
+        : {}),
+      ...(cause instanceof V8MigrationError ? { migrationFailure: {
+        code: cause.code,
+        message: cause.message,
+        ...(cause.entityId ? { entityId: cause.entityId } : {}),
+        ...(cause.subjectId ? { subjectId: cause.subjectId } : {}),
+      } } : {}),
     }
   }
 
@@ -143,7 +169,7 @@ export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): Ap
   }
 
   return {
-    value: migrated,
+    value: migration.data,
     status: 'saved',
     source: legacy.source,
     issue: 'none',
@@ -151,6 +177,7 @@ export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): Ap
     rawBackup: legacy.rawBackup,
     shouldPersist: true,
     legacyGuardRaw,
+    migration: { preflight: migration.preflight, reconciliation: migration.reconciliation },
   }
 }
 

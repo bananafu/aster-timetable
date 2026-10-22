@@ -1,7 +1,11 @@
 import type { AppDataV7, AppDataV8, SubjectV8, TeachingUnitSubject } from '../types'
-import { normalizeSubjectText } from '../lib/subjectSearch'
 import { migrateEventOwnershipV8 } from './eventOwnershipV8'
-import { isCompatibleAppDataV7 } from './validators/v7'
+import {
+  preflightV7ToV8,
+  reconcileV7ToV8,
+  type V8MigrationPreflightReport,
+  type V8MigrationReconciliationReport,
+} from './migrationPreflightV8'
 import { isCompatibleAppDataV8 } from './validators/v8'
 
 export type V8MigrationErrorCode =
@@ -9,6 +13,10 @@ export type V8MigrationErrorCode =
   | 'unassigned-teaching-unit-subject-reference'
   | 'subject-name-conflict'
   | 'subject-id-allocation-failed'
+  | 'zero-project-subjects'
+  | 'invalid-v7'
+  | 'unexpected-v7-progress'
+  | 'reconciliation-failed'
 
 export class V8MigrationError extends Error {
   constructor(
@@ -16,6 +24,8 @@ export class V8MigrationError extends Error {
     message: string,
     public readonly entityId?: string,
     public readonly subjectId?: string,
+    public readonly preflight?: V8MigrationPreflightReport,
+    public readonly reconciliation?: V8MigrationReconciliationReport,
   ) {
     super(message)
     this.name = 'V8MigrationError'
@@ -128,62 +138,44 @@ function mappedSubjectId(mapping: Map<string, string>, projectId: string, subjec
   return mapped
 }
 
-function assertMigratableSubjectNames(source: AppDataV7): void {
-  for (const field of ['name', 'shortName'] as const) {
-    const seen = new Map<string, string>()
-    for (const subject of source.subjects) {
-      const key = normalizeSubjectText(subject[field])
-      const priorId = seen.get(key)
-      if (priorId) {
-        throw new V8MigrationError(
-          'subject-name-conflict',
-          `Cannot migrate Subjects ${priorId} and ${subject.id}: normalized ${field} values conflict in every Project. Resolve the V7 collision before retrying.`,
-          subject.id,
-          priorId,
-        )
-      }
-      seen.set(key, subject.id)
-    }
-  }
+export interface V8MigrationResult {
+  data: AppDataV8
+  preflight: V8MigrationPreflightReport
+  reconciliation: V8MigrationReconciliationReport
 }
 
-function findUnassignedReplacement(
-  source: AppDataV7,
-  field: 'projectId' | 'teachingUnitId',
-): { entityId: string; subjectId: string } | undefined {
-  if (!record(source) || !Array.isArray(source.overrides)) return undefined
-  for (const override of source.overrides) {
-    if (!record(override) || override[field] !== null || !record(override.replacement)
-      || typeof override.id !== 'string' || typeof override.replacement.subjectId !== 'string') continue
-    return { entityId: override.id, subjectId: override.replacement.subjectId }
+function throwPreflightFailure(preflight: V8MigrationPreflightReport): never {
+  const priority = [
+    'unassigned-subject-reference',
+    'unassigned-teaching-unit-subject-reference',
+    'unexpected-v7-progress',
+    'zero-project-subjects',
+    'subject-name-conflict',
+    'invalid-v7',
+  ] as const
+  const blocking = priority
+    .map((code) => preflight.issues.find((item) => item.severity === 'blocking' && item.code === code))
+    .find((item) => item !== undefined) ?? preflight.issues.find((item) => item.severity === 'blocking')!
+  if (blocking.code === 'invalid-v7') throw new V8MigrationError('invalid-v7', 'Invalid AppData v7', undefined, undefined, preflight)
+  if (blocking.code === 'unexpected-v7-progress') {
+    throw new V8MigrationError('unexpected-v7-progress', 'Unexpected teaching progress data in AppData v7', undefined, undefined, preflight)
   }
-  return undefined
+  if (blocking.code === 'subject-name-conflict') {
+    throw new V8MigrationError('subject-name-conflict', blocking.message, blocking.entityIds.at(-1), blocking.entityIds[0], preflight)
+  }
+  if (blocking.code === 'unassigned-subject-reference' || blocking.code === 'unassigned-teaching-unit-subject-reference') {
+    throw new V8MigrationError(blocking.code, blocking.message, blocking.entityIds[0], blocking.entityIds[1], preflight)
+  }
+  if (blocking.code === 'zero-project-subjects') {
+    throw new V8MigrationError('zero-project-subjects', blocking.message, blocking.entityIds[0], undefined, preflight)
+  }
+  throw new V8MigrationError('invalid-v7', blocking.message, blocking.entityIds[0], undefined, preflight)
 }
 
-export function migrateV7ToV8(source: AppDataV7): AppDataV8 {
-  const unassignedReference = findUnassignedReplacement(source, 'projectId')
-  if (unassignedReference) {
-    throw new V8MigrationError(
-      'unassigned-subject-reference',
-      `Cannot migrate legacy Override ${unassignedReference.entityId}: Subject ${unassignedReference.subjectId} has no Project ownership. Restore or assign the Override to a Project in V7 before retrying.`,
-      unassignedReference.entityId,
-      unassignedReference.subjectId,
-    )
-  }
-  const unassignedUnitReference = findUnassignedReplacement(source, 'teachingUnitId')
-  if (unassignedUnitReference) {
-    throw new V8MigrationError(
-      'unassigned-teaching-unit-subject-reference',
-      `Cannot migrate legacy Override ${unassignedUnitReference.entityId}: Subject ${unassignedUnitReference.subjectId} has no TeachingUnit ownership. Restore or assign the Override to a TeachingUnit in V7 before retrying.`,
-      unassignedUnitReference.entityId,
-      unassignedUnitReference.subjectId,
-    )
-  }
-  if (!isCompatibleAppDataV7(source)) throw new Error('Invalid AppData v7')
-  if (Object.prototype.hasOwnProperty.call(source, 'teachingProgress')) {
-    throw new Error('Unexpected teaching progress data in AppData v7')
-  }
-  assertMigratableSubjectNames(source)
+export function migrateV7ToV8WithReport(source: AppDataV7): V8MigrationResult {
+  const sourceSnapshot = JSON.stringify(source)
+  const preflight = preflightV7ToV8(source)
+  if (!preflight.canMigrate) throwPreflightFailure(preflight)
 
   const usedIds = reservedEntityIds(source)
   const subjectIds = new Map<string, string>()
@@ -216,6 +208,31 @@ export function migrateV7ToV8(source: AppDataV7): AppDataV8 {
     })),
     teachingProgress: [],
   }
-  if (!isCompatibleAppDataV8(migrated)) throw new Error('Invalid AppData v8 migration')
-  return migrated
+  if (!isCompatibleAppDataV8(migrated)) throw new V8MigrationError('reconciliation-failed', 'Invalid AppData v8 migration', undefined, undefined, preflight)
+  const reconciliation = reconcileV7ToV8(source, migrated)
+  if (!reconciliation.isReconciled) {
+    throw new V8MigrationError(
+      'reconciliation-failed',
+      'V7 to V8 migration reconciliation failed.',
+      reconciliation.issues[0]?.entityIds[0],
+      undefined,
+      preflight,
+      reconciliation,
+    )
+  }
+  if (JSON.stringify(source) !== sourceSnapshot) {
+    const sourceMutation: V8MigrationReconciliationReport = {
+      isReconciled: false,
+      issues: [{
+        severity: 'blocking', code: 'reconciliation-reference-mismatch',
+        message: 'The source V7 document changed during migration.', entityIds: [],
+      }],
+    }
+    throw new V8MigrationError('reconciliation-failed', sourceMutation.issues[0].message, undefined, undefined, preflight, sourceMutation)
+  }
+  return { data: migrated, preflight, reconciliation }
+}
+
+export function migrateV7ToV8(source: AppDataV7): AppDataV8 {
+  return migrateV7ToV8WithReport(source).data
 }

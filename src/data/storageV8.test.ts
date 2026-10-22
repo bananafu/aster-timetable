@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AppDataV8 } from '../types'
+import type { AppDataV7, AppDataV8 } from '../types'
 import { initialData } from './seed'
 import { migrateV3ToV4 } from './migrationsV4'
 import { migrateV4ToV5 } from './migrationsV5'
@@ -44,6 +44,9 @@ describe('AppDataV8 storage', () => {
     const loaded = loadAppDataV8(store, v8())
 
     expect(loaded).toMatchObject({ status: 'saved', source: 'v7', issue: 'none', raw: null, shouldPersist: true, legacyGuardRaw: rawV7 })
+    expect(loaded.migration).toMatchObject({
+      preflight: { canMigrate: true }, reconciliation: { isReconciled: true, issues: [] },
+    })
     expect(loaded.value).toEqual(migrateV7ToV8(source))
     expect(loaded.value.subjects.every((subject) => subject.projectId === source.projects[0].id)).toBe(true)
     expect(store.setItem).not.toHaveBeenCalled()
@@ -316,6 +319,33 @@ describe('AppDataV8 storage', () => {
     expect(loaded).toMatchObject({ status: 'saved', source: 'v7', shouldPersist: false })
     expect(loaded.value).toEqual(source)
     expect(store.values.get(APP_DATA_V8_KEY)).toBe('{ignored-by-v7')
+    expect(store.setItem).not.toHaveBeenCalled()
+  })
+
+  it('returns a structured blocking issue and never writes when legacy Subjects have no Project', () => {
+    const source = v7()
+    const orphanedSubjects: AppDataV7 = {
+      ...source,
+      activeProjectId: null,
+      projects: [], timetables: [], schools: [], teachingUnits: [], classes: [], recurringLessons: [],
+      events: [], overrides: [], oneOffLessons: [], migrationWarnings: [],
+    }
+    const rawV7 = JSON.stringify(orphanedSubjects)
+    const store = memoryStorage(new Map([[APP_DATA_V7_KEY, rawV7]]))
+
+    const loaded = loadAppDataV8(store, v8())
+
+    expect(loaded).toMatchObject({
+      status: 'read-error', source: 'v7', issue: 'migration-failure', shouldPersist: false,
+      raw: null, rawBackup: rawV7, legacyGuardRaw: rawV7,
+      migration: { preflight: { canMigrate: false }, reconciliation: null },
+      migrationFailure: { code: 'zero-project-subjects' },
+    })
+    expect(loaded.migration?.preflight.issues).toContainEqual(expect.objectContaining({
+      severity: 'blocking', code: 'zero-project-subjects',
+    }))
+    expect(store.values.get(APP_DATA_V7_KEY)).toBe(rawV7)
+    expect(store.values.has(APP_DATA_V8_KEY)).toBe(false)
     expect(store.setItem).not.toHaveBeenCalled()
   })
 })

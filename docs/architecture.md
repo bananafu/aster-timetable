@@ -1,5 +1,11 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R1 — V7→V8 migration safety and preflight
+
+V7→V8 遷移在建立候選 V8 文件前先執行唯讀 `preflightV7ToV8`。報告以 `blocking`、`review`、`informational` 分級，包含 Project／TeachingUnit／Subject 與課程資料量、預期的 Project-scoped Subject 數量、normalized Subject 衝突、replacement Override 歸屬缺口，以及 Event unresolved 原因統計。零 Project 但仍有全域 Subject 時屬 blocking：系統不建立 Project、不猜測歸屬，也不產生可持久化的 V8 文件。Event ownership 無法判定則屬 review，Event 仍完整遷移為 unresolved。
+
+遷移候選完成後，`reconcileV7ToV8` 在任何 storage 寫入前核對 collection 數量與 ID、每個 Project 的 Subject mapping、Lesson／OneOffLesson／replacement Override 引用、Event 原始內容及推導出的 TeachingUnitSubject relation。只有 V8 validator 與 reconciliation 都通過，load 結果才允許沿用既有 CAS 持久化流程；失敗結果保留結構化 preflight／reconciliation issue、原始 V7 raw backup，且不寫入 V8 key。有效的既有 V8 文件仍優先載入，不會被 V7 migration 覆蓋。
+
 ## Phase 4D S1-A — TeachingUnit–Subject configuration foundation
 
 `AppDataV8` 使用 Project-scoped `SubjectV8` catalog，並以必要的 `TeachingUnitSubject` collection 表示科目已配置至哪個 TeachingUnit。relation 保存獨立 ID、Project、TeachingUnit 與 Subject；同一 Project + TeachingUnit + Subject pair 必須唯一，三者 scope 與 `applicableSchoolLevels` 必須一致。Lesson、replacement Override、OneOffLesson 與 TeachingProgress 的 Subject 引用都必須有相符 relation。
