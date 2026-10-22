@@ -1,5 +1,15 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-B2a — Backup & preflight foundation
+
+`cutoverBackupV8` 以嘗試 ID 建立獨立備份 key：從 V7 key 取得精確 raw、使用既有 SHA-256 helper 計算 digest、寫入後讀回完整 record 並重新驗證 raw／digest／metadata，只有確認成功才回傳 receipt。空白來源儲存 `empty` marker，不建立虛假的 V7 raw backup。任何失敗回傳結構化 code；備份模組不寫入 V7 或 V8 key，也不覆寫既有備份。
+
+Rollback archive 僅定義含 V8 原始 raw、digest、原 activation backup ID 與 `read-only` 恢復狀態的驗證契約；本階段不建立 archive 或執行 rollback。
+
+`cutoverPreflightV8` 是獨立的唯讀 API，使用既有 R1 migration、reconciliation 與 V8 validator；回傳候選文件、source identity、blocking／review issue，並檢查既有 V8、activation 與來源變更。外部備份確認契約分開記錄匯出已準備與使用者已確認，且綁定來源 digest。V7 activation guard 目前僅為檢查契約，未接入正式 runtime。
+
+LocalStorage 不提供跨 key 原子交易，備份與 preflight 的最後一次讀取之後仍可能發生其他分頁寫入。B2b／B2c 必須處理 transaction 狀態、協調與中斷恢復；本階段不啟用 V8，也不修改正式 V7 runtime。
+
 ## Phase 4D R2-A — V8 Runtime Host foundation
 
 `useAppDataV8` 直接組合既有 `loadAppDataV8`、完整 V8 validator 與 `persistAppDataV8` CAS，不重用會自動持久化 migration 的通用 storage hook。啟動時只有原本就存在且有效的 V8 文件取得寫入資格；空白 V8 與通過 R1 preflight／reconciliation 的 V7 candidate 都維持唯讀，等待 R2-B 明確 cutover。

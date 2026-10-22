@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-B2a — Backup & preflight foundation（資料契約完成）
+
+新增不可覆寫的 V7 raw／SHA-256／讀回驗證備份與 empty-source marker，以及唯讀 cutover preflight、source fingerprint guard 和綁定來源的外部 JSON 確認契約。既有 R1 migration、reconciliation 與 V8 validator 被重用；失敗與 review issue 以結構化結果保留。
+
+B2b activation transaction、B2c 中斷恢復與多分頁協調尚未實作。正式 App 仍使用 V7；V8 未正式啟用。LocalStorage 跨 key 寫入及跨分頁競爭目前仍無原子保證。
+
 ## Phase 4D R2-A — V8 Runtime Host foundation（完成）
 
 已建立未掛入 `App.tsx` 的獨立 V8 runtime host。既有 V8 文件可透過單一更新入口使用 V8 CAS；寫入會檢查原始 V8 snapshot、V7 guard、完整 validator 與 safe update，並只在讀回確認後增加 persistence revision。寫入失敗與跨分頁衝突保留本頁草稿，可匯出本頁或原始 V7／V8 JSON，也可明確採用有效的外部 V8 版本。

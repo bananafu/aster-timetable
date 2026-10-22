@@ -1,5 +1,13 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-B2a — Backup & preflight foundation
+
+- 正式切換前必須保存精確 V7 raw、SHA-256 digest 並讀回驗證；每次嘗試使用獨立 backup ID 與 key，既有備份不可覆寫。沒有 V7 key 時使用明確的 empty-source marker，不虛構 V7 raw 或 fingerprint。
+- Cutover preflight 只讀取來源並產生 V8 candidate；blocking migration、損壞／既有 V8、未知 activation 與來源 fingerprint 不符均阻擋。Review issue 保留結構化資訊，供後續確認。
+- 外部 JSON 匯出準備與使用者確認已保存是兩個獨立狀態，確認必須綁定特定 source digest；來源變更即失效。
+- Rollback archive 契約保留 V8 原始 raw 與 digest，恢復狀態固定為唯讀；本階段不執行 rollback 或刪除 V8 key。
+- 本階段未實作 B2b activation transaction、B2c 恢復／並行協調或正式 App cutover。LocalStorage 跨 key 寫入與跨分頁先讀後寫仍不具原子性。
+
 ## Phase 4D R2-A — V8 Runtime Host foundation
 
 - `useAppDataV8` 是獨立且未接入正式 App 的 V8 runtime host；正式 V7 runtime、storage key 與使用者流程維持不變。
