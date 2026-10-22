@@ -105,8 +105,11 @@ function validEventOwnership(data: AppDataV8, value: unknown): value is Calendar
     || new Set(value.ownershipIssue.candidateTimetableIds).size !== value.ownershipIssue.candidateTimetableIds.length) return false
 
   const expected = deriveLegacyEventOwnershipV8(data, value as unknown as CalendarEventV8)
-  return expected.ownershipStatus === 'unresolved'
-    && value.ownershipIssue.reason === expected.ownershipIssue.reason
+  if (expected.ownershipStatus === 'resolved') {
+    return value.ownershipIssue.reason === 'requires-confirmation'
+      && JSON.stringify(value.ownershipIssue.candidateTimetableIds) === JSON.stringify([expected.timetableId])
+  }
+  return value.ownershipIssue.reason === expected.ownershipIssue.reason
     && JSON.stringify(value.ownershipIssue.candidateTimetableIds)
       === JSON.stringify(expected.ownershipIssue.candidateTimetableIds)
 }
@@ -316,11 +319,40 @@ function hasSafeTeachingUnitSubjectUpdate(current: AppDataV8, next: AppDataV8): 
       === JSON.stringify(next.teachingUnitSubjects.filter((relation) => relation.projectId === projectId)))
 }
 
+function hasSafeEventOwnershipUpdate(current: AppDataV8, next: AppDataV8): boolean {
+  const nextEvents = new Map(next.events.map((event) => [event.id, event]))
+  for (const event of current.events) {
+    const after = nextEvents.get(event.id)
+    if (!after) {
+      if (event.projectId === null || next.projects.some((project) => project.id === event.projectId)) return false
+      continue
+    }
+    if (event.ownershipStatus === 'resolved') {
+      if (after.ownershipStatus !== 'resolved'
+        || after.projectId !== event.projectId
+        || after.teachingUnitId !== event.teachingUnitId
+        || after.timetableId !== event.timetableId) return false
+      continue
+    }
+    if (after.ownershipStatus !== 'resolved') continue
+    const existingProject = event.projectId
+      ? current.projects.find((project) => project.id === event.projectId)
+      : undefined
+    if (existingProject && after.projectId !== existingProject.id) return false
+    const existingUnit = event.teachingUnitId
+      ? current.teachingUnits.find((unit) => unit.id === event.teachingUnitId && unit.projectId === after.projectId)
+      : undefined
+    if (existingUnit && after.teachingUnitId !== existingUnit.id) return false
+  }
+  return true
+}
+
 export function isSafeAppDataV8Update(current: AppDataV8, next: AppDataV8): boolean {
   if (!isCompatibleAppDataV8(current) || !isCompatibleAppDataV8(next)
     || !isSafeAppDataV7UpdateExceptSubjects(asV7(current), asV7(next))
     || !hasSafeSubjectUpdate(current, next)
-    || !hasSafeTeachingUnitSubjectUpdate(current, next)) return false
+    || !hasSafeTeachingUnitSubjectUpdate(current, next)
+    || !hasSafeEventOwnershipUpdate(current, next)) return false
 
   const currentById = new Map(current.teachingProgress.map((item) => [item.id, item]))
   const nextById = new Map(next.teachingProgress.map((item) => [item.id, item]))

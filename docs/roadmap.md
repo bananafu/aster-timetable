@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D A2 — V8 Event ownership repair foundation（完成）
+
+已建立 unresolved Event repair domain、候選 selector／adapter、Timetable topology 安全操作、receipt session 與獨立 Repair UI。修復必須由使用者明確選擇 Project、學校／學制與教師課表；既有合法 scope 不可任意改派，跨 Project 指派會被拒絕。Topology 變更只更新 unresolved 候選，不會自動選第一份課表、搬移或刪除 Event。
+
+正式 V7 Runtime、storage key、Event Editor 與 App 入口維持不變。R2 仍需提供正式 V8 host、備份／回滾與 cutover gate，並將 Repair UI 接到該 host 的實際 persistence receipt。
+
 ## Phase 4D R1 — V7→V8 migration safety and preflight（完成）
 
 已建立唯讀 migration preflight、結構化 blocking／review／informational issue 與持久化前 reconciliation。零 Project 但仍有舊 Subject 時會明確阻擋，不建立 Project、不猜測科目歸屬，也不寫入 V8 key；unresolved Event 則完整保留並列為 review。成功遷移必須通過 V8 validator，並核對 Project-scoped Subject mapping、既有 collection IDs、課程引用、Event 內容與 TeachingUnitSubject relation。

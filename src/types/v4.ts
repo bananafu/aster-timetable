@@ -101,6 +101,7 @@ export type EventOwnershipIssueReasonV8 =
   | 'missing-teaching-unit'
   | 'missing-timetable'
   | 'ambiguous-timetable'
+  | 'requires-confirmation'
 
 export interface EventOwnershipIssueV8 {
   reason: EventOwnershipIssueReasonV8

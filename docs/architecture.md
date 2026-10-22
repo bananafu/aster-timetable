@@ -1,5 +1,13 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D A2 — V8 Event ownership repair foundation
+
+`eventRepairV8` 提供純資料操作：列出 unresolved Event 與可用的 Project、TeachingUnit、Timetable 候選，並只在使用者明確指定完整 scope 後將單一 Event 原子轉為 resolved。既有且有效的 Project／TeachingUnit 不可在修復時改派；缺失引用可由使用者明確重選。操作保留原 Event ID 與全部內容、拒絕跨 Project Timetable，並以完整 V8 validator 與 safe-update guard 驗證候選文件。
+
+Timetable 在現行 schema 中屬於 Project，沒有直接的 TeachingUnit 外鍵，因此新增或刪除 Timetable 會影響該 Project 內所有 unresolved Event 的候選集合。`eventTopologyV8` 在 topology 改變後重新計算 unresolved candidate snapshot，但不自動 resolved。當唯一候選因 topology 變更而出現時，使用 `requires-confirmation` reason 保持 unresolved，直到使用者確認。刪除仍擁有 resolved Event、Lesson、Override、OneOffLesson 或 TeachingProgress 的 Timetable 會被阻擋，Event 不會搬移或刪除。
+
+`EventRepairManagerV8` 是未掛入正式 App 的獨立元件。它使用 V8-only receipt session 提交完整候選文件，不直接存取 LocalStorage；只有 storage revision 前進且文件符合預期時才顯示成功並移除待確認項目。寫入失敗、跨分頁衝突或 stale data 會保留使用者選擇與待確認 Event。
+
 ## Phase 4D R1 — V7→V8 migration safety and preflight
 
 V7→V8 遷移在建立候選 V8 文件前先執行唯讀 `preflightV7ToV8`。報告以 `blocking`、`review`、`informational` 分級，包含 Project／TeachingUnit／Subject 與課程資料量、預期的 Project-scoped Subject 數量、normalized Subject 衝突、replacement Override 歸屬缺口，以及 Event unresolved 原因統計。零 Project 但仍有全域 Subject 時屬 blocking：系統不建立 Project、不猜測歸屬，也不產生可持久化的 V8 文件。Event ownership 無法判定則屬 review，Event 仍完整遷移為 unresolved。
