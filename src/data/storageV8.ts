@@ -78,6 +78,14 @@ const failure = (code: AppDataV8StorageErrorCode, message: string, cause?: unkno
   code, message, cause === undefined ? undefined : { cause },
 )
 
+/** Parses the exact stored document, applying only recognized in-version V8 upgrades. */
+export function parseAppDataV8Raw(raw: string): AppDataV8 {
+  const parsed: unknown = JSON.parse(raw)
+  const upgraded = upgradeLegacyV8TeachingUnitSubjects(upgradeLegacyV8EventOwnership(parsed))
+  if (!isCompatibleAppDataV8(upgraded)) throw new Error('Invalid AppData v8')
+  return upgraded
+}
+
 export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): AppDataV8LoadResult {
   let raw: string | null = null
   let legacyGuardRaw: string | null = null
@@ -94,8 +102,7 @@ export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): Ap
   if (raw !== null) {
     try {
       const parsed: unknown = JSON.parse(raw)
-      const upgraded = upgradeLegacyV8TeachingUnitSubjects(upgradeLegacyV8EventOwnership(parsed))
-      if (!isCompatibleAppDataV8(upgraded)) throw new Error('Invalid AppData v8')
+      const upgraded = parseAppDataV8Raw(raw)
       return {
         value: upgraded, status: 'saved', source: 'v8', issue: 'none', raw,
         rawBackup: raw, shouldPersist: JSON.stringify(upgraded) !== JSON.stringify(parsed), legacyGuardRaw,

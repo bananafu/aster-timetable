@@ -1,5 +1,13 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-A — V8 Runtime Host foundation
+
+`useAppDataV8` 直接組合既有 `loadAppDataV8`、完整 V8 validator 與 `persistAppDataV8` CAS，不重用會自動持久化 migration 的通用 storage hook。啟動時只有原本就存在且有效的 V8 文件取得寫入資格；空白 V8 與通過 R1 preflight／reconciliation 的 V7 candidate 都維持唯讀，等待 R2-B 明確 cutover。
+
+Host 以原始 V8 raw、首次載入時的 V7 raw guard 與本頁 persistence revision 作為寫入 expectation。寫入前驗證 current／next 與 safe update，寫入後讀回完全相同的 raw 才增加 revision 並發出 receipt。失敗時保留本頁 draft；V8 storage event 可在無 draft 時同步，或在有 draft 時進入 conflict 並允許明確採用外部 V8。V7 guard 改變只會阻擋後續 V8 寫入，不會把新 V7 snapshot 改成 baseline，也不提供強制覆蓋入口。
+
+Activation metadata 使用獨立 key 與版本化契約，保存 `sha256` V7 fingerprint、固定 V7 key、V8 activation revision、UTC activation timestamp 與 activation status。R2-A 只驗證及讀取既有 metadata，不建立或更新，因此 mount 不會以當下 V7 raw 重設 fingerprint。
+
 ## Phase 4D A2 — V8 Event ownership repair foundation
 
 `eventRepairV8` 提供純資料操作：列出 unresolved Event 與可用的 Project、TeachingUnit、Timetable 候選，並只在使用者明確指定完整 scope 後將單一 Event 原子轉為 resolved。既有且有效的 Project／TeachingUnit 不可在修復時改派；缺失引用可由使用者明確重選。操作保留原 Event ID 與全部內容、拒絕跨 Project Timetable，並以完整 V8 validator 與 safe-update guard 驗證候選文件。

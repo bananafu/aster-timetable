@@ -1,5 +1,13 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-A — V8 Runtime Host foundation
+
+- `useAppDataV8` 是獨立且未接入正式 App 的 V8 runtime host；正式 V7 runtime、storage key 與使用者流程維持不變。
+- 已存在且有效的 V8 文件可經單一 `setData` 入口修改；每次寫入皆驗證 current／next、比對 V8 snapshot 與 V7 guard，並在讀回確認後才發出 revision receipt。
+- V8 不存在時只建立空白狀態或執行 V7 migration preflight／reconciliation。migration candidate 保持唯讀，不自動寫入 V8，也不自動啟用 migration。
+- 損壞的 V8、被阻擋的 V7 migration、寫入失敗及跨分頁衝突均保留原始資料或本頁草稿，並提供 V7／V8／本頁 JSON 匯出；stale write 不得覆蓋外部分頁版本。
+- Activation metadata 僅定義不可變的 V7 source fingerprint、source key、V8 activation revision、timestamp 與 status 契約；本階段不建立、不更新也不啟用該紀錄。
+
 ## Phase 4D S1-A — TeachingUnit 科目配置
 
 - 科目定義屬於目前 Project 的 catalog；科目是否可在某個學校與學制使用，由獨立 `TeachingUnitSubject` 配置決定。

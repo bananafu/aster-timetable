@@ -1,5 +1,13 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-A — V8 Runtime Host foundation（完成）
+
+已建立未掛入 `App.tsx` 的獨立 V8 runtime host。既有 V8 文件可透過單一更新入口使用 V8 CAS；寫入會檢查原始 V8 snapshot、V7 guard、完整 validator 與 safe update，並只在讀回確認後增加 persistence revision。寫入失敗與跨分頁衝突保留本頁草稿，可匯出本頁或原始 V7／V8 JSON，也可明確採用有效的外部 V8 版本。
+
+V8 不存在時只執行 R1 preflight／reconciliation 並保留唯讀 migration candidate；blocking V7 與 corrupt V8 皆不寫入、不 reset、不 fallback。另已定義獨立且不可由 mount 更新的 activation metadata 契約。本階段沒有切換正式 V7 runtime、沒有雙寫，也沒有修改 `App.tsx`。
+
+R2-B 尚需提供明確的使用者備份／啟用確認、原子建立 V8 與 activation metadata、cutover UI，以及啟用後的回滾／修復流程。
+
 ## Phase 4D A2 — V8 Event ownership repair foundation（完成）
 
 已建立 unresolved Event repair domain、候選 selector／adapter、Timetable topology 安全操作、receipt session 與獨立 Repair UI。修復必須由使用者明確選擇 Project、學校／學制與教師課表；既有合法 scope 不可任意改派，跨 Project 指派會被拒絕。Topology 變更只更新 unresolved 候選，不會自動選第一份課表、搬移或刪除 Event。
