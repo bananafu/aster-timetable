@@ -10,6 +10,7 @@ import { archiveProject } from './projectRuntime'
 import { createBlankProject } from './projectRuntimeV8'
 import {
   createSubject,
+  configureSubjectForTeachingUnit,
   deleteSubject,
   listSubjects,
   SubjectV8ManagementError,
@@ -41,6 +42,12 @@ function code(action: () => unknown) {
 
 function withUnreferencedSubject(data = base(), id = 'earth-science') {
   return createSubject(data, data.projects[0].id, draft, id)
+}
+
+function withConfiguredSubject(data = base(), id = 'earth-science') {
+  const created = withUnreferencedSubject(data, id)
+  const lesson = created.recurringLessons[0]
+  return configureSubjectForTeachingUnit(created, lesson.projectId, lesson.teachingUnitId, id, `${id}-configuration`)
 }
 
 describe('Project-scoped Subject V8 operations', () => {
@@ -108,7 +115,7 @@ describe('Project-scoped Subject V8 operations', () => {
   })
 
   it('blocks deletion when any historical recurring Lesson references the Subject', () => {
-    const withSubject = withUnreferencedSubject()
+    const withSubject = withConfiguredSubject()
     const original = withSubject.recurringLessons[0]
     const unit = withSubject.teachingUnits.find((item) => item.id === original.teachingUnitId)!
     const nextDate = new Date(`${unit.startDate}T00:00:00.000Z`)
@@ -131,7 +138,7 @@ describe('Project-scoped Subject V8 operations', () => {
   })
 
   it.each(['override', 'one-off', 'progress'] as const)('blocks deletion for a %s reference', (kind) => {
-    const source = withUnreferencedSubject()
+    const source = withConfiguredSubject()
     const lesson = source.recurringLessons[0]
     const unit = source.teachingUnits.find((item) => item.id === lesson.teachingUnitId)!
     const progress: TeachingProgress = {
@@ -186,6 +193,7 @@ describe('Project-scoped Subject V8 operations', () => {
       recurringLessons: current.recurringLessons.filter((lesson) => lesson.subjectId !== referencedId),
       overrides: current.overrides.filter((override) => override.replacement?.subjectId !== referencedId),
       oneOffLessons: current.oneOffLessons.filter((lesson) => lesson.subjectId !== referencedId),
+      teachingUnitSubjects: current.teachingUnitSubjects.filter((relation) => relation.subjectId !== referencedId),
     }
     const deleted = deleteSubject(unlinked, projectA, referencedId, true)
     expect(isCompatibleAppDataV8(deleted)).toBe(true)

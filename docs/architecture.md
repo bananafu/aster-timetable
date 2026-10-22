@@ -1,5 +1,13 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D S1-A — TeachingUnit–Subject configuration foundation
+
+`AppDataV8` 使用 Project-scoped `SubjectV8` catalog，並以必要的 `TeachingUnitSubject` collection 表示科目已配置至哪個 TeachingUnit。relation 保存獨立 ID、Project、TeachingUnit 與 Subject；同一 Project + TeachingUnit + Subject pair 必須唯一，三者 scope 與 `applicableSchoolLevels` 必須一致。Lesson、replacement Override、OneOffLesson 與 TeachingProgress 的 Subject 引用都必須有相符 relation。
+
+V7 → V8 遷移保留既有 Subject ID mapping 與所有課程引用，並將每個舊科目配置到同 Project 中所有學制相符的 TeachingUnit，不依名稱合併，也不選第一個 TeachingUnit。缺少 `teachingUnitSubjects` 的既有 V8 文件使用相同確定性規則在記憶體升級；collection 已存在但內容無效時由 validator 拒絕，不自動修補或覆寫。Project copy 會重新映射 Project、TeachingUnit、Subject 與 relation ID；一般新建 Project 保持空白。
+
+本階段只提供 V8 migration、validator、selector、CRUD 與 Project lifecycle 資料層；正式 V7 Runtime、storage key 與 UI 維持不變。
+
 ## Phase 4D A1 — V8 Event ownership foundation
 
 `CalendarEventV8` 使用 `ownershipStatus` discriminated union。`resolved` Event 必須保存單一 `timetableId`，且 Project、Timetable 與 TeachingUnit 引用一致；`unresolved` Event 不得保存 `timetableId`，並以 `ownershipIssue.reason` 與確定性排序的 `candidateTimetableIds` 保留未來修復所需脈絡。

@@ -1,5 +1,14 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D S1-A — TeachingUnit 科目配置
+
+- 科目定義屬於目前 Project 的 catalog；科目是否可在某個學校與學制使用，由獨立 `TeachingUnitSubject` 配置決定。
+- 同一 Subject 可分別配置到同 Project 的多個 TeachingUnit。其他學校或其他學制啟用同名科目，不會自動影響目前 TeachingUnit，也不構成名稱衝突。
+- `applicableSchoolLevels` 只代表科目適用學制，不代表已配置到每個相符 TeachingUnit。
+- 移除配置時必須保護該 TeachingUnit 的課程、單日異動與進度引用；永久刪除 Subject 前必須確認所有配置及引用都已安全解除。
+- 複製為新學期會複製 catalog 與既有配置並建立全新的 ID mapping；一般新增 Project 不建立科目或配置。
+- 本階段只建立 V8 資料層契約；正式 V7 Runtime、storage 與科目管理 UI 留待後續整合。
+
 ## Phase 4D A1 — V8 Event ownership
 
 - 每筆 V8 Event 只屬於一份 Timetable；查詢範圍必須同時包含 Project 與 Timetable，不能因同屬 Project 而顯示在其他教師課表。

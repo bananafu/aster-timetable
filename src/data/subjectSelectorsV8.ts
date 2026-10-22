@@ -27,6 +27,36 @@ export function selectProjectSubjectsForLevel(
   return subjectsForLevel(selectProjectSubjects(data, projectId), schoolLevel)
 }
 
+export function isSubjectConfiguredForTeachingUnit(
+  data: AppDataV8,
+  projectId: string | null | undefined,
+  teachingUnitId: string | null | undefined,
+  subjectId: string | null | undefined,
+): boolean {
+  if (!projectId || !teachingUnitId || !subjectId) return false
+  const unit = data.teachingUnits.find((item) => item.id === teachingUnitId && item.projectId === projectId)
+  const subject = data.subjects.find((item) => item.id === subjectId && item.projectId === projectId)
+  if (!unit || !subject || !subject.applicableSchoolLevels.includes(unit.schoolLevel)) return false
+  return data.teachingUnitSubjects.some((relation) => relation.projectId === projectId
+    && relation.teachingUnitId === teachingUnitId && relation.subjectId === subjectId)
+}
+
+export function selectSubjectsForTeachingUnit(
+  data: AppDataV8,
+  projectId: string | null | undefined,
+  teachingUnitId: string | null | undefined,
+): SubjectV8[] {
+  if (!projectId || !teachingUnitId) return []
+  const configuredIds = new Set(data.teachingUnitSubjects
+    .filter((relation) => relation.projectId === projectId && relation.teachingUnitId === teachingUnitId)
+    .map((relation) => relation.subjectId))
+  const unit = data.teachingUnits.find((item) => item.id === teachingUnitId && item.projectId === projectId)
+  if (!unit) return []
+  return data.subjects.filter((subject) => subject.projectId === projectId && configuredIds.has(subject.id)
+      && subject.applicableSchoolLevels.includes(unit.schoolLevel))
+    .map((subject) => ({ ...subject, applicableSchoolLevels: [...subject.applicableSchoolLevels] }))
+}
+
 export function findProjectSubject(
   data: AppDataV4,
   projectId: string | null | undefined,

@@ -215,6 +215,12 @@ export interface AppDataV4 {
 
 export type SubjectV5 = Subject & { applicableSchoolLevels: SchoolLevel[] }
 export type SubjectV8 = SubjectV5 & { projectId: string }
+export interface TeachingUnitSubject {
+  id: string
+  projectId: string
+  teachingUnitId: string
+  subjectId: string
+}
 export type AppDataV5 = Omit<AppDataV4, 'schemaVersion' | 'subjects' | 'oneOffLessons'> & {
   schemaVersion: 5
   subjects: SubjectV5[]
@@ -235,6 +241,7 @@ export type AppDataV7 = Omit<AppDataV6, 'schemaVersion' | 'oneOffLessons'> & {
 export type AppDataV8 = Omit<AppDataV7, 'schemaVersion' | 'subjects' | 'events'> & {
   schemaVersion: 8
   subjects: SubjectV8[]
+  teachingUnitSubjects: TeachingUnitSubject[]
   events: CalendarEventV8[]
   teachingProgress: TeachingProgress[]
 }

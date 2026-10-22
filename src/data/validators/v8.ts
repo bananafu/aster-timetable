@@ -3,6 +3,7 @@ import type {
   AppDataV8,
   CalendarEventV8,
   SubjectV8,
+  TeachingUnitSubject,
   TeachingProgress,
   TeachingProgressContent,
 } from '../../types'
@@ -27,6 +28,7 @@ const progressKeys = [
 const contentKeys = ['chapter', 'unit', 'note'] as const
 const snapshotKeys = ['content', 'updatedAt'] as const
 const subjectKeys = ['id', 'name', 'shortName', 'color', 'applicableSchoolLevels', 'origin', 'projectId'] as const
+const teachingUnitSubjectKeys = ['id', 'projectId', 'teachingUnitId', 'subjectId'] as const
 const eventKeys = [
   'id', 'projectId', 'teachingUnitId', 'title', 'type', 'date', 'startTime', 'endTime',
   'location', 'notes', 'color', 'origin', 'ownershipStatus', 'timetableId', 'ownershipIssue',
@@ -82,6 +84,11 @@ function validSubjectShape(value: unknown): value is SubjectV8 {
     && (value.origin === undefined || value.origin === 'demo' || value.origin === 'user')
 }
 
+function validTeachingUnitSubjectShape(value: unknown): value is TeachingUnitSubject {
+  return record(value) && onlyKeys(value, teachingUnitSubjectKeys)
+    && named(value.id) && named(value.projectId) && named(value.teachingUnitId) && named(value.subjectId)
+}
+
 function validEventOwnership(data: AppDataV8, value: unknown): value is CalendarEventV8 {
   if (!record(value) || !onlyKeys(value, eventKeys)) return false
   if (value.ownershipStatus === 'resolved') {
@@ -108,6 +115,9 @@ const asV7 = (data: AppDataV8): AppDataV7 => ({ ...data, schemaVersion: 7 })
 const scopeKey = (progress: Pick<TeachingProgress, 'projectId' | 'timetableId' | 'teachingUnitId' | 'classId' | 'subjectId'>) => JSON.stringify([
   progress.projectId, progress.timetableId, progress.teachingUnitId, progress.classId, progress.subjectId,
 ])
+const relationPairKey = (value: Pick<TeachingUnitSubject, 'projectId' | 'teachingUnitId' | 'subjectId'>) => JSON.stringify([
+  value.projectId, value.teachingUnitId, value.subjectId,
+])
 
 function nonSubjectEntityIds(data: AppDataV8): Set<string> {
   return new Set([
@@ -122,7 +132,8 @@ function nonSubjectEntityIds(data: AppDataV8): Set<string> {
 
 export function isCompatibleAppDataV8(value: unknown): value is AppDataV8 {
   try {
-    if (!record(value) || value.schemaVersion !== 8 || !Array.isArray(value.teachingProgress)) return false
+    if (!record(value) || value.schemaVersion !== 8 || !Array.isArray(value.teachingProgress)
+      || !Array.isArray(value.teachingUnitSubjects)) return false
     const data = value as unknown as AppDataV8
     if (!isCompatibleAppDataV7(asV7(data))) return false
     const projects = new Set(data.projects.map((item) => item.id))
@@ -131,26 +142,48 @@ export function isCompatibleAppDataV8(value: unknown): value is AppDataV8 {
     const classes = new Map(data.classes.map((item) => [item.id, item]))
     const subjects = new Map(data.subjects.map((item) => [item.id, item]))
     const usedIds = nonSubjectEntityIds(data)
+    const relationIds = new Set(data.teachingUnitSubjects.map((item) => item.id))
     const subjectNames = new Set<string>()
     const subjectShortNames = new Set<string>()
     for (const subject of data.subjects) {
       const nameKey = JSON.stringify([subject.projectId, normalizeSubjectText(subject.name)])
       const shortNameKey = JSON.stringify([subject.projectId, normalizeSubjectText(subject.shortName)])
-      if (!validSubjectShape(subject) || !projects.has(subject.projectId) || usedIds.has(subject.id)
+      if (!validSubjectShape(subject) || !projects.has(subject.projectId) || usedIds.has(subject.id) || relationIds.has(subject.id)
         || subjectNames.has(nameKey) || subjectShortNames.has(shortNameKey)) return false
       usedIds.add(subject.id)
       subjectNames.add(nameKey)
       subjectShortNames.add(shortNameKey)
     }
+    const configuredPairs = new Set<string>()
+    for (const relation of data.teachingUnitSubjects) {
+      if (!validTeachingUnitSubjectShape(relation) || usedIds.has(relation.id)) return false
+      const unit = units.get(relation.teachingUnitId)
+      const subject = subjects.get(relation.subjectId)
+      const pair = relationPairKey(relation)
+      if (!projects.has(relation.projectId) || unit?.projectId !== relation.projectId
+        || subject?.projectId !== relation.projectId
+        || !subject.applicableSchoolLevels.includes(unit.schoolLevel)
+        || configuredPairs.has(pair)) return false
+      usedIds.add(relation.id)
+      configuredPairs.add(pair)
+    }
     for (const lesson of data.recurringLessons) {
-      if (subjects.get(lesson.subjectId)?.projectId !== lesson.projectId) return false
+      if (subjects.get(lesson.subjectId)?.projectId !== lesson.projectId
+        || !configuredPairs.has(relationPairKey(lesson))) return false
     }
     for (const override of data.overrides) {
       if (override.replacement && (override.projectId === null
-        || subjects.get(override.replacement.subjectId)?.projectId !== override.projectId)) return false
+        || override.teachingUnitId === null
+        || subjects.get(override.replacement.subjectId)?.projectId !== override.projectId
+        || !configuredPairs.has(relationPairKey({
+          projectId: override.projectId,
+          teachingUnitId: override.teachingUnitId,
+          subjectId: override.replacement.subjectId,
+        })))) return false
     }
     for (const lesson of data.oneOffLessons) {
-      if (subjects.get(lesson.subjectId)?.projectId !== lesson.projectId) return false
+      if (subjects.get(lesson.subjectId)?.projectId !== lesson.projectId
+        || !configuredPairs.has(relationPairKey(lesson))) return false
     }
     if (!data.events.every((event) => validEventOwnership(data, event))) return false
     const scopes = new Set<string>()
@@ -166,7 +199,8 @@ export function isCompatibleAppDataV8(value: unknown): value is AppDataV8 {
       if (!projects.has(progress.projectId) || timetables.get(progress.timetableId)?.projectId !== progress.projectId
         || unit?.projectId !== progress.projectId || schoolClass?.projectId !== progress.projectId
         || schoolClass.teachingUnitId !== progress.teachingUnitId || subject?.projectId !== progress.projectId
-        || (subject.applicableSchoolLevels && !subject.applicableSchoolLevels.includes(unit.schoolLevel))) return false
+        || (subject.applicableSchoolLevels && !subject.applicableSchoolLevels.includes(unit.schoolLevel))
+        || !configuredPairs.has(relationPairKey(progress))) return false
     }
     return true
   } catch {
@@ -219,6 +253,11 @@ function hasSafeSubjectUpdate(current: AppDataV8, next: AppDataV8): boolean {
     if (!after && !next.projects.some((project) => project.id === subject.projectId)) continue
     const removedLevels = subject.applicableSchoolLevels.filter((level) => !after?.applicableSchoolLevels.includes(level))
     if (after && removedLevels.length === 0) continue
+    if ([current, next].some((data) => data.teachingUnitSubjects.some((relation) => {
+      if (relation.subjectId !== subject.id) return false
+      const level = data.teachingUnits.find((unit) => unit.id === relation.teachingUnitId)?.schoolLevel
+      return !after || level === undefined || removedLevels.includes(level)
+    }))) return false
     for (const data of [current, next]) {
       if (analyzeSubjectReferences(data, subject.id).some((reference) => !after
         || reference.projectId !== subject.projectId || reference.schoolLevel === null
@@ -241,10 +280,47 @@ function hasSafeSubjectUpdate(current: AppDataV8, next: AppDataV8): boolean {
       === JSON.stringify(next.subjects.filter((subject) => subject.projectId === projectId)))
 }
 
+function relationHasReferences(data: AppDataV8, relation: TeachingUnitSubject): boolean {
+  return data.recurringLessons.some((lesson) => lesson.projectId === relation.projectId
+      && lesson.teachingUnitId === relation.teachingUnitId && lesson.subjectId === relation.subjectId)
+    || data.overrides.some((override) => override.projectId === relation.projectId
+      && override.teachingUnitId === relation.teachingUnitId
+      && override.replacement?.subjectId === relation.subjectId)
+    || data.oneOffLessons.some((lesson) => lesson.projectId === relation.projectId
+      && lesson.teachingUnitId === relation.teachingUnitId && lesson.subjectId === relation.subjectId)
+    || data.teachingProgress.some((progress) => progress.projectId === relation.projectId
+      && progress.teachingUnitId === relation.teachingUnitId && progress.subjectId === relation.subjectId)
+}
+
+function hasSafeTeachingUnitSubjectUpdate(current: AppDataV8, next: AppDataV8): boolean {
+  const currentById = new Map(current.teachingUnitSubjects.map((relation) => [relation.id, relation]))
+  const nextById = new Map(next.teachingUnitSubjects.map((relation) => [relation.id, relation]))
+
+  for (const relation of next.teachingUnitSubjects) {
+    const before = currentById.get(relation.id)
+    if (before && relationPairKey(before) !== relationPairKey(relation)) return false
+    if (!before && next.projects.find((project) => project.id === relation.projectId)?.archivedAt) return false
+  }
+  for (const relation of current.teachingUnitSubjects) {
+    if (nextById.has(relation.id)) continue
+    if (!next.projects.some((project) => project.id === relation.projectId)) continue
+    if (relationHasReferences(current, relation) || relationHasReferences(next, relation)) return false
+  }
+
+  const archivedProjectIds = new Set([
+    ...current.projects.filter((project) => project.archivedAt).map((project) => project.id),
+    ...next.projects.filter((project) => project.archivedAt).map((project) => project.id),
+  ])
+  return [...archivedProjectIds].every((projectId) => !next.projects.some((project) => project.id === projectId)
+    || JSON.stringify(current.teachingUnitSubjects.filter((relation) => relation.projectId === projectId))
+      === JSON.stringify(next.teachingUnitSubjects.filter((relation) => relation.projectId === projectId)))
+}
+
 export function isSafeAppDataV8Update(current: AppDataV8, next: AppDataV8): boolean {
   if (!isCompatibleAppDataV8(current) || !isCompatibleAppDataV8(next)
     || !isSafeAppDataV7UpdateExceptSubjects(asV7(current), asV7(next))
-    || !hasSafeSubjectUpdate(current, next)) return false
+    || !hasSafeSubjectUpdate(current, next)
+    || !hasSafeTeachingUnitSubjectUpdate(current, next)) return false
 
   const currentById = new Map(current.teachingProgress.map((item) => [item.id, item]))
   const nextById = new Map(next.teachingProgress.map((item) => [item.id, item]))

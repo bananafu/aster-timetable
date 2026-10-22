@@ -102,6 +102,38 @@ describe('AppDataV8 storage', () => {
     expect(JSON.parse(store.values.get(APP_DATA_V8_KEY)!)).toEqual(current)
   })
 
+  it('upgrades a recognized pre-relation V8 document in memory and preserves the original raw until confirmed', () => {
+    const current = v8()
+    const { teachingUnitSubjects: _relations, ...legacyDocument } = current
+    void _relations
+    const raw = JSON.stringify(legacyDocument)
+    const store = memoryStorage(new Map([[APP_DATA_V8_KEY, raw]]))
+
+    const loaded = loadAppDataV8(store, v8())
+
+    expect(loaded).toMatchObject({ status: 'saved', source: 'v8', issue: 'none', raw, shouldPersist: true })
+    expect(loaded.value).toEqual(current)
+    expect(store.values.get(APP_DATA_V8_KEY)).toBe(raw)
+    const confirmation = persistLoadedAppDataV8(store, loaded)
+    expect(JSON.parse(confirmation!.raw)).toEqual(current)
+    expect(JSON.parse(store.values.get(APP_DATA_V8_KEY)!)).toEqual(current)
+  })
+
+  it('does not reinterpret a present but incomplete relation collection as legacy missing data', () => {
+    const current = v8()
+    const invalidRaw = JSON.stringify({ ...current, teachingUnitSubjects: [] })
+    const store = memoryStorage(new Map([[APP_DATA_V8_KEY, invalidRaw]]))
+
+    const loaded = loadAppDataV8(store, v8())
+
+    expect(loaded).toMatchObject({
+      status: 'read-error', source: 'v8', issue: 'corrupt', raw: invalidRaw,
+      rawBackup: invalidRaw, shouldPersist: false,
+    })
+    expect(store.values.get(APP_DATA_V8_KEY)).toBe(invalidRaw)
+    expect(store.setItem).not.toHaveBeenCalled()
+  })
+
   it('reports corrupt v8 and never falls back to a valid v7 document', () => {
     const rawV7 = JSON.stringify(v7())
     const store = memoryStorage(new Map([[APP_DATA_V8_KEY, '{broken-v8'], [APP_DATA_V7_KEY, rawV7]]))

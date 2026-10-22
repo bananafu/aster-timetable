@@ -29,6 +29,7 @@ export interface ProjectDeletionImpactV8 {
   schools: number
   teachingUnits: number
   subjects: number
+  teachingUnitSubjects: number
   classes: number
   recurringLessons: number
   events: number
@@ -63,6 +64,7 @@ function allEntityIds(data: AppDataV8): Set<string> {
   return new Set([
     ...data.projects.map((item) => item.id), ...data.timetables.map((item) => item.id),
     ...data.schools.map((item) => item.id), ...data.teachingUnits.map((item) => item.id),
+    ...data.teachingUnitSubjects.map((item) => item.id),
     ...data.subjects.map((item) => item.id), ...data.classes.map((item) => item.id),
     ...data.recurringLessons.flatMap((item) => [item.id, item.seriesId]),
     ...data.events.map((item) => item.id), ...data.overrides.map((item) => item.id),
@@ -122,6 +124,7 @@ export function copyProject(
   const sourceSchools = data.schools.filter((school) => school.projectId === source.id)
   const sourceUnits = data.teachingUnits.filter((unit) => unit.projectId === source.id)
   const sourceTimetables = data.timetables.filter((timetable) => timetable.projectId === source.id)
+  const sourceRelations = data.teachingUnitSubjects.filter((relation) => relation.projectId === source.id)
   const name = typeof input.name === 'string' ? input.name.trim() : ''
   if (!name || !Number.isInteger(input.academicYear) || input.academicYear <= 0
     || !['first', 'second', 'summer', 'custom'].includes(input.semester)
@@ -157,6 +160,7 @@ export function copyProject(
   const sourceClasses = data.classes.filter((schoolClass) => schoolClass.projectId === source.id)
   const classIds = new Map(sourceClasses.map((schoolClass) => [schoolClass.id, nextId()]))
   const timetableIds = new Map(sourceTimetables.map((timetable) => [timetable.id, nextId()]))
+  const relationIds = new Map(sourceRelations.map((relation) => [relation.id, nextId()]))
   const seriesIds = new Map<string, string>()
   for (const lesson of selectedLessons) {
     if (!seriesIds.has(lesson.seriesId)) seriesIds.set(lesson.seriesId, nextId())
@@ -206,6 +210,13 @@ export function copyProject(
       projectId,
       applicableSchoolLevels: [...subject.applicableSchoolLevels],
     }))],
+    teachingUnitSubjects: [...data.teachingUnitSubjects, ...sourceRelations.map((relation) => ({
+      ...relation,
+      id: relationIds.get(relation.id)!,
+      projectId,
+      teachingUnitId: unitIds.get(relation.teachingUnitId)!,
+      subjectId: subjectIds.get(relation.subjectId)!,
+    }))],
     classes: [...data.classes, ...sourceClasses.map((schoolClass) => ({
       ...schoolClass,
       id: classIds.get(schoolClass.id)!,
@@ -240,6 +251,7 @@ export function getProjectDeletionImpact(data: AppDataV8, projectId: string): Pr
     schools: data.schools.filter((item) => item.projectId === projectId).length,
     teachingUnits: data.teachingUnits.filter((item) => item.projectId === projectId).length,
     subjects: data.subjects.filter((item) => item.projectId === projectId).length,
+    teachingUnitSubjects: data.teachingUnitSubjects.filter((item) => item.projectId === projectId).length,
     classes: data.classes.filter((item) => item.projectId === projectId).length,
     recurringLessons: data.recurringLessons.filter((item) => item.projectId === projectId).length,
     events: data.events.filter((item) => item.projectId === projectId).length,
@@ -260,6 +272,7 @@ export function deleteProject(data: AppDataV8, projectId: string, confirmed = fa
     ...data.schools.filter((item) => item.projectId === projectId).map((item) => item.id),
     ...data.teachingUnits.filter((item) => item.projectId === projectId).map((item) => item.id),
     ...data.subjects.filter((item) => item.projectId === projectId).map((item) => item.id),
+    ...data.teachingUnitSubjects.filter((item) => item.projectId === projectId).map((item) => item.id),
     ...data.classes.filter((item) => item.projectId === projectId).map((item) => item.id),
     ...data.recurringLessons.filter((item) => item.projectId === projectId).flatMap((item) => [item.id, item.seriesId]),
     ...data.events.filter((item) => item.projectId === projectId).map((item) => item.id),
@@ -278,6 +291,7 @@ export function deleteProject(data: AppDataV8, projectId: string, confirmed = fa
     schools: data.schools.filter((item) => item.projectId !== projectId),
     teachingUnits: data.teachingUnits.filter((item) => item.projectId !== projectId),
     subjects: data.subjects.filter((item) => item.projectId !== projectId),
+    teachingUnitSubjects: data.teachingUnitSubjects.filter((item) => item.projectId !== projectId),
     classes: data.classes.filter((item) => item.projectId !== projectId),
     recurringLessons: data.recurringLessons.filter((item) => item.projectId !== projectId),
     events: data.events.filter((item) => item.projectId !== projectId),

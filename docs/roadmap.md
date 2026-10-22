@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D S1-A — TeachingUnit–Subject configuration foundation（資料層完成）
+
+已建立 Project-scoped Subject catalog 與 `TeachingUnitSubject` relation，包含確定性 V7 遷移、既有 V8 缺欄位升級、scope／適用學制／引用 Validator、TeachingUnit selector、安全配置 CRUD，以及新學期複製與 Project 刪除的 relation lifecycle。跨學校與跨學制的同名科目可共用 catalog 定義並獨立配置，不會依名稱自動合併或互相啟用。
+
+正式 V7 Runtime、storage key 與既有 UI 未切換。S1-B 需將科目管理入口改接 TeachingUnit-scoped selector／CRUD，並在實際持久化流程驗證錯誤、衝突及重新載入結果。
+
 ## Phase 4D A1 — V8 Event ownership／migration／validator（完成）
 
 已建立 resolved／unresolved Event ownership、V7 → V8 確定性遷移、既有 V8 Event 同版升級、Project + Timetable selector 與 unresolved repair query。只有有效 TeachingUnit 且 Project 恰有一份 Timetable 的舊 Event 會自動歸屬；其餘 Event 保留原 ID、內容、引用、原因與候選 Timetable，不會猜測、複製或出現在教師正常課表。

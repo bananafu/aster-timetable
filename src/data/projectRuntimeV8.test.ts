@@ -125,6 +125,7 @@ describe('AppDataV8 Project lifecycle operations', () => {
     expect(created.schools.filter((item) => item.projectId === 'blank-project')).toHaveLength(1)
     expect(created.teachingUnits.filter((item) => item.projectId === 'blank-project')).toHaveLength(1)
     expect(created.subjects.filter((item) => item.projectId === 'blank-project')).toEqual([])
+    expect(created.teachingUnitSubjects.filter((item) => item.projectId === 'blank-project')).toEqual([])
     expect(created.classes.filter((item) => item.projectId === 'blank-project')).toEqual([])
     expect(created.recurringLessons.filter((item) => item.projectId === 'blank-project')).toEqual([])
     expect(created.events.filter((item) => item.projectId === 'blank-project')).toEqual([])
@@ -132,6 +133,7 @@ describe('AppDataV8 Project lifecycle operations', () => {
     expect(created.oneOffLessons.filter((item) => item.projectId === 'blank-project')).toEqual([])
     expect(created.teachingProgress.filter((item) => item.projectId === 'blank-project')).toEqual([])
     expect(created.subjects).toEqual(snapshot.subjects)
+    expect(created.teachingUnitSubjects).toEqual(snapshot.teachingUnitSubjects)
     expect(created.classes).toEqual(snapshot.classes)
     expect(created.recurringLessons).toEqual(snapshot.recurringLessons)
     expect(source).toEqual(snapshot)
@@ -162,6 +164,8 @@ describe('AppDataV8 Project lifecycle operations', () => {
     const copiedUnits = copied.teachingUnits.filter((item) => item.projectId === copiedProjectId)
     const sourceSubjects = source.subjects.filter((item) => item.projectId === sourceProjectId)
     const copiedSubjects = copied.subjects.filter((item) => item.projectId === copiedProjectId)
+    const sourceRelations = source.teachingUnitSubjects.filter((item) => item.projectId === sourceProjectId)
+    const copiedRelations = copied.teachingUnitSubjects.filter((item) => item.projectId === copiedProjectId)
     const sourceClasses = source.classes.filter((item) => item.projectId === sourceProjectId)
     const copiedClasses = copied.classes.filter((item) => item.projectId === copiedProjectId)
     const sourceTimetables = source.timetables.filter((item) => item.projectId === sourceProjectId)
@@ -186,6 +190,7 @@ describe('AppDataV8 Project lifecycle operations', () => {
       weekCycle: { enabled: true, anchorDate: '2027-09-06', anchorPattern: 'B' },
     })
     expect(copiedSubjects.map((item) => item.name)).toEqual(sourceSubjects.map((item) => item.name))
+    expect(copiedRelations).toHaveLength(sourceRelations.length)
     expect(copiedClasses.map((item) => item.name)).toEqual(sourceClasses.map((item) => item.name))
     expect(copiedLessons).toHaveLength(effectiveSourceLessons.length)
     expect(copiedLessons.some((item) => item.id === 'current-version')).toBe(false)
@@ -196,7 +201,8 @@ describe('AppDataV8 Project lifecycle operations', () => {
     const allSourceIds = new Set([
       ...source.projects.map((item) => item.id), ...source.timetables.map((item) => item.id),
       ...source.schools.map((item) => item.id), ...source.teachingUnits.map((item) => item.id),
-      ...source.subjects.map((item) => item.id), ...source.classes.map((item) => item.id),
+      ...source.subjects.map((item) => item.id), ...source.teachingUnitSubjects.map((item) => item.id),
+      ...source.classes.map((item) => item.id),
       ...source.recurringLessons.flatMap((item) => [item.id, item.seriesId]),
       ...source.events.map((item) => item.id), ...source.overrides.map((item) => item.id),
       ...source.oneOffLessons.map((item) => item.id), ...source.teachingProgress.map((item) => item.id),
@@ -205,6 +211,7 @@ describe('AppDataV8 Project lifecycle operations', () => {
       copiedProjectId, ...copiedTimetables.map((item) => item.id),
       ...copied.schools.filter((item) => item.projectId === copiedProjectId).map((item) => item.id),
       ...copiedUnits.map((item) => item.id), ...copiedSubjects.map((item) => item.id),
+      ...copiedRelations.map((item) => item.id),
       ...copiedClasses.map((item) => item.id), ...copiedLessons.flatMap((item) => [item.id, item.seriesId]),
     ]
     expect(new Set(generatedIds).size).toBe(generatedIds.length)
@@ -217,6 +224,11 @@ describe('AppDataV8 Project lifecycle operations', () => {
     const classMap = new Map(sourceClasses.map((item, index) => [item.id, copiedClasses[index].id]))
     const unitMap = new Map(sourceUnits.map((item, index) => [item.id, copiedUnits[index].id]))
     const timetableMap = new Map(sourceTimetables.map((item, index) => [item.id, copiedTimetables[index].id]))
+    sourceRelations.forEach((relation, index) => expect(copiedRelations[index]).toMatchObject({
+      projectId: copiedProjectId,
+      teachingUnitId: unitMap.get(relation.teachingUnitId),
+      subjectId: subjectMap.get(relation.subjectId),
+    }))
     sourceUnits.forEach((unit, index) => expect(copiedUnits[index].schoolId).toBe(schoolMap.get(unit.schoolId)))
     sourceClasses.forEach((schoolClass, index) => expect(copiedClasses[index].teachingUnitId).toBe(unitMap.get(schoolClass.teachingUnitId)))
     effectiveSourceLessons.forEach((lesson, index) => {
@@ -385,6 +397,7 @@ describe('AppDataV8 Project lifecycle operations', () => {
       schools: structuredClone(current.schools.filter((item) => item.projectId === 'project-b')),
       units: structuredClone(current.teachingUnits.filter((item) => item.projectId === 'project-b')),
       subjects: structuredClone(current.subjects.filter((item) => item.projectId === 'project-b')),
+      teachingUnitSubjects: structuredClone(current.teachingUnitSubjects.filter((item) => item.projectId === 'project-b')),
       classes: structuredClone(current.classes.filter((item) => item.projectId === 'project-b')),
     }
     const setItem = vi.fn()
@@ -397,7 +410,8 @@ describe('AppDataV8 Project lifecycle operations', () => {
     expect(deleted.projects.some((item) => item.id === projectId)).toBe(false)
     for (const collection of [
       deleted.timetables, deleted.schools, deleted.teachingUnits, deleted.subjects, deleted.classes,
-      deleted.recurringLessons, deleted.events, deleted.overrides, deleted.oneOffLessons, deleted.teachingProgress,
+      deleted.teachingUnitSubjects, deleted.recurringLessons, deleted.events, deleted.overrides,
+      deleted.oneOffLessons, deleted.teachingProgress,
     ]) expect(collection.some((item) => item.projectId === projectId)).toBe(false)
     expect(deleted.migrationWarnings.some((item) => item.id === 'warning-a')).toBe(false)
     expect({
@@ -406,6 +420,7 @@ describe('AppDataV8 Project lifecycle operations', () => {
       schools: deleted.schools.filter((item) => item.projectId === 'project-b'),
       units: deleted.teachingUnits.filter((item) => item.projectId === 'project-b'),
       subjects: deleted.subjects.filter((item) => item.projectId === 'project-b'),
+      teachingUnitSubjects: deleted.teachingUnitSubjects.filter((item) => item.projectId === 'project-b'),
       classes: deleted.classes.filter((item) => item.projectId === 'project-b'),
     }).toEqual(projectBSnapshot)
     expect(setItem).not.toHaveBeenCalled()

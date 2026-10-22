@@ -166,6 +166,56 @@ describe('AppDataV8 compatibility', () => {
     })).toBe(false)
   })
 
+  it('requires valid, unique, same-project TeachingUnitSubject relations', () => {
+    const data = base()
+    const relation = data.teachingUnitSubjects[0]
+    const subject = data.subjects.find((item) => item.id === relation.subjectId)!
+    const unit = data.teachingUnits.find((item) => item.id === relation.teachingUnitId)!
+
+    expect(isCompatibleAppDataV8({ ...data, teachingUnitSubjects: undefined })).toBe(false)
+    expect(isCompatibleAppDataV8({
+      ...data,
+      teachingUnitSubjects: [...data.teachingUnitSubjects, { ...relation, id: 'duplicate-pair' }],
+    })).toBe(false)
+    expect(isCompatibleAppDataV8({
+      ...data,
+      teachingUnitSubjects: data.teachingUnitSubjects.map((item, index) => index === 0
+        ? { ...item, id: data.classes[0].id }
+        : item),
+    })).toBe(false)
+
+    const secondProject = { ...data.projects[0], id: 'relation-project', name: 'Relation project' }
+    expect(isCompatibleAppDataV8({
+      ...data,
+      projects: [...data.projects, secondProject],
+      teachingUnitSubjects: data.teachingUnitSubjects.map((item, index) => index === 0
+        ? { ...item, projectId: secondProject.id }
+        : item),
+    })).toBe(false)
+
+    const otherLevel = unit.schoolLevel === 'junior-high' ? 'senior-high' : 'junior-high'
+    expect(isCompatibleAppDataV8({
+      ...data,
+      subjects: data.subjects.map((item) => item.id === subject.id
+        ? { ...item, applicableSchoolLevels: [otherLevel] }
+        : item),
+    })).toBe(false)
+  })
+
+  it('requires every scoped Subject reference to have a TeachingUnitSubject relation', () => {
+    const data = withProgress()
+    const progress = data.teachingProgress[0]
+    const withoutRelation = {
+      ...data,
+      teachingUnitSubjects: data.teachingUnitSubjects.filter((item) => !(
+        item.projectId === progress.projectId
+        && item.teachingUnitId === progress.teachingUnitId
+        && item.subjectId === progress.subjectId
+      )),
+    }
+    expect(isCompatibleAppDataV8(withoutRelation)).toBe(false)
+  })
+
   it('enforces NFC, trimmed code-point limits, and non-empty content', () => {
     const data = withProgress()
     const invalidContents: TeachingProgressContent[] = [
@@ -288,6 +338,10 @@ describe('AppDataV8 safe updates', () => {
     const subjectCurrent = {
       ...subjectData,
       subjects: [...subjectData.subjects, subject],
+      teachingUnitSubjects: [...subjectData.teachingUnitSubjects, {
+        id: 'progress-only-subject-configuration', projectId: unit.projectId,
+        teachingUnitId: unit.id, subjectId: subject.id,
+      }],
       teachingProgress: [progressFor(subjectData, { subjectId: subject.id })],
     }
     expect(isCompatibleAppDataV8(subjectCurrent)).toBe(true)
@@ -314,6 +368,10 @@ describe('AppDataV8 safe updates', () => {
       ...unitData,
       teachingUnits: [...unitData.teachingUnits, orphanUnit],
       classes: [...unitData.classes, orphanClass],
+      teachingUnitSubjects: [...unitData.teachingUnitSubjects, {
+        id: 'progress-only-unit-configuration', projectId: orphanUnit.projectId,
+        teachingUnitId: orphanUnit.id, subjectId: unitData.subjects[0].id,
+      }],
       teachingProgress: [progressFor(unitData, { teachingUnitId: orphanUnit.id, classId: orphanClass.id })],
     }
     expect(isCompatibleAppDataV8(unitCurrent)).toBe(true)
@@ -346,6 +404,7 @@ describe('AppDataV8 safe updates', () => {
     const projectDeleted = {
       ...(deleteProject(current, projectId) as AppDataV8),
       subjects: current.subjects.filter((item) => item.projectId !== projectId),
+      teachingUnitSubjects: current.teachingUnitSubjects.filter((item) => item.projectId !== projectId),
       teachingProgress: [],
     }
     expect(isCompatibleAppDataV8(projectDeleted)).toBe(true)
@@ -397,6 +456,7 @@ describe('AppDataV8 safe updates', () => {
       recurringLessons: baseData.recurringLessons.filter((lesson) => lesson.subjectId !== referencedId),
       overrides: baseData.overrides.filter((override) => override.replacement?.subjectId !== referencedId),
       oneOffLessons: baseData.oneOffLessons.filter((lesson) => lesson.subjectId !== referencedId),
+      teachingUnitSubjects: baseData.teachingUnitSubjects.filter((relation) => relation.subjectId !== referencedId),
       subjects: baseData.subjects.filter((subject) => subject.id !== referencedId),
     }
     expect(isCompatibleAppDataV8(withoutReferences)).toBe(true)

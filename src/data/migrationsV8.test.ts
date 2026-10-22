@@ -5,7 +5,7 @@ import { migrateV3ToV4 } from './migrationsV4'
 import { migrateV4ToV5 } from './migrationsV5'
 import { migrateV5ToV6 } from './migrationsV6'
 import { migrateV6ToV7 } from './migrationsV7'
-import { migrateV7ToV8, V8MigrationError } from './migrationsV8'
+import { migrateV7ToV8, upgradeLegacyV8TeachingUnitSubjects, V8MigrationError } from './migrationsV8'
 import { createBlankProject } from './projectRuntime'
 
 const source = () => migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))))
@@ -69,6 +69,7 @@ describe('v7 to v8 migration', () => {
     expect(migrated.schemaVersion).toBe(8)
     expect(migrated.teachingProgress).toEqual([])
     expect(migrated.subjects).toHaveLength(v7.projects.length * v7.subjects.length)
+    expect(migrated.teachingUnitSubjects.length).toBeGreaterThan(0)
     for (const project of v7.projects) {
       const projectSubjects = migrated.subjects.filter((subject) => subject.projectId === project.id)
       expect(projectSubjects.map((subject) => ({
@@ -80,6 +81,12 @@ describe('v7 to v8 migration', () => {
       })))
     }
     const firstName = v7.subjects[0].name
+    for (const unit of migrated.teachingUnits) {
+      const expected = migrated.subjects.filter((subject) => subject.projectId === unit.projectId
+        && subject.applicableSchoolLevels.includes(unit.schoolLevel))
+      expect(migrated.teachingUnitSubjects.filter((relation) => relation.teachingUnitId === unit.id)
+        .map((relation) => relation.subjectId)).toEqual(expected.map((subject) => subject.id))
+    }
     expect(new Set(v7.projects.map((project) => mappingFor(migrated, project.id).get(firstName))).size).toBe(v7.projects.length)
     expect(v7).toEqual(snapshot)
     expect(migrateV7ToV8(v7)).toEqual(migrated)
@@ -94,17 +101,24 @@ describe('v7 to v8 migration', () => {
       expect(lesson.id).toBe(v7.recurringLessons[index].id)
       expect(lesson.seriesId).toBe(v7.recurringLessons[index].seriesId)
       expect(lesson.subjectId).toBe(mappingFor(migrated, lesson.projectId).get(oldSubjectNames.get(v7.recurringLessons[index].subjectId)!))
+      expect(migrated.teachingUnitSubjects.some((relation) => relation.projectId === lesson.projectId
+        && relation.teachingUnitId === lesson.teachingUnitId && relation.subjectId === lesson.subjectId)).toBe(true)
     }
     for (const [index, override] of migrated.overrides.entries()) {
       expect(override.id).toBe(v7.overrides[index].id)
       if (override.replacement && override.projectId) {
         expect(override.replacement.subjectId).toBe(mappingFor(migrated, override.projectId)
           .get(oldSubjectNames.get(v7.overrides[index].replacement!.subjectId)!))
+        expect(migrated.teachingUnitSubjects.some((relation) => relation.projectId === override.projectId
+          && relation.teachingUnitId === override.teachingUnitId
+          && relation.subjectId === override.replacement!.subjectId)).toBe(true)
       }
     }
     for (const [index, lesson] of migrated.oneOffLessons.entries()) {
       expect(lesson.id).toBe(v7.oneOffLessons[index].id)
       expect(lesson.subjectId).toBe(mappingFor(migrated, lesson.projectId).get(oldSubjectNames.get(v7.oneOffLessons[index].subjectId)!))
+      expect(migrated.teachingUnitSubjects.some((relation) => relation.projectId === lesson.projectId
+        && relation.teachingUnitId === lesson.teachingUnitId && relation.subjectId === lesson.subjectId)).toBe(true)
     }
     for (const key of ['projects', 'timetables', 'schools', 'teachingUnits', 'classes', 'events', 'migrationWarnings'] as const) {
       expect(migrated[key].map((item) => item.id)).toEqual(v7[key].map((item) => item.id))
@@ -123,7 +137,8 @@ describe('v7 to v8 migration', () => {
     const allIds = [
       ...first.subjects.map((item) => item.id), ...first.projects.map((item) => item.id),
       ...first.timetables.map((item) => item.id), ...first.schools.map((item) => item.id),
-      ...first.teachingUnits.map((item) => item.id), ...first.classes.map((item) => item.id),
+      ...first.teachingUnits.map((item) => item.id), ...first.teachingUnitSubjects.map((item) => item.id),
+      ...first.classes.map((item) => item.id),
       ...first.recurringLessons.flatMap((item) => [item.id, item.seriesId]),
       ...first.events.map((item) => item.id), ...first.overrides.map((item) => item.id),
       ...first.oneOffLessons.map((item) => item.id), ...first.migrationWarnings.map((item) => item.id),
@@ -148,6 +163,37 @@ describe('v7 to v8 migration', () => {
     expect(error).toBeInstanceOf(V8MigrationError)
     expect(error).toMatchObject({ code: 'unassigned-subject-reference', entityId, subjectId })
     expect(contaminated.overrides.at(-1)?.replacement?.subjectId).toBe(subjectId)
+  })
+
+  it('upgrades an existing V8 document without relations deterministically and preserves Event ownership', () => {
+    const current = migrateV7ToV8(source())
+    const { teachingUnitSubjects: _relations, ...legacy } = current
+    void _relations
+    const eventSnapshot = structuredClone(current.events)
+    const upgraded = upgradeLegacyV8TeachingUnitSubjects(legacy) as typeof current
+
+    expect(upgraded).toEqual(current)
+    expect(upgraded.events).toEqual(eventSnapshot)
+    expect(upgradeLegacyV8TeachingUnitSubjects(upgraded)).toBe(upgraded)
+  })
+
+  it('reports a replacement whose TeachingUnit ownership cannot be inferred without changing V7', () => {
+    const v7 = source()
+    const lesson = v7.recurringLessons[0]
+    const entityId = 'legacy-unassigned-unit-replacement'
+    const contaminated: AppDataV7 = { ...v7, overrides: [...v7.overrides, {
+      id: entityId, projectId: lesson.projectId, timetableId: lesson.timetableId, teachingUnitId: null,
+      date: lesson.effectiveStart, periodId: lesson.periodId, action: 'replace',
+      replacement: { subjectId: lesson.subjectId, classId: lesson.classId },
+    }] }
+    const snapshot = structuredClone(contaminated)
+
+    let error: unknown
+    try { migrateV7ToV8(contaminated) } catch (cause) { error = cause }
+    expect(error).toMatchObject({
+      code: 'unassigned-teaching-unit-subject-reference', entityId, subjectId: lesson.subjectId,
+    })
+    expect(contaminated).toEqual(snapshot)
   })
 
   it('rejects a legacy normalized Subject-name collision without changing the source', () => {

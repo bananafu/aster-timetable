@@ -1,7 +1,7 @@
 import type { StorageStatus } from '../hooks/useLocalStorage'
 import type { AppDataV7, AppDataV8 } from '../types'
 import { upgradeLegacyV8EventOwnership } from './eventOwnershipV8'
-import { migrateV7ToV8 } from './migrationsV8'
+import { migrateV7ToV8, upgradeLegacyV8TeachingUnitSubjects } from './migrationsV8'
 import { APP_DATA_V7_KEY, loadAppDataV7, type AppDataV7LoadResult } from './storageV7'
 import { isCompatibleAppDataV8, isSafeAppDataV8Update } from './validators/v8'
 
@@ -77,7 +77,7 @@ export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): Ap
   if (raw !== null) {
     try {
       const parsed: unknown = JSON.parse(raw)
-      const upgraded = upgradeLegacyV8EventOwnership(parsed)
+      const upgraded = upgradeLegacyV8TeachingUnitSubjects(upgradeLegacyV8EventOwnership(parsed))
       if (!isCompatibleAppDataV8(upgraded)) throw new Error('Invalid AppData v8')
       return {
         value: upgraded, status: 'saved', source: 'v8', issue: 'none', raw,
@@ -91,8 +91,9 @@ export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): Ap
     }
   }
 
-  const { teachingProgress: _unused, ...initialFields } = initialValue
-  void _unused
+  const { teachingProgress: _unusedProgress, teachingUnitSubjects: _unusedRelations, ...initialFields } = initialValue
+  void _unusedProgress
+  void _unusedRelations
   const legacy = loadAppDataV7(storage, { ...initialFields, schemaVersion: 7 } as AppDataV7)
   if (legacy.status !== 'saved') return {
     value: initialValue,
@@ -169,7 +170,7 @@ export function persistAppDataV8(
   if (expectation.raw !== null) {
     try {
       const expected: unknown = JSON.parse(expectation.raw)
-      const upgradedExpected = upgradeLegacyV8EventOwnership(expected)
+      const upgradedExpected = upgradeLegacyV8TeachingUnitSubjects(upgradeLegacyV8EventOwnership(expected))
       if (!isCompatibleAppDataV8(upgradedExpected) || JSON.stringify(upgradedExpected) !== JSON.stringify(current)) {
         throw failure('stale-document', 'Expected AppData v8 document does not match the current update base')
       }

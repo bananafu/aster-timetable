@@ -116,6 +116,7 @@ export type {
   SchoolLevel,
   SubjectV5,
   SubjectV8,
+  TeachingUnitSubject,
   TeachingProgress,
   TeachingProgressContent,
   TeachingProgressScope,
