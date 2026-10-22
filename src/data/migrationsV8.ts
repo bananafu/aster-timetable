@@ -1,5 +1,6 @@
 import type { AppDataV7, AppDataV8, SubjectV8 } from '../types'
 import { normalizeSubjectText } from '../lib/subjectSearch'
+import { migrateEventOwnershipV8 } from './eventOwnershipV8'
 import { isCompatibleAppDataV7 } from './validators/v7'
 import { isCompatibleAppDataV8 } from './validators/v8'
 
@@ -101,6 +102,7 @@ export function migrateV7ToV8(source: AppDataV7): AppDataV8 {
     ...source,
     schemaVersion: 8,
     subjects,
+    events: source.events.map((event) => migrateEventOwnershipV8(source, event)),
     recurringLessons: source.recurringLessons.map((lesson) => ({
       ...lesson,
       subjectId: mappedSubjectId(subjectIds, lesson.projectId, lesson.subjectId),

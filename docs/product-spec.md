@@ -1,5 +1,12 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D A1 — V8 Event ownership
+
+- 每筆 V8 Event 只屬於一份 Timetable；查詢範圍必須同時包含 Project 與 Timetable，不能因同屬 Project 而顯示在其他教師課表。
+- 舊 Event 只有在 `teachingUnitId` 有效且所屬 Project 恰有一份 Timetable 時，才能自動建立 resolved ownership。
+- 無 Project、無有效 TeachingUnit、沒有 Timetable 或有多份候選 Timetable 時，Event 原始 ID、內容與引用必須完整保留為 unresolved，等待後續修復；不得猜測、複製或顯示於任一教師的正常課表。
+- 本階段只建立 V8 型別、遷移、驗證與 selector；V7 的 Project 共用 Event 行為及正式 Runtime 維持不變。
+
 ## 同專案多教師課表資料基礎
 
 一個 Project 表示學期，可包含多份有獨立 ID、課表名稱與授課教師姓名的 Timetable；學校、學制、節次、班級與全域科目沿用 Project／全域設定。固定課程與單日異動歸屬 Timetable。舊資料遷移成每專案一份預設課表；缺少的真實教師姓名標為待補，不猜測或虛構。新建空白專案時的預設課表須輸入教師姓名。多課表切換、新增與教師姓名展示不屬於 4C-3C-2B。

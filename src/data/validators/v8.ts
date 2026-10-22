@@ -1,6 +1,7 @@
 import type {
   AppDataV7,
   AppDataV8,
+  CalendarEventV8,
   SubjectV8,
   TeachingProgress,
   TeachingProgressContent,
@@ -8,6 +9,7 @@ import type {
 import { SCHOOL_LEVELS } from '../../types'
 import { normalizeSubjectText } from '../../lib/subjectSearch'
 import { analyzeSubjectReferences } from '../subjectReferences'
+import { deriveLegacyEventOwnershipV8 } from '../eventOwnershipV8'
 import { isCompatibleAppDataV7, isSafeAppDataV7UpdateExceptSubjects } from './v7'
 
 type UnknownRecord = Record<string, unknown>
@@ -25,6 +27,11 @@ const progressKeys = [
 const contentKeys = ['chapter', 'unit', 'note'] as const
 const snapshotKeys = ['content', 'updatedAt'] as const
 const subjectKeys = ['id', 'name', 'shortName', 'color', 'applicableSchoolLevels', 'origin', 'projectId'] as const
+const eventKeys = [
+  'id', 'projectId', 'teachingUnitId', 'title', 'type', 'date', 'startTime', 'endTime',
+  'location', 'notes', 'color', 'origin', 'ownershipStatus', 'timetableId', 'ownershipIssue',
+] as const
+const ownershipIssueKeys = ['reason', 'candidateTimetableIds'] as const
 
 const record = (value: unknown): value is UnknownRecord => value !== null && typeof value === 'object' && !Array.isArray(value)
 const onlyKeys = (value: UnknownRecord, keys: readonly string[]) => Object.keys(value).every((key) => keys.includes(key))
@@ -37,6 +44,7 @@ const canonicalUtcTimestamp = (value: unknown): value is string => {
 }
 const codePointLength = (value: string) => [...value].length
 const named = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
+const hasOwn = (value: UnknownRecord, key: string) => Object.prototype.hasOwnProperty.call(value, key)
 
 function validText(value: unknown, limit: number): value is string {
   return typeof value === 'string' && value === value.normalize('NFC') && value === value.trim()
@@ -72,6 +80,28 @@ function validSubjectShape(value: unknown): value is SubjectV8 {
     && new Set(value.applicableSchoolLevels).size === value.applicableSchoolLevels.length
     && value.applicableSchoolLevels.every((level) => SCHOOL_LEVELS.includes(level as never))
     && (value.origin === undefined || value.origin === 'demo' || value.origin === 'user')
+}
+
+function validEventOwnership(data: AppDataV8, value: unknown): value is CalendarEventV8 {
+  if (!record(value) || !onlyKeys(value, eventKeys)) return false
+  if (value.ownershipStatus === 'resolved') {
+    if (!named(value.projectId) || !named(value.teachingUnitId) || !named(value.timetableId)
+      || hasOwn(value, 'ownershipIssue')) return false
+    const timetable = data.timetables.find((item) => item.id === value.timetableId)
+    const unit = data.teachingUnits.find((item) => item.id === value.teachingUnitId)
+    return timetable?.projectId === value.projectId && unit?.projectId === value.projectId
+  }
+  if (value.ownershipStatus !== 'unresolved' || hasOwn(value, 'timetableId') || !record(value.ownershipIssue)
+    || !onlyKeys(value.ownershipIssue, ownershipIssueKeys)
+    || !Array.isArray(value.ownershipIssue.candidateTimetableIds)
+    || value.ownershipIssue.candidateTimetableIds.some((id) => !named(id))
+    || new Set(value.ownershipIssue.candidateTimetableIds).size !== value.ownershipIssue.candidateTimetableIds.length) return false
+
+  const expected = deriveLegacyEventOwnershipV8(data, value as unknown as CalendarEventV8)
+  return expected.ownershipStatus === 'unresolved'
+    && value.ownershipIssue.reason === expected.ownershipIssue.reason
+    && JSON.stringify(value.ownershipIssue.candidateTimetableIds)
+      === JSON.stringify(expected.ownershipIssue.candidateTimetableIds)
 }
 
 const asV7 = (data: AppDataV8): AppDataV7 => ({ ...data, schemaVersion: 7 })
@@ -122,6 +152,7 @@ export function isCompatibleAppDataV8(value: unknown): value is AppDataV8 {
     for (const lesson of data.oneOffLessons) {
       if (subjects.get(lesson.subjectId)?.projectId !== lesson.projectId) return false
     }
+    if (!data.events.every((event) => validEventOwnership(data, event))) return false
     const scopes = new Set<string>()
     for (const progress of data.teachingProgress) {
       if (!validProgressShape(progress) || usedIds.has(progress.id)) return false

@@ -96,6 +96,32 @@ export interface CalendarEventV4 {
   origin?: DataOrigin
 }
 
+export type EventOwnershipIssueReasonV8 =
+  | 'unassigned-project'
+  | 'missing-teaching-unit'
+  | 'missing-timetable'
+  | 'ambiguous-timetable'
+
+export interface EventOwnershipIssueV8 {
+  reason: EventOwnershipIssueReasonV8
+  candidateTimetableIds: string[]
+}
+
+export type ResolvedCalendarEventV8 = Omit<CalendarEventV4, 'projectId'> & {
+  projectId: string
+  ownershipStatus: 'resolved'
+  timetableId: string
+  ownershipIssue?: never
+}
+
+export type UnresolvedCalendarEventV8 = CalendarEventV4 & {
+  ownershipStatus: 'unresolved'
+  timetableId?: never
+  ownershipIssue: EventOwnershipIssueV8
+}
+
+export type CalendarEventV8 = ResolvedCalendarEventV8 | UnresolvedCalendarEventV8
+
 export interface ScheduleOverrideV4 {
   id: string
   projectId: string | null
@@ -206,8 +232,9 @@ export type AppDataV7 = Omit<AppDataV6, 'schemaVersion' | 'oneOffLessons'> & {
   oneOffLessons: OneOffLesson[]
 }
 
-export type AppDataV8 = Omit<AppDataV7, 'schemaVersion' | 'subjects'> & {
+export type AppDataV8 = Omit<AppDataV7, 'schemaVersion' | 'subjects' | 'events'> & {
   schemaVersion: 8
   subjects: SubjectV8[]
+  events: CalendarEventV8[]
   teachingProgress: TeachingProgress[]
 }

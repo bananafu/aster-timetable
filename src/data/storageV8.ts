@@ -1,5 +1,6 @@
 import type { StorageStatus } from '../hooks/useLocalStorage'
 import type { AppDataV7, AppDataV8 } from '../types'
+import { upgradeLegacyV8EventOwnership } from './eventOwnershipV8'
 import { migrateV7ToV8 } from './migrationsV8'
 import { APP_DATA_V7_KEY, loadAppDataV7, type AppDataV7LoadResult } from './storageV7'
 import { isCompatibleAppDataV8, isSafeAppDataV8Update } from './validators/v8'
@@ -76,10 +77,11 @@ export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): Ap
   if (raw !== null) {
     try {
       const parsed: unknown = JSON.parse(raw)
-      if (!isCompatibleAppDataV8(parsed)) throw new Error('Invalid AppData v8')
+      const upgraded = upgradeLegacyV8EventOwnership(parsed)
+      if (!isCompatibleAppDataV8(upgraded)) throw new Error('Invalid AppData v8')
       return {
-        value: parsed, status: 'saved', source: 'v8', issue: 'none', raw,
-        rawBackup: raw, shouldPersist: false, legacyGuardRaw,
+        value: upgraded, status: 'saved', source: 'v8', issue: 'none', raw,
+        rawBackup: raw, shouldPersist: JSON.stringify(upgraded) !== JSON.stringify(parsed), legacyGuardRaw,
       }
     } catch {
       return {
@@ -167,7 +169,8 @@ export function persistAppDataV8(
   if (expectation.raw !== null) {
     try {
       const expected: unknown = JSON.parse(expectation.raw)
-      if (!isCompatibleAppDataV8(expected) || JSON.stringify(expected) !== JSON.stringify(current)) {
+      const upgradedExpected = upgradeLegacyV8EventOwnership(expected)
+      if (!isCompatibleAppDataV8(upgradedExpected) || JSON.stringify(upgradedExpected) !== JSON.stringify(current)) {
         throw failure('stale-document', 'Expected AppData v8 document does not match the current update base')
       }
     } catch (cause) {

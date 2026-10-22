@@ -67,6 +67,41 @@ describe('AppDataV8 storage', () => {
     expect(store.setItem).not.toHaveBeenCalled()
   })
 
+  it('upgrades legacy V8 Events in memory and persists them without dropping the original Event', () => {
+    const source = v7()
+    const unit = source.teachingUnits[0]
+    source.events = [{
+      id: 'legacy-v8-event', projectId: source.projects[0].id, teachingUnitId: unit.id,
+      title: '既有 V8 事件', type: 'meeting', date: unit.startDate,
+      startTime: '09:00', endTime: '10:00', notes: '內容必須保留', color: '#123456',
+    }]
+    const current = migrateV7ToV8(source)
+    const legacyEvents = current.events.map((event) => {
+      const legacy: Record<string, unknown> = { ...event }
+      delete legacy.ownershipStatus
+      delete legacy.timetableId
+      delete legacy.ownershipIssue
+      return legacy
+    })
+    const legacyDocument = { ...current, events: legacyEvents }
+    const raw = JSON.stringify(legacyDocument)
+    const store = memoryStorage(new Map([[APP_DATA_V8_KEY, raw]]))
+
+    const loaded = loadAppDataV8(store, v8())
+
+    expect(loaded).toMatchObject({ status: 'saved', source: 'v8', issue: 'none', raw, shouldPersist: true })
+    expect(loaded.value.events).toEqual(current.events)
+    expect(loaded.value.events[0]).toMatchObject({
+      id: 'legacy-v8-event', title: '既有 V8 事件', notes: '內容必須保留',
+      ownershipStatus: 'resolved', timetableId: source.timetables[0].id,
+    })
+    expect(store.values.get(APP_DATA_V8_KEY)).toBe(raw)
+
+    const confirmation = persistLoadedAppDataV8(store, loaded)
+    expect(confirmation?.raw).toBe(JSON.stringify(current))
+    expect(JSON.parse(store.values.get(APP_DATA_V8_KEY)!)).toEqual(current)
+  })
+
   it('reports corrupt v8 and never falls back to a valid v7 document', () => {
     const rawV7 = JSON.stringify(v7())
     const store = memoryStorage(new Map([[APP_DATA_V8_KEY, '{broken-v8'], [APP_DATA_V7_KEY, rawV7]]))

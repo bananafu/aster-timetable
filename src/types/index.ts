@@ -103,6 +103,9 @@ export type {
   AppDataV7,
   AppDataV8,
   CalendarEventV4,
+  CalendarEventV8,
+  EventOwnershipIssueReasonV8,
+  EventOwnershipIssueV8,
   MigrationWarningV4,
   OneOffLesson,
   OneOffLessonTime,
@@ -117,9 +120,11 @@ export type {
   TeachingProgressContent,
   TeachingProgressScope,
   PreviousProgressSnapshot,
+  ResolvedCalendarEventV8,
   SemesterKind,
   TeachingUnit,
   TimetableProject,
   Timetable,
+  UnresolvedCalendarEventV8,
 } from './v4'
 export { SCHOOL_LEVELS } from './v4'

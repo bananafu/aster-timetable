@@ -90,6 +90,7 @@ function copyFixture(): AppDataV8 {
     events: [...withUnusedSubject.events, {
       id: 'source-event', projectId, teachingUnitId: unit.id, title: '來源事件', type: 'meeting',
       date: '2026-10-05', startTime: '09:00', endTime: '10:00', color: '#123456',
+      ownershipStatus: 'resolved', timetableId: timetable.id,
     }],
     overrides: [...withUnusedSubject.overrides, {
       id: 'source-override', projectId, timetableId: timetable.id, teachingUnitId: unit.id,
@@ -353,6 +354,7 @@ describe('AppDataV8 Project lifecycle operations', () => {
       events: [...initial.events, {
         id: 'event-a', projectId, teachingUnitId: unit.id, title: 'Event', type: 'meeting',
         date: unit.startDate, startTime: '09:00', endTime: '10:00', color: '#123456',
+        ownershipStatus: 'resolved', timetableId: lesson.timetableId,
       }],
       overrides: [...initial.overrides, {
         id: 'override-a', projectId, timetableId: lesson.timetableId, teachingUnitId: unit.id,

@@ -1,5 +1,13 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D A1 — V8 Event ownership foundation
+
+`CalendarEventV8` 使用 `ownershipStatus` discriminated union。`resolved` Event 必須保存單一 `timetableId`，且 Project、Timetable 與 TeachingUnit 引用一致；`unresolved` Event 不得保存 `timetableId`，並以 `ownershipIssue.reason` 與確定性排序的 `candidateTimetableIds` 保留未來修復所需脈絡。
+
+V7 → V8 遷移只在 Event 有有效且同 Project 的 TeachingUnit，且該 Project 恰有一份 Timetable 時自動 resolved。Project 未歸屬、TeachingUnit 缺失、Project 沒有 Timetable 或存在多份 Timetable 分別標記為 `unassigned-project`、`missing-teaching-unit`、`missing-timetable` 或 `ambiguous-timetable`。遷移保留 Event ID 與全部既有內容，不複製 Event，也不修改來源文件。
+
+V8 Event selector 以 Project + Timetable 查詢 resolved Event；unresolved Event 由獨立 selector 提供修復流程使用。既有缺少 ownership 欄位的 V8 文件在讀取時以相同規則純轉換，通過完整 V8 validator 後才可用既有 CAS 契約寫回；原始 V8 與 V7 key 在確認寫入前不變。
+
 ## Phase 4C-3C-2B 多教師資料基礎與 v6 儲存
 
 `AppDataV6` 新增 project-scoped `Timetable`；固定課程與已歸屬單日異動保存 `timetableId`，未歸屬舊異動保留 `null` 並繼續不參與排課。每個 v5 Project（含封存）確定性地轉成一份預設課表，既有課程、版本、異動及科目 ID 不變。舊資料沒有授課教師姓名，預設課表以 `teacherName: null` 與 `teacherNamePending: true` 明確標記待補；新建空白專案的預設課表要求輸入真實教師姓名。

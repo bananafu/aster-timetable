@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D A1 — V8 Event ownership／migration／validator（完成）
+
+已建立 resolved／unresolved Event ownership、V7 → V8 確定性遷移、既有 V8 Event 同版升級、Project + Timetable selector 與 unresolved repair query。只有有效 TeachingUnit 且 Project 恰有一份 Timetable 的舊 Event 會自動歸屬；其餘 Event 保留原 ID、內容、引用、原因與候選 Timetable，不會猜測、複製或出現在教師正常課表。
+
+本階段未切換正式 Runtime，V7 Project 共用 Event 行為及既有 storage key 維持不變；Event Repair UI 與正式 V8 接線留待後續階段。
+
 ## Phase 4C-3C-2E — 同專案 Timetable 複製（完成）
 
 已完成同一未封存 Project 內的 Timetable 複製。使用者可指定基準日期，介面預設本地今天；副本只取該日期有效的完整固定週課表，包含所有上課星期與 A/B 輪週，並將新課程有效區間設為基準日期至各自 TeachingUnit 學期結束日。歷史與未來固定版本、所有單日異動及 Project 共用事件都不產生副本；共用學校、TeachingUnit、班級、科目與節次沿用原有引用。
