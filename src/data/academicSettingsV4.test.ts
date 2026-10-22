@@ -52,15 +52,19 @@ describe('v4 academic settings', () => {
     expect(withBoth.teachingUnits.map((item) => item.id)).toEqual(withJunior.teachingUnits.map((item) => item.id).concat('senior-unit'))
   })
 
-  it('建立 709、812、103 班級並保留穩定 ID', () => {
+  it('依國高中年級與班號建立 701、802、910、101、202、310，並保留穩定 ID', () => {
     const data = source(); const projectId = data.activeProjectId!; const schoolId = data.schools[0].id
     let result = addTeachingUnit(data, schoolId, { name: '國中部', schoolLevel: 'junior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'junior-unit')
     result = addTeachingUnit(result, schoolId, { name: '高中部', schoolLevel: 'senior-high', startDate: '2026-09-01', endDate: '2027-01-15', weekCycle: { enabled: true, anchorDate: '2026-09-01', anchorPattern: 'A' } }, 'senior-unit')
-    result = addClass(result, projectId, { teachingUnitId: 'junior-unit', grade: 7, classNumber: 9 }, 'stable-709')
-    result = addClass(result, projectId, { teachingUnitId: 'junior-unit', grade: 8, classNumber: 12 }, 'stable-812')
-    result = addClass(result, projectId, { teachingUnitId: 'senior-unit', grade: 1, classNumber: 3 }, 'stable-103')
+    result = addClass(result, projectId, { teachingUnitId: 'junior-unit', grade: 7, classNumber: 1 }, 'stable-701')
+    result = addClass(result, projectId, { teachingUnitId: 'junior-unit', grade: 8, classNumber: 2 }, 'stable-802')
+    result = addClass(result, projectId, { teachingUnitId: 'junior-unit', grade: 9, classNumber: 10 }, 'stable-910')
+    result = addClass(result, projectId, { teachingUnitId: 'senior-unit', grade: 1, classNumber: 1 }, 'stable-101')
+    result = addClass(result, projectId, { teachingUnitId: 'senior-unit', grade: 2, classNumber: 2 }, 'stable-202')
+    result = addClass(result, projectId, { teachingUnitId: 'senior-unit', grade: 3, classNumber: 10 }, 'stable-310')
     expect(result.classes.filter((item) => item.id.startsWith('stable-')).map((item) => [item.id, classDisplayName(item)])).toEqual([
-      ['stable-709', '709'], ['stable-812', '812'], ['stable-103', '103'],
+      ['stable-701', '701'], ['stable-802', '802'], ['stable-910', '910'],
+      ['stable-101', '101'], ['stable-202', '202'], ['stable-310', '310'],
     ])
     expect(isAppDataV4(result)).toBe(true)
   })

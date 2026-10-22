@@ -1,4 +1,4 @@
-import { AlertCircle, CalendarDays, Check, ChevronLeft, ChevronRight, GraduationCap, LayoutDashboard, LibraryBig, Settings, Shapes, Users, X } from 'lucide-react'
+import { AlertCircle, CalendarDays, Check, GraduationCap, LayoutDashboard, LibraryBig, Settings, Shapes, Users, X } from 'lucide-react'
 import type { Ref } from 'react'
 import type { StorageStatus } from '../hooks/useLocalStorage'
 import type { TimetableProject } from '../types'
@@ -38,8 +38,10 @@ export function Sidebar({ activePage, onNavigate, open, onClose, storageStatus, 
       {open && <button className="sidebar-backdrop" aria-label="關閉選單" onClick={onClose} />}
       <aside className={`sidebar ${open ? 'sidebar-open' : ''} ${collapsed ? 'sidebar-collapsed' : ''}`}>
         <div className="brand">
-          <div className="brand-mark" role="img" aria-label="Toki 品牌標誌"><GraduationCap size={21} aria-hidden="true" /></div>
-          <div className="sidebar-brand"><strong>Toki</strong><span lang="ja">とき・時間</span></div>
+          <button type="button" className="brand-toggle" aria-label={collapsed ? '展開側邊欄' : '收合側邊欄'} title={collapsed ? '展開側邊欄' : '收合側邊欄'} aria-expanded={!collapsed} onClick={() => onCollapsedChange(!collapsed)}>
+            <span className="brand-mark" role="img" aria-label="Toki 品牌標誌"><GraduationCap size={21} aria-hidden="true" /></span>
+            <span className="sidebar-brand"><strong>Toki</strong><span lang="ja">とき・時間</span></span>
+          </button>
           <button className="icon-button mobile-only" onClick={onClose} aria-label="關閉選單"><X size={20} /></button>
         </div>
         <label className="project-switcher">課表專案<select value={activeProjectId ?? ''} onChange={(event) => onProjectChange(event.target.value)} disabled={storageStatus === 'read-error'}>{projects.filter((project) => !project.archivedAt).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
@@ -69,9 +71,6 @@ export function Sidebar({ activePage, onNavigate, open, onClose, storageStatus, 
             <div><strong>{projects.find((project) => project.id === activeProjectId)?.name ?? '課表專案'}</strong><span>個人教師工作空間</span></div>
           </div>
         </div>
-        <button type="button" className="sidebar-collapse" aria-label={collapsed ? '展開側邊欄' : '收合側邊欄'} title={collapsed ? '展開側邊欄' : '收合側邊欄'} aria-expanded={!collapsed} onClick={() => onCollapsedChange(!collapsed)}>
-          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}<span className="sidebar-item-label">收合側邊欄</span>
-        </button>
       </aside>
     </>
   )

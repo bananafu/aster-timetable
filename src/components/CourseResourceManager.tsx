@@ -26,7 +26,7 @@ const unitLabel = (unit: TeachingUnit, units: TeachingUnit[]) => {
 const subjectDraft = (subject: Subject): SubjectDraft => ({ name: subject.name, shortName: subject.shortName, color: subject.color, applicableSchoolLevels: [...(subject.applicableSchoolLevels ?? SCHOOL_LEVELS)] })
 const classDraft = (item: ProjectClass): ClassDraft => ({ name: item.name, grade: item.grade, classNumber: item.classNumber, room: item.room ?? '', teachingUnitId: item.teachingUnitId })
 
-type EditorSelection = { kind: 'subject' | 'class'; id: string } | { kind: 'subject-create' | 'class-create' } | null
+type EditorSelection = { kind: 'subject' | 'class'; id: string } | { kind: 'subject-create' } | null
 const subjectCatalog = [...DEFAULT_SUBJECT_CATALOG, ...OPTIONAL_SUBJECT_CATALOG] as readonly SubjectCatalogEntry[]
 
 interface Props {
@@ -76,8 +76,10 @@ export function CourseResourceManagerDialog(props: Props & { onClose: () => void
     onCreated(operation.type === 'create-class' ? 'classes' : 'subjects', operation.targetId)
   }, [onCreated, session.operation])
   return <Modal title={props.mode === 'classes' ? '管理班級' : '管理科目'} subtitle={props.mode === 'classes' ? '班級屬於所選專案與學制，不屬於教師課表。' : props.data.schemaVersion === 8 ? '科目庫屬於所選專案，變更只會影響該專案內的課程。' : '科目庫由所有專案共用，變更會影響適用的課程。'} onClose={() => session.requestTransition(props.onClose)}>
-    <div ref={content} className="resource-manager-dialog">
-      <CourseResourceManager {...props} session={session} />
+    <div className="resource-manager-dialog">
+      <div ref={content} className="resource-manager-scroll">
+        <CourseResourceManager {...props} session={session} />
+      </div>
       <div className="resource-manager-complete">
         <p>「新增{props.mode === 'classes' ? '班級' : '科目'}」會儲存目前這一筆；「建立」會完成管理並返回原流程。</p>
         <button type="button" className="primary-button" disabled={session.locked} onClick={() => session.requestTransition(props.onClose)}>建立</button>
@@ -93,7 +95,7 @@ export function CourseResourceManager(props: Props) {
 
 function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePersistence, storageControls, readOnly = false, onOpenSettings, session }: Props & { session: ResourceManagementSession }) {
   const { schoolId, unitId, showClassCreate, projectId } = session.view
-  const [editor, setEditor] = useState<EditorSelection>(() => mode === 'classes' && showClassCreate ? { kind: 'class-create' } : null)
+  const [editor, setEditor] = useState<EditorSelection>(null)
   const [subjectQuery, setSubjectQuery] = useState('')
   const managerContent = useRef<HTMLElement>(null)
   const editorTrigger = useRef<HTMLElement | null>(null)
@@ -225,7 +227,6 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
   const openSettings = onOpenSettings ? () => session.requestTransition(onOpenSettings) : undefined
   const returnToList = () => {
     if (session.locked) { session.fail('這筆變更尚未完成儲存，請先完成儲存或處理復原。'); return }
-    if (editor?.kind === 'class-create') session.setView({ showClassCreate: false })
     setEditor(null)
   }
   const selectedSubjectEntry = editor?.kind === 'subject' ? session.drafts[`subject:${editor.id}`] : undefined
@@ -280,20 +281,20 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
     {mode === 'subjects' && !unit && units.length > 0 && <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p>}
 
     {mode === 'classes' && unit && !editor && <section className="resource-browser" aria-label="班級清單">
-      <ResourceBrowserHeading title="班級" description="班級屬於目前專案與學制，不受教師課表篩選影響。" dirtyCount={dirtyCount} action={<button type="button" className="resource-add-button" disabled={!editable} onClick={() => { session.setView({ showClassCreate: true }); openEditor({ kind: 'class-create' }) }}>＋ 新增班級{session.drafts[classCreateKey] ? '（未儲存）' : ''}</button>} />
+      <ResourceBrowserHeading title="班級" description="班級屬於目前專案與學制，不受教師課表篩選影響。" dirtyCount={dirtyCount} action={<button type="button" className="resource-add-button class-create-trigger" aria-expanded={showClassCreate} aria-controls="inline-class-create" disabled={!editable} onClick={() => session.setView({ showClassCreate: true })}>＋ 新增班級{session.drafts[classCreateKey] ? '（未儲存）' : ''}</button>} />
       <div className="resource-list">
         {classes.map((item) => <ClassListItem key={item.id} item={item} session={session} onSelect={() => openEditor({ kind: 'class', id: item.id })} />)}
         {!classes.length && <p className="resource-list-empty">目前學制尚無班級。</p>}
       </div>
-    </section>}
-    {mode === 'classes' && unit && editor?.kind === 'class-create' && <section className="resource-editor-shell">
-      <EditorHeading title="新增班級" dirty={Boolean(session.drafts[classCreateKey])} locked={session.locked} onBack={returnToList} backLabel="返回班級清單" />
-      <form className="resource-editor class-editor-row class-create" aria-label="新增班級表單" onSubmit={createClass}>
-        <ClassIdentityFields draft={newClass} unit={unit} onChange={(value) => session.edit(classCreateKey, { kind: 'class-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptyClassDraft(unit), value })} prefix="新班級" disabled={classCreateLocked} />
-        <ClassRoomField id="new-class-room-help" prefix="新班級" room={newClass.room ?? ''} disabled={classCreateLocked} onChange={(room) => session.edit(classCreateKey, { kind: 'class-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptyClassDraft(unit), value: { ...newClass, room } })} />
-        <span className="class-code-preview">顯示：{classDisplayName({ name: newClass.name ?? '', grade: newClass.grade, classNumber: newClass.classNumber })}</span>
-        <div className="class-create-actions"><button type="submit" className="primary-button class-create-submit" disabled={classCreateLocked}>{session.locked ? '儲存中…' : '新增班級'}</button>{session.drafts[classCreateKey] && <button type="button" onClick={() => session.requestTransition(() => { session.setView({ showClassCreate: false }); setEditor(null) }, [classCreateKey])}>捨棄草稿</button>}</div>
-      </form>
+      {showClassCreate && <section id="inline-class-create" className="inline-class-create" aria-label="建立新班級">
+        <header><div><h4>新增班級</h4><p>選擇年級與班號後會自動產生班級名稱。</p></div>{session.drafts[classCreateKey] && <span className="resource-dirty-badge">未儲存</span>}</header>
+        <form className="resource-editor class-editor-row class-create" aria-label="新增班級表單" onSubmit={createClass}>
+          <ClassIdentityFields draft={newClass} unit={unit} onChange={(value) => session.edit(classCreateKey, { kind: 'class-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptyClassDraft(unit), value })} prefix="新班級" disabled={classCreateLocked} />
+          <ClassRoomField id="new-class-room-help" prefix="新班級" room={newClass.room ?? ''} disabled={classCreateLocked} onChange={(room) => session.edit(classCreateKey, { kind: 'class-create', projectId: projectId!, teachingUnitId: unitId, source: null, unitSnapshot: unit, initial: emptyClassDraft(unit), value: { ...newClass, room } })} />
+          <span className="class-code-preview">顯示：{classDisplayName({ name: newClass.name ?? '', grade: newClass.grade, classNumber: newClass.classNumber })}</span>
+          <div className="class-create-actions"><button type="submit" className="primary-button class-create-submit" disabled={classCreateLocked}>{session.locked ? '儲存中…' : '新增班級'}</button><button type="button" disabled={session.locked} onClick={() => session.setView({ showClassCreate: false })}>收起</button>{session.drafts[classCreateKey] && <button type="button" disabled={session.locked} onClick={() => session.requestTransition(() => session.setView({ showClassCreate: false }), [classCreateKey])}>捨棄草稿</button>}</div>
+        </form>
+      </section>}
     </section>}
     {mode === 'classes' && selectedClass && selectedClassUnit && <section className="resource-editor-shell">
       <EditorHeading title={`編輯班級｜${classDisplayName(selectedClass)}`} dirty={Boolean(selectedClassEntry)} locked={session.locked} onBack={returnToList} backLabel="返回班級清單" />
@@ -301,7 +302,10 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
     </section>}
     {mode === 'classes' && !unit && units.length > 0 && <p className="settings-empty">請選擇學制，才能管理班級。</p>}
 
-    {retained.length > 0 && <section className="retained-resource-drafts" aria-label="保留的資源草稿"><p>來源資料已變更、刪除或不在目前範圍；草稿已保留，不會自動重建資源。</p>{retained.map(([key, entry]) => <div key={key}>{(entry.kind === 'subject' || entry.kind === 'class') && entry.source ? <button type="button" onClick={() => openEditor({ kind: entry.kind, id: entry.source!.id })}>檢視「{entry.source.name}」草稿</button> : <><span aria-label="保留的新增草稿">{entry.kind === 'subject-create' ? String((entry.value as SubjectDraft).name) : String((entry.value as ClassDraft).name ?? '')}</span><button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄此筆新增草稿</button></>}</div>)}</section>}
+    {retained.length > 0 && <section className="retained-resource-drafts" aria-label="保留的資源草稿"><p>來源資料已變更、刪除或不在目前範圍；草稿已保留，不會自動重建資源。</p>{retained.map(([key, entry]) => {
+      const editableKind = entry.kind === 'subject' || entry.kind === 'class' ? entry.kind : null
+      return <div key={key}>{editableKind && entry.source ? <button type="button" onClick={() => openEditor({ kind: editableKind, id: entry.source!.id })}>檢視「{entry.source.name}」草稿</button> : <><span aria-label="保留的新增草稿">{entry.kind === 'subject-create' ? String((entry.value as SubjectDraft).name) : String((entry.value as ClassDraft).name ?? '')}</span><button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄此筆新增草稿</button></>}</div>
+    })}</section>}
     {session.unconfirmedCreations.length > 0 && <section aria-label="未確認的新增操作"><p>請先核對原新增 ID。結束這次未確認新增只會清除該筆輸入，保留目前文件中的資源；不會認定本地儲存成功。</p>{session.unconfirmedCreations.map((entry) => <div key={entry.key}><p>{entry.message}</p><button type="button" onClick={() => session.requestTransition(() => { if (entry.kind === 'class-create' && entry.key === classCreateKey) session.setView({ showClassCreate: false }); if (entry.key === subjectCreateKey || entry.key === classCreateKey) setEditor(null) }, [entry.key])}>結束這次未確認新增並清除輸入</button></div>)}</section>}
     {session.error && <p className="form-error" role="alert">{session.error}</p>}
     {session.locked && storageStatus === 'saved' && <p role="status">{session.operation?.type === 'remove-subject-level' ? '正在儲存解除適用關係…' : '正在儲存資源變更，尚未確認持久化…'}</p>}

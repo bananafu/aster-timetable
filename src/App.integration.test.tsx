@@ -890,6 +890,8 @@ describe('App v4 runtime', () => {
     expect(screen.getByRole('button', { name: `管理科目，已選 ${selectedSubjectCount} 科` })).toBeTruthy()
     expect(screen.getByRole('button', { name: `管理班級，${validClassCount} 個有效班級` })).toBeTruthy()
     expect(screen.getByRole('img', { name: 'Toki 品牌標誌' })).toBeTruthy()
+    expect(document.querySelector('.sidebar-collapse')).toBeNull()
+    expect(screen.getByRole('button', { name: '展開側邊欄' }).classList.contains('brand-toggle')).toBe(true)
     expect(screen.getByText('Toki')).toBeTruthy()
     expect(screen.getByText('とき・時間')).toBeTruthy()
     expect(document.querySelector('.sidebar')?.classList.contains('sidebar-collapsed')).toBe(true)

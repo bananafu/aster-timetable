@@ -142,15 +142,17 @@ describe('CourseResourceManager', () => {
     expect(screen.getByText('顯示：708')).toBeTruthy()
   })
 
-  it('新增表單按需開啟，取消不寫入且不留下空白表單', () => {
+  it('新增班級直接在清單下方展開，收起保留草稿且捨棄不寫入', () => {
     const data = fixture()
     const setData = vi.fn()
     render(<CourseResourceManager data={data} setData={setData} mode="classes" />)
     expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
     expect(screen.getByRole('form', { name: '新增班級表單' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: '班級清單' })).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /^編輯班級 / }).length).toBeGreaterThan(0)
     fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: '不儲存的班級' } })
-    fireEvent.click(screen.getByRole('button', { name: /返回班級清單/ }))
+    fireEvent.click(screen.getByRole('button', { name: '收起' }))
     expect(window.confirm).not.toHaveBeenCalled()
     expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級（未儲存）' }))
@@ -159,6 +161,18 @@ describe('CourseResourceManager', () => {
     expect(setData).not.toHaveBeenCalled()
     expect(screen.queryByRole('form', { name: '新增班級表單' })).toBeNull()
     expect(screen.getByRole('region', { name: '班級清單' })).toBeTruthy()
+  })
+
+  it('編輯既有班級仍使用獨立編輯畫面', () => {
+    startStorage('classes')
+    const editButton = screen.getAllByRole('button', { name: /^編輯班級 / })[0]
+    const name = editButton.getAttribute('aria-label')!.replace('編輯班級 ', '')
+    fireEvent.click(editButton)
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(screen.getByRole('form', { name: `管理班級 ${name}` })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /返回班級清單/ })).toBeTruthy()
+    expect(screen.queryByRole('region', { name: '班級清單' })).toBeNull()
   })
 
   it('新增驗證失敗時保留表單與超長教室內容', () => {
@@ -252,6 +266,8 @@ describe('CourseResourceManager', () => {
   it('可連續新增三個班級，只有建立會結束管理且捨棄後續草稿不回滾已儲存班級', () => {
     startStorage('classes')
     openClassCreate()
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(screen.getByRole('region', { name: '班級清單' })).toBeTruthy()
     const names = ['連續班級一', '連續班級二', '連續班級三']
     names.forEach((name) => {
       fireEvent.change(screen.getByLabelText('新班級名稱'), { target: { value: name } })
@@ -279,15 +295,21 @@ describe('CourseResourceManager', () => {
 
   it('新增班級使用專屬深咖啡 token，並定義 hover、focus、disabled 與窄視窗樣式', () => {
     render(<CourseResourceManager data={fixture()} setData={vi.fn()} mode="classes" />)
-    fireEvent.click(screen.getByRole('button', { name: '＋ 新增班級' }))
+    const trigger = screen.getByRole('button', { name: '＋ 新增班級' })
+    expect(trigger.classList.contains('class-create-trigger')).toBe(true)
+    fireEvent.click(trigger)
     expect(screen.getByRole('button', { name: '新增班級' }).classList.contains('class-create-submit')).toBe(true)
     const css = readFileSync('src/styles.css', 'utf8')
     expect(css).toContain('--color-accent-hover: #3F2E22;')
-    expect(css).toContain('.class-create-actions .class-create-submit { color: var(--color-surface-strong); background: var(--color-accent);')
-    expect(css).toContain('.class-create-actions .class-create-submit:hover:not(:disabled)')
-    expect(css).toContain('.class-create-actions .class-create-submit:focus-visible')
-    expect(css).toContain('.class-create-actions .class-create-submit:disabled')
+    expect(css).toContain('.class-create-actions .class-create-submit, .resource-browser .class-create-trigger { color: var(--color-surface-strong); background: var(--color-accent);')
+    expect(css).toContain('.resource-browser .class-create-trigger:hover:not(:disabled)')
+    expect(css).toContain('.resource-browser .class-create-trigger:focus-visible')
+    expect(css).toContain('.resource-browser .class-create-trigger:disabled')
     expect(css).toContain('.class-create-actions button { min-height: 40px; }')
+
+    cleanup()
+    render(<CourseResourceManager data={fixture()} setData={vi.fn()} mode="subjects" />)
+    expect(screen.getByRole('button', { name: '＋ 新增科目' }).classList.contains('class-create-trigger')).toBe(false)
   })
 
   it('持久化失敗時保留新增表單與輸入內容', () => {
@@ -392,7 +414,16 @@ describe('CourseResourceManager', () => {
     vi.stubGlobal('innerWidth', 390)
     const close = vi.fn()
     render(<CourseResourceManagerDialog data={fixture()} setData={vi.fn()} mode="classes" onClose={close} />)
-    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    const dialog = screen.getByRole('dialog', { name: '管理班級' })
+    const scroll = dialog.querySelector('.resource-manager-scroll')
+    const complete = dialog.querySelector('.resource-manager-complete')
+    expect(scroll?.querySelector('.resource-manager')).toBeTruthy()
+    expect(scroll?.contains(complete)).toBe(false)
+    expect(scroll?.parentElement).toBe(complete?.parentElement)
+    const css = readFileSync('src/styles.css', 'utf8')
+    expect(css).toContain('.resource-manager-dialog { display: flex; flex-direction: column; max-height: calc(100vh - 168px); overflow: hidden; }')
+    expect(css).toContain('.resource-manager-scroll { min-height: 0; overflow-y: auto;')
+    expect(css).toContain('.resource-manager-complete { display: flex; flex: 0 0 auto;')
     expect(document.activeElement).toBe(screen.getByLabelText('學校'))
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(close).toHaveBeenCalledTimes(1)
