@@ -295,3 +295,11 @@ input[type="date"], input[type="time"], .week-controls, .period-label, .day-head
 .multi-week-grid.seven-days { min-width: 1400px; grid-template-columns: repeat(7, minmax(200px, 1fr)); }
 .multi-lesson-card.one-off .multi-lesson-title em:first-of-type { color: var(--color-focus); background: var(--color-surface-strong); }
 @media (max-width: 760px) { .schedule-days-switch { align-self: flex-start; margin-left: 0; }.schedule-days-switch button, .weekend-lesson-notice button { min-height: 44px; }.weekend-lesson-notice { padding-inline: 16px; }.multi-week-grid.seven-days { min-width: 1260px; grid-template-columns: repeat(7, minmax(180px, 1fr)); } }
+.v8-preview-link { position: fixed; right: 20px; bottom: 20px; z-index: 50; padding: 10px 14px; color: #fff; background: var(--color-accent); border-radius: var(--radius-sm); box-shadow: 0 8px 24px #25201830; font-size: 12px; text-decoration: none; }
+.v8-preview-panel { padding: 24px; }
+.v8-preview-panel button { margin-right: 8px; margin-top: 8px; }
+.v8-preview-shell .sidebar .brand { display: flex; align-items: center; gap: 8px; padding: 24px; }
+.v8-preview-shell .sidebar .brand span { color: var(--color-text-secondary); font-size: 11px; }
+.v8-preview-shell .project-switcher { display: grid; gap: 8px; }
+.v8-preview-shell .project-switcher button { min-height: 34px; border: var(--border); border-radius: var(--radius-sm); background: var(--color-surface); cursor: pointer; }
+.v8-preview-shell .side-nav button { display: block; width: 100%; text-align: left; }

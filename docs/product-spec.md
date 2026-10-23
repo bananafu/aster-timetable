@@ -1,5 +1,11 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-D1 — V8 開發預覽
+
+開發伺服器預設顯示 V7；只有明確進入 `#/v8-preview` 才使用 V8 Host。production 不顯示開發入口。空白 V8 必須由使用者確認後經既有 Web Locks bootstrap 建立；V7 或其他舊資料存在時阻擋，不清除、不自動遷移。既有 V8 只按 activation gate 決定可寫或唯讀，失敗時保留 raw 救援匯出。從 V8-only origin 返回 V7 前須警告：V7 可能建立 V7 key，之後 V8 guard 將阻擋寫入；不提供繞過或自動清理。D1 只將 V8 Project 管理接入預覽，其餘頁面標示開發中；正式 App 仍為 V7。功能對等追蹤見 `docs/v7-v8-feature-parity.md`。
+
+V8 教師課表的正式政策為「複製僅設定，不複製固定課、OneOff、Change、Event、Progress」以及「存在關聯資料即阻擋刪除，不級聯」。下方舊版完整課表複製條款僅描述 V7，不得作為 V8 實作依據。
+
 ## Phase 4D R2-C2c-2 — V8 單次異動與額外課程（尚未正式啟用）
 
 - 「僅此次調課」和「僅此次停課」必須選真實有效的固定課程原日期，記錄獨立 Change，不改固定課程；調課目標使用來源任教單位同學期的合法節次，可跨 A/B 週。「額外新增課程」是無固定來源的 `purpose: extra` OneOff，不偽裝成調課。

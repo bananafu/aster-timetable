@@ -1,5 +1,9 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-D1 — 開發預覽 Shell 與 Project 接線
+
+V7 仍為預設正式 App。D1 提供僅開發模式可進入的 V8 預覽、明確空白 bootstrap、V8 Host 的唯讀／衝突／匯出畫面及 Project Lifecycle 接線。教學資源、教師課表、課程與設定頁面只顯示開發中，不能誤認為已接線。下一階段優先提供學校／任教單位／節次設定與已完成的資源管理入口；固定課、單次異動、事件及總覽另階段整合。正式 Runtime 切換、正式備份匯入恢復、真實瀏覽器多分頁驗收尚未完成。功能對等追蹤見 `docs/v7-v8-feature-parity.md`。
+
 ## Phase 4D R2-C2c-2 — V8 單次異動與額外課程（獨立元件完成）
 
 已建立固定課程僅此次調課／停課、無來源額外課程、當日有效課程解析及同教師實際時間衝突檢查。沿用 Change／OneOff schema、TeachingUnit A/B 錨點與整組撤銷契約；V8 validator、safe-update、Project／Timetable 舊草稿保護及 Host raw／revision receipt 由測試涵蓋。正式 App 與 OverviewCalendar 未切換；永久異動、Event 編輯、正式備份 UI 與真實瀏覽器多分頁驗收仍屬後續階段。

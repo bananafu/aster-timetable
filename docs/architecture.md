@@ -1,5 +1,9 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-D1 — V8 開發預覽 App Shell
+
+`DevAppEntry` 在開發模式預設渲染原 V7 `App`，只有使用者明確開啟 `#/v8-preview` 才卸載 V7 App 並渲染 `V8PreviewApp`；production 不提供此入口，也不因 hash 掛載 V8。路由不使用 localStorage。V8 預覽使用 `loadAppDataV8Only` 唯讀檢視，再由明確確認呼叫既有 Web Locks `bootstrapEmptyV8`；不得清除或遷移舊 key。既有 V8 只由 `useAppDataV8({ loadMode: 'v8-only' })` 載入，activation gate、validator、衝突與 receipt 均沿用 Host。開發預覽接入 `ProjectLifecycleV8`，其餘頁面明確標示開發中。正式 V7 Runtime、V8 bootstrap／activation 協定及正式週課表未改。V7 在全新 origin 首次掛載會持久化 V7 key；要驗收空白 V8，須在乾淨開發 origin 首次載入時直接進入預覽 hash，而不是先打開 V7 再切換。瀏覽器真實多分頁與完整備份／匯入恢復仍待驗收。產品對等表見 `docs/v7-v8-feature-parity.md`。
+
 ## Phase 4D R2-C2c-2 — V8 單次異動與額外課程（獨立元件）
 
 `oneTimeLessonsV8` 沿用既有 `ScheduleOverrideV4` 的 `cancel`／`move`（原固定 Lesson ID、原日期、原節次及可追溯目標）與 `OneOffLesson` 的 `purpose: extra`（無來源 Lesson）語意，不修改 schema、固定 Lesson 或 A/B 錨點。原日期用來源 TeachingUnit 的錨點、weekday、版本有效期驗證；調課目標限同一任教單位學期與既有節次，容許跨 A/B 週。`resolveProjectDay` 依既有順序解析固定課程、停課／調離、調入與 OneOff；V8 selector 排除已停課項目，依 Project／Timetable ID 隔離。衝突使用解析後同一教師課表的實際起訖時間，包括跨任教單位；不同教師互不阻擋。撤銷沿用既有整組 override 契約，若恢復原時段會衝突則拒絕；刪除僅限獨立 `extra`。所有更新均通過 V8 validator 與 safe-update。
