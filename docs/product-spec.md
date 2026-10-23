@@ -1,5 +1,11 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-C2b-4 — V8 資源整合驗收（尚未正式啟用）
+
+- 空白 Project 起步的科目、班級、任教配置與教師課表可依序建立；每次操作須維持完整 V8 文件合法，且新資源不得自動產生課程、事件或進度。Project 與教師課表依 ID 隔離；同一教師課表可跨任教單位。
+- 有引用的 Subject、Class、Timetable 不可直接刪除，也不可藉 Class 移動留下失效引用。成功提示須確認目前文件、Host receipt raw 與 revision 均對應本次寫入；衝突、失敗或舊草稿不可被誤認為成功。
+- 本階段僅有獨立資料與元件整合測試，不代表正式 App 已切換 V8，也不代表已完成真實瀏覽器多分頁、正式備份或匯入恢復驗收。
+
 ## Phase 4D R2-C2b-3 — V8 教師課表管理（尚未正式啟用）
 
 - 每位教師一份獨立 Timetable，Timetable 直接歸屬 Project，不強制歸屬單一 TeachingUnit；同一份課表可包含多任教單位的合法內容。不同 Project／教師的課程、活動與進度必須依 Timetable ID 隔離，不以名稱辨識。

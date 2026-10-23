@@ -1,5 +1,9 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-C2b-4 — V8 資源整合與回歸（獨立驗證完成）
+
+已驗證 Project、Subject、Class、任教配置、教師課表在同一 V8 文件的連續操作、validator、儲存讀回、跨 Project／Timetable 隔離、跨 TeachingUnit 合法內容及引用保護；Class 與 Timetable 管理元件亦在同一空白 bootstrap Host 上完成連續寫入。統一 Host receipt 的 raw／revision 判定並阻擋 Class 舊 Project 草稿送出。正式 App 仍為 V7；真實瀏覽器多分頁、正式備份／匯入恢復與 Lesson／Event 編輯器仍待後續階段。
+
 ## Phase 4D R2-C2b-3 — V8 教師課表管理（獨立元件完成）
 
 已建立 Project-scoped 教師課表建立、改名、僅設定複製、引用保護刪除、ID 選取及按教師過濾內容的 V8 service／selector／獨立 UI 與測試。Timetable 不屬於單一 TeachingUnit，跨任教單位的合法資料仍可顯示。UI 的成功訊息以 Host 的精確 raw 與 revision receipt 為準；唯讀／衝突保留匯出與恢復入口。尚未接入正式 App、OverviewCalendar 或新增 Lesson／Event 編輯器；正式高影響刪除備份與瀏覽器多分頁驗收仍待後續階段。

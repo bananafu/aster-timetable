@@ -44,7 +44,9 @@ export function ProjectLifecycleV8({ data, setData, status, persistence, info, c
 
   useEffect(() => {
     if (!waitingRaw) return
-    if (persistence.receipt && persistence.revision > baseRevision && persistence.receipt.raw === waitingRaw) {
+    if (status === 'saved' && !persistence.pending && persistence.receipt
+      && persistence.revision > baseRevision && persistence.receipt.revision === persistence.revision
+      && persistence.receipt.raw === waitingRaw && JSON.stringify(data) === waitingRaw) {
       setWaitingRaw(null)
       setSuccess('V8 寫入已確認。')
       setPage('root')
@@ -53,7 +55,7 @@ export function ProjectLifecycleV8({ data, setData, status, persistence, info, c
       setWaitingRaw(null)
       setError('寫入未確認；本頁資料可匯出，請處理衝突或恢復後重試。')
     }
-  }, [waitingRaw, persistence.receipt, persistence.revision, baseRevision, status, onPersisted, onClose])
+  }, [data, waitingRaw, persistence.pending, persistence.receipt, persistence.revision, baseRevision, status, onPersisted, onClose])
 
   const close = () => { if (!dirty || window.confirm('捨棄尚未提交的專案草稿？')) onClose() }
   const submit = (next: AppDataV8) => {

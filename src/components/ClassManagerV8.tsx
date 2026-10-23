@@ -14,6 +14,7 @@ export function ClassManagerV8({ data, setData, status, persistence, writable, o
   const units = data.teachingUnits.filter((item) => item.projectId === projectId)
   const classes = data.classes.filter((item) => item.projectId === projectId)
   const [draft, setDraft] = useState<ClassV8Draft>(() => empty(units[0]?.id))
+  const [draftProjectId, setDraftProjectId] = useState(projectId)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [expectedRaw, setExpectedRaw] = useState<string | null>(null)
   const [startedRevision, setStartedRevision] = useState(0)
@@ -23,8 +24,16 @@ export function ClassManagerV8({ data, setData, status, persistence, writable, o
   const dirty = !!draft.name?.trim() || draft.grade !== undefined || draft.classNumber !== undefined || !!draft.room?.trim()
 
   useEffect(() => {
+    if (draftProjectId === projectId || dirty || expectedRaw) return
+    setDraft(empty(units[0]?.id))
+    setEditingId(null)
+    setDraftProjectId(projectId)
+  }, [draftProjectId, projectId, dirty, expectedRaw, units])
+
+  useEffect(() => {
     if (!expectedRaw) return
-    if (persistence.receipt && persistence.revision > startedRevision
+    if (status === 'saved' && !persistence.pending && persistence.receipt && persistence.revision > startedRevision
+      && persistence.receipt.revision === persistence.revision
       && persistence.receipt.raw === expectedRaw && JSON.stringify(data) === expectedRaw) {
       setExpectedRaw(null)
       setEditingId(null)
@@ -34,7 +43,7 @@ export function ClassManagerV8({ data, setData, status, persistence, writable, o
       setExpectedRaw(null)
       setError('寫入未確認；草稿仍保留。請匯出本頁資料並處理衝突。')
     }
-  }, [data, expectedRaw, persistence.receipt, persistence.revision, startedRevision, status, units])
+  }, [data, expectedRaw, persistence.pending, persistence.receipt, persistence.revision, startedRevision, status, units])
 
   const submit = (next: AppDataV8) => {
     if (!canWrite) { setError('目前唯讀或有未確認寫入。'); return }
@@ -47,6 +56,7 @@ export function ClassManagerV8({ data, setData, status, persistence, writable, o
   const save = (event: FormEvent) => {
     event.preventDefault()
     if (!projectId) return
+    if (projectId !== draftProjectId) { setError('專案已變更；班級草稿已保留，請重新確認後再操作。'); return }
     try { submit(editingId ? updateClassV8(data, projectId, editingId, draft)
       : createClassV8(data, projectId, draft, crypto.randomUUID())) }
     catch (cause) { setError(cause instanceof Error ? cause.message : '班級資料無效。') }
@@ -69,6 +79,7 @@ export function ClassManagerV8({ data, setData, status, persistence, writable, o
     const item = classes.find((candidate) => candidate.id === id)
     if (!item) return
     setEditingId(id)
+    setDraftProjectId(projectId)
     setDraft({ teachingUnitId: item.teachingUnitId, name: item.name, grade: item.grade,
       classNumber: item.classNumber, room: item.room ?? '' })
   }

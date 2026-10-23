@@ -1,5 +1,11 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-C2b-4 — V8 資源整合與回歸（未接入正式 App）
+
+跨資源整合測試以同一份 V8 document 連續建立 Project、Subject、Class、TeachingUnitSubject 與教師 Timetable，每步通過完整 validator，並以 V8 storage 的 snapshot／revision 契約寫入及重新載入。另以空白 bootstrap 下的共用 V8 Host 串接 Class 與 Timetable 管理元件，驗證連續寫入及 receipt。測試亦涵蓋跨 TeachingUnit 的同一教師內容、不同教師／Project 隔離、複製新學期的暫態資料排除，以及 Subject／Class／Timetable 引用保護。
+
+Project、Class、Timetable 管理元件以非 pending、目前文件 raw、receipt raw 與 receipt revision 同時相符才顯示成功；科目 Host 路徑同樣比對 raw／revision，保留舊版測試 harness 無 receipt 的相容輸入。Class 草稿在 Project 切換後不會寫入新 Project。這些為 mock storage／React 整合驗證，不是瀏覽器真實多分頁互斥證明；正式 App、V7 Runtime、schema 與 bootstrap／activation protocol 均未修改。
+
 ## Phase 4D R2-C2b-3 — V8 教師課表管理（獨立元件，未接入正式 App）
 
 Timetable 直接屬於 Project，以 `teacherName` 表達教師，不具 TeachingUnit 外鍵；同一教師課表可包含多個任教單位的 Lesson、OneOff、Change、Event 與 Progress。`timetablesV8` 重用 `eventTopologyV8` 的建立／刪除安全操作，新增僅更新目標名稱／教師名稱，以及僅複製 Timetable 設定的明確複製操作。跨 Project 複製建立新 ID，不攜帶課程、活動或進度。刪除先計算目標課表各類引用；有引用即拒絕，不級聯刪除，也不因其他教師有引用而錯誤阻擋。

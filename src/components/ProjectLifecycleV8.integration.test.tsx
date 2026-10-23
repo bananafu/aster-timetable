@@ -36,7 +36,13 @@ describe('standalone V8 Project lifecycle UI', () => {
     expect(next.timetables.filter((item) => item.projectId === id)).toEqual([])
     expect(next.classes.filter((item) => item.projectId === id)).toEqual([])
     expect(next.recurringLessons.filter((item) => item.projectId === id)).toEqual([])
-    rerender(<ProjectLifecycleV8 {...props} persistence={{ pending: false, revision: 1,
+    rerender(<ProjectLifecycleV8 {...props} data={next} persistence={{ pending: false, revision: 1,
+      receipt: { raw: JSON.stringify(next), revision: 2 } }} />)
+    expect(screen.queryByText('V8 寫入已確認。')).toBeNull()
+    rerender(<ProjectLifecycleV8 {...props} data={next} persistence={{ pending: false, revision: 1,
+      receipt: { raw: 'wrong', revision: 1 } }} />)
+    expect(screen.queryByText('V8 寫入已確認。')).toBeNull()
+    rerender(<ProjectLifecycleV8 {...props} data={next} persistence={{ pending: false, revision: 1,
       receipt: { raw: JSON.stringify(next), revision: 1 } }} />)
     expect(screen.getByText('V8 寫入已確認。')).toBeTruthy()
     expect(props.onClose).not.toHaveBeenCalled()

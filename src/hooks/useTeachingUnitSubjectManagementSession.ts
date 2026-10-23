@@ -19,7 +19,7 @@ interface Options {
   data: AppDataV8
   setData: Dispatch<SetStateAction<AppDataV8>>
   storageStatus: StorageStatus
-  storagePersistence: StoragePersistence
+  storagePersistence: StoragePersistence & { receipt?: { raw: string; revision: number } | null }
 }
 
 /**
@@ -51,7 +51,10 @@ export function useTeachingUnitSubjectManagementSession({
       status = 'unconfirmed'
       message = '科目資料在儲存期間已變更，無法確認本次操作；輸入內容已保留。'
     } else if (!storagePersistence.pending && storagePersistence.revision > operation.startedRevision) {
-      status = JSON.stringify(data) === operation.expectedResult ? 'persisted' : 'unconfirmed'
+      const receiptValid = !('receipt' in storagePersistence)
+        || (storagePersistence.receipt?.revision === storagePersistence.revision
+          && storagePersistence.receipt.raw === operation.expectedResult)
+      status = JSON.stringify(data) === operation.expectedResult && receiptValid ? 'persisted' : 'unconfirmed'
       message = status === 'persisted' ? operation.success : '儲存結果與預期不同，輸入內容已保留。'
     } else if (storagePersistence.pending || data === operation.expected
       || JSON.stringify(data) === operation.expectedResult) {

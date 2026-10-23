@@ -34,6 +34,9 @@ describe('standalone V8 Class manager', () => {
       receipt: { raw: 'wrong', revision: 1 } }} />)
     expect(screen.queryByText('V8 班級資料已確認儲存。')).toBeNull()
     rerender(<ClassManagerV8 {...props} data={next} persistence={{ pending: false, revision: 1,
+      receipt: { raw: JSON.stringify(next), revision: 2 } }} />)
+    expect(screen.queryByText('V8 班級資料已確認儲存。')).toBeNull()
+    rerender(<ClassManagerV8 {...props} data={next} persistence={{ pending: false, revision: 1,
       receipt: { raw: JSON.stringify(next), revision: 1 } }} />)
     expect(screen.getByText('V8 班級資料已確認儲存。')).toBeTruthy()
   })
@@ -55,5 +58,18 @@ describe('standalone V8 Class manager', () => {
     rerender(<ClassManagerV8 {...props} status="write-error" />)
     expect(screen.getByRole('alert').textContent).toContain('草稿仍保留')
     expect((screen.getByLabelText('班級名稱') as HTMLInputElement).value).toBe('草稿')
+  })
+
+  it('does not submit a draft from a previous Project after switching', () => {
+    const first = data()
+    let sequence = 0
+    const second = createBlankProject(first, { name: 'B', academicYear: 116, semester: 'first',
+      startDate: '2027-08-01', endDate: '2028-01-31' }, () => `b-${++sequence}`)
+    const { props, rerender } = mount({ data: { ...second, activeProjectId: first.activeProjectId } })
+    fireEvent.change(screen.getByLabelText('班級名稱'), { target: { value: '舊專案草稿' } })
+    rerender(<ClassManagerV8 {...props} data={second} />)
+    fireEvent.submit(screen.getByLabelText('班級表單'))
+    expect(props.setData).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('草稿已保留')
   })
 })

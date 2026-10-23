@@ -13,7 +13,8 @@ export function V8SubjectClassManager({ data, setData, status, persistence, writ
 }) {
   const [page, setPage] = useState<'subjects' | 'classes'>('subjects')
   const readOnly = !writable || status !== 'saved'
-  const verifiedPersistence = persistence.revision === 0 || persistence.receipt?.raw === JSON.stringify(data)
+  const verifiedPersistence = persistence.revision === 0 || (persistence.receipt?.raw === JSON.stringify(data)
+    && persistence.receipt.revision === persistence.revision)
     ? persistence : { ...persistence, pending: true, revision: 0 }
   const leave = () => { if (window.confirm('若有未儲存的草稿，確定捨棄並離開？')) onClose() }
   const changePage = (next: 'subjects' | 'classes') => {
