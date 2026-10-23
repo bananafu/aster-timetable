@@ -1,17 +1,25 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-B2b — Activation transaction protocol
+
+- 正式 cutover 只能在使用者明確操作、已驗證內部 backup receipt、已準備外部 JSON 且使用者確認保存、source identity 完全一致、唯讀 preflight 通過時啟動。沒有 V7 key 時使用 `empty` source 與空白 V8 candidate，不偽造 V7 指紋。
+- V2 transaction 使用獨立 key，依 `preparing → prepared → active` 寫入；`active` 必須最後建立。每步重查並讀回 V7 raw、V8 candidate、backup 和 transaction ownership。相同 ID 的有效 active 重複呼叫只回傳已驗證的 `replayed` receipt，不重寫；中途失敗保留已寫入狀態與所有原始資料，不自動清除、覆寫或升級。`interrupted` 與 `rolled-back` 不會自動轉 active。
+- 新版 V8 Host 僅在有效 V8 + 已驗證 V2 `active` metadata + 目前 raw digest／合法 document revision + 未改變的 V7 baseline + 無 conflict 時寫入；metadata 移除或改變立即撤銷資格，實際寫入前再次驗證。candidate digest 作為固定 baseline，正常編輯以 `currentDigest`／`documentRevision` 前進。沒有 metadata 的有效 V8 改為唯讀（與原 R2-A 測試預期不同）。
+- 同版本分頁使用 Web Locks 協調；不支援或 lock 失敗時停止寫入。這不能阻止已載入的舊版 Host 或 V7 分頁，也不使 LocalStorage 多 key 寫入具原子性。錯誤時保留結構化狀態與本頁 JSON 匯出；不能把 mock 測試當作瀏覽器互斥證明。
+- 本階段只提供明確呼叫的底層 service 與唯讀 inspection，未接入 `App.tsx`、未正式啟用 V8、未提供 rollback UI。B2c 仍需人工恢復／archive 流程；B3／B4 仍需正式接入與真實多分頁驗收。
+
 ## Phase 4D R2-B2a — Backup & preflight foundation
 
 - 正式切換前必須保存精確 V7 raw、SHA-256 digest 並讀回驗證；每次嘗試使用獨立 backup ID 與 key，既有備份不可覆寫。沒有 V7 key 時使用明確的 empty-source marker，不虛構 V7 raw 或 fingerprint。
 - Cutover preflight 只讀取來源並產生 V8 candidate；blocking migration、損壞／既有 V8、未知 activation 與來源 fingerprint 不符均阻擋。Review issue 保留結構化資訊，供後續確認。
 - 外部 JSON 匯出準備與使用者確認已保存是兩個獨立狀態，確認必須綁定特定 source digest；來源變更即失效。
 - Rollback archive 契約保留 V8 原始 raw 與 digest，恢復狀態固定為唯讀；本階段不執行 rollback 或刪除 V8 key。
-- 本階段未實作 B2b activation transaction、B2c 恢復／並行協調或正式 App cutover。LocalStorage 跨 key 寫入與跨分頁先讀後寫仍不具原子性。
+- B2b 已實作底層 transaction 與同版本 Web Lock 協調；B2c 人工恢復與正式 App cutover 尚未實作。LocalStorage 跨 key 寫入與不遵守協定的舊頁面仍不具原子互斥保證。
 
 ## Phase 4D R2-A — V8 Runtime Host foundation
 
 - `useAppDataV8` 是獨立且未接入正式 App 的 V8 runtime host；正式 V7 runtime、storage key 與使用者流程維持不變。
-- 已存在且有效的 V8 文件可經單一 `setData` 入口修改；每次寫入皆驗證 current／next、比對 V8 snapshot 與 V7 guard，並在讀回確認後才發出 revision receipt。
+- 原 R2-A 的有效 V8 即可寫入資格，已由 R2-B2b 收緊為必須具備有效 V2 active transaction；單一 `setData` 入口仍驗證 current／next、V8 snapshot、V7 guard，並在 V8 與 transaction 讀回確認後才發出 revision receipt。
 - V8 不存在時只建立空白狀態或執行 V7 migration preflight／reconciliation。migration candidate 保持唯讀，不自動寫入 V8，也不自動啟用 migration。
 - 損壞的 V8、被阻擋的 V7 migration、寫入失敗及跨分頁衝突均保留原始資料或本頁草稿，並提供 V7／V8／本頁 JSON 匯出；stale write 不得覆蓋外部分頁版本。
 - Activation metadata 僅定義不可變的 V7 source fingerprint、source key、V8 activation revision、timestamp 與 status 契約；本階段不建立、不更新也不啟用該紀錄。

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   loadV8ActivationMetadata,
+  APP_DATA_V8_ACTIVATION_KEY,
+  loadV8Transaction,
+  fingerprintV7Raw,
+  V8_TRANSACTION_KEY,
+  type V8ActivationTransaction,
   type V8ActivationMetadata,
   type V8ActivationMetadataLoadResult,
 } from '../data/activationV8'
@@ -18,6 +23,7 @@ import {
 } from '../data/storageV8'
 import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { isCompatibleAppDataV8, isSafeAppDataV8Update } from '../data/validators/v8'
+import { withV8StorageLock } from '../data/v8Coordination'
 import type { AppDataV8 } from '../types'
 import type { StoragePersistence, StorageStatus } from './useLocalStorage'
 
@@ -39,8 +45,30 @@ export interface AppDataV8RuntimeInfo {
   migrationFailure: AppDataV8LoadResult['migrationFailure'] | null
   activationMetadata: V8ActivationMetadata | null
   activationIssue: V8ActivationMetadataLoadResult['issue']
-  /** Only a valid document already stored under the V8 key is writable in R2-A. */
+  transaction: V8ActivationTransaction | null
+  /** Granted only after a verified active V2 transaction and current source checks. */
   writable: boolean
+}
+
+export async function checkV8HostWriteEligibility(
+  storage: Pick<Storage, 'getItem'>,
+  expectedRaw: string | null,
+  expectedTransactionId?: string,
+): Promise<{ eligible: boolean; transaction: V8ActivationTransaction | null }> {
+  try {
+    const loaded = loadV8Transaction(storage)
+    if (loaded.issue !== 'none' || loaded.value?.status !== 'active'
+      || (expectedTransactionId && loaded.value.transactionId !== expectedTransactionId)
+      || storage.getItem(APP_DATA_V8_ACTIVATION_KEY) !== null
+      || storage.getItem(APP_DATA_V8_KEY) !== expectedRaw || expectedRaw === null) return { eligible: false, transaction: loaded.value }
+    parseAppDataV8Raw(expectedRaw)
+    if (await fingerprintV7Raw(expectedRaw) !== loaded.value.currentDigest) return { eligible: false, transaction: loaded.value }
+    const v7 = storage.getItem(APP_DATA_V7_KEY)
+    if (loaded.value.source.type === 'empty' ? v7 !== null
+      : v7 === null || await fingerprintV7Raw(v7) !== loaded.value.source.digest) return { eligible: false, transaction: loaded.value }
+    if (loadV8Transaction(storage).raw !== loaded.raw || storage.getItem(APP_DATA_V8_KEY) !== expectedRaw) return { eligible: false, transaction: loaded.value }
+    return { eligible: true, transaction: loaded.value }
+  } catch { return { eligible: false, transaction: null } }
 }
 
 export interface AppDataV8RuntimeControls {
@@ -48,7 +76,7 @@ export interface AppDataV8RuntimeControls {
   rawV8: string | null
   rawBackup: string | null
   conflictSource: AppDataV8ConflictSource
-  errorCode: AppDataV8StorageErrorCode | 'invalid-next' | 'inactive' | null
+  errorCode: AppDataV8StorageErrorCode | 'invalid-next' | 'inactive' | 'activation-conflict' | 'lock-unavailable' | null
   exportStoredV7Json: () => string | null
   exportStoredV8Json: () => string | null
   exportLocalJson: () => string
@@ -60,7 +88,6 @@ interface InitialRuntime {
   load: AppDataV8LoadResult
   activation: V8ActivationMetadataLoadResult
   status: AppDataV8RuntimeStatus
-  writable: boolean
 }
 
 export function createInitialAppDataV8(): AppDataV8 {
@@ -98,7 +125,6 @@ function initialize(initialValue: AppDataV8): InitialRuntime {
     load,
     activation,
     status: activation.issue === 'read-failure' ? 'read-error' : initialStatus(load),
-    writable: load.source === 'v8' && load.status === 'saved' && load.issue === 'none',
   }
 }
 
@@ -124,6 +150,8 @@ export function useAppDataV8() {
   )
   const [errorCode, setErrorCode] = useState<AppDataV8RuntimeControls['errorCode']>(null)
   const [writeAttempt, setWriteAttempt] = useState(0)
+  const [writable, setWritable] = useState(false)
+  const [transaction, setTransaction] = useState<V8ActivationTransaction | null>(null)
 
   const valueRef = useRef(value)
   const statusRef = useRef(status)
@@ -135,6 +163,9 @@ export function useAppDataV8() {
   const externalV8RawRef = useRef<string | null>(null)
   const rawV7Ref = useRef(rawV7)
   const rawV8Ref = useRef(rawV8)
+  const writableRef = useRef(false)
+  const transactionIdRef = useRef<string | null>(null)
+  const activationGenerationRef = useRef(0)
 
   valueRef.current = value
   statusRef.current = status
@@ -147,13 +178,29 @@ export function useAppDataV8() {
     setStatusState(next)
   }, [])
 
+  useEffect(() => {
+    if (initial.load.source !== 'v8' || initial.load.status !== 'saved') return
+    let cancelled = false
+    const generation = activationGenerationRef.current
+    void checkV8HostWriteEligibility(localStorage, storedV8RawRef.current).then((result) => {
+      if (cancelled || activationGenerationRef.current !== generation) return
+      const eligible = result.eligible && typeof navigator !== 'undefined' && !!navigator.locks?.request
+      writableRef.current = eligible
+      transactionIdRef.current = eligible ? result.transaction!.transactionId : null
+      setTransaction(result.transaction)
+      setWritable(eligible)
+      if (!eligible) setErrorCode(result.eligible ? 'lock-unavailable' : 'inactive')
+    })
+    return () => { cancelled = true }
+  }, [initial.load.source, initial.load.status, setStatus])
+
   const setPending = useCallback((pending: boolean) => {
     pendingRef.current = pending
     setPersistence((current) => ({ ...current, pending }))
   }, [])
 
   const setData: Dispatch<SetStateAction<AppDataV8>> = useCallback((update) => {
-    if (!initial.writable) {
+    if (!writableRef.current) {
       setErrorCode('inactive')
       return
     }
@@ -172,18 +219,46 @@ export function useAppDataV8() {
     setValueState(next)
     setErrorCode(null)
     setPersistence((currentPersistence) => ({ ...currentPersistence, pending: true }))
-  }, [initial.writable, setStatus])
+  }, [setStatus])
 
   useEffect(() => {
-    if (!initial.writable || !pendingRef.current || statusRef.current !== 'saved') return
-    const timer = window.setTimeout(() => {
+    if (!writableRef.current || !pendingRef.current || statusRef.current !== 'saved') return
+    const timer = window.setTimeout(async () => {
       if (!pendingRef.current || statusRef.current !== 'saved') return
       try {
-        const confirmation = persistAppDataV8(localStorage, writeBaseRef.current, valueRef.current, {
-          raw: storedV8RawRef.current,
-          legacyGuardRaw: legacyGuardRawRef.current,
-          revision: revisionRef.current,
-        }, revisionRef.current)
+        const result = await withV8StorageLock(async () => {
+          const gate = await checkV8HostWriteEligibility(localStorage, storedV8RawRef.current, transactionIdRef.current ?? undefined)
+          if (!gate.eligible || !gate.transaction) {
+            if (localStorage.getItem(APP_DATA_V7_KEY) !== legacyGuardRawRef.current) {
+              throw new AppDataV8StorageError('legacy-conflict', 'V7 source changed before V8 write')
+            }
+            if (localStorage.getItem(APP_DATA_V8_KEY) !== storedV8RawRef.current) {
+              throw new AppDataV8StorageError('stale-document', 'V8 document changed before write')
+            }
+            throw new Error('activation-conflict')
+          }
+          const confirmation = persistAppDataV8(localStorage, writeBaseRef.current, valueRef.current, {
+            raw: storedV8RawRef.current,
+            legacyGuardRaw: legacyGuardRawRef.current,
+            revision: revisionRef.current,
+          }, revisionRef.current)
+          const updatedTransaction: V8ActivationTransaction = {
+            ...gate.transaction, currentDigest: await fingerprintV7Raw(confirmation.raw),
+            documentRevision: gate.transaction.documentRevision + 1,
+            updatedAt: new Date(Math.max(Date.now(), Date.parse(gate.transaction.updatedAt))).toISOString(),
+          }
+          if (localStorage.getItem(APP_DATA_V7_KEY) !== legacyGuardRawRef.current
+            || localStorage.getItem(APP_DATA_V8_KEY) !== confirmation.raw) throw new Error('activation-conflict')
+          if (loadV8Transaction(localStorage).raw !== JSON.stringify(gate.transaction)) throw new Error('activation-conflict')
+          localStorage.setItem(V8_TRANSACTION_KEY, JSON.stringify(updatedTransaction))
+          if (loadV8Transaction(localStorage).raw !== JSON.stringify(updatedTransaction)) throw new Error('activation-conflict')
+          if (!(await checkV8HostWriteEligibility(localStorage, confirmation.raw, gate.transaction.transactionId)).eligible) {
+            throw new Error('activation-conflict')
+          }
+          return { confirmation, updatedTransaction }
+        })
+        const { confirmation, updatedTransaction } = result
+        setTransaction(updatedTransaction)
         storedV8RawRef.current = confirmation.raw
         rawV8Ref.current = confirmation.raw
         writeBaseRef.current = valueRef.current
@@ -197,9 +272,24 @@ export function useAppDataV8() {
         setPersistence({ pending: false, revision: confirmation.revision, receipt: confirmation })
         setStatus('saved')
       } catch (cause) {
-        const code = cause instanceof AppDataV8StorageError ? cause.code : 'write-failure'
+        const stillEligible = await checkV8HostWriteEligibility(
+          localStorage, storedV8RawRef.current, transactionIdRef.current ?? undefined,
+        )
+        if (!stillEligible.eligible) {
+          writableRef.current = false
+          setWritable(false)
+        }
+        const code = cause instanceof AppDataV8StorageError ? cause.code
+          : cause instanceof Error && (cause.message === 'activation-conflict' || cause.message === 'lock-unavailable')
+            ? cause.message : 'write-failure'
         setErrorCode(code)
-        if (code === 'stale-document' || code === 'stale-revision' || code === 'legacy-conflict') {
+        if (code === 'activation-conflict' || code === 'lock-unavailable') {
+          writableRef.current = false
+          setWritable(false)
+          setStatus('conflict')
+        } else if (code === 'stale-document' || code === 'stale-revision' || code === 'legacy-conflict') {
+          writableRef.current = false
+          setWritable(false)
           const source = code === 'legacy-conflict' ? 'v7' : 'v8'
           setConflictSource(source)
           try {
@@ -223,13 +313,25 @@ export function useAppDataV8() {
       }
     }, 150)
     return () => window.clearTimeout(timer)
-  }, [initial.writable, setStatus, value, writeAttempt])
+  }, [setStatus, value, writeAttempt])
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
+      if (event.key === V8_TRANSACTION_KEY || event.key === APP_DATA_V8_ACTIVATION_KEY) {
+        activationGenerationRef.current += 1
+        writableRef.current = false
+        transactionIdRef.current = null
+        setWritable(false)
+        setTransaction(null)
+        setErrorCode('activation-conflict')
+        setStatus('conflict')
+        return
+      }
       if (event.key === APP_DATA_V7_KEY) {
         setRawV7(event.newValue)
         if (event.newValue === legacyGuardRawRef.current) return
+        writableRef.current = false
+        setWritable(false)
         setRawBackup(event.newValue)
         setConflictSource('v7')
         setErrorCode('legacy-conflict')
@@ -237,6 +339,9 @@ export function useAppDataV8() {
         return
       }
       if (event.key !== APP_DATA_V8_KEY || event.newValue === storedV8RawRef.current) return
+      activationGenerationRef.current += 1
+      writableRef.current = false
+      setWritable(false)
       externalV8RawRef.current = event.newValue
       setRawV8(event.newValue)
       if (pendingRef.current || event.newValue === null) {
@@ -294,11 +399,11 @@ export function useAppDataV8() {
   }, [conflictSource, setPending, setStatus])
 
   const retryWrite = useCallback(() => {
-    if (!initial.writable || !pendingRef.current || statusRef.current !== 'write-error') return
+    if (!writableRef.current || !pendingRef.current || statusRef.current !== 'write-error') return
     setErrorCode(null)
     setStatus('saved')
     setWriteAttempt((current) => current + 1)
-  }, [initial.writable, setStatus])
+  }, [setStatus])
 
   const controls: AppDataV8RuntimeControls = {
     rawV7,
@@ -319,7 +424,8 @@ export function useAppDataV8() {
     migrationFailure: initial.load.migrationFailure ?? null,
     activationMetadata: initial.activation.value,
     activationIssue: initial.activation.issue,
-    writable: initial.writable,
+    writable,
+    transaction,
   }
 
   return [value, setData, status, controls, persistence, info] as const

@@ -1,5 +1,5 @@
 import type { AppDataV7, AppDataV8 } from '../types'
-import { fingerprintV7Raw, loadV8ActivationMetadata, type V8ActivationMetadata } from './activationV8'
+import { fingerprintV7Raw, loadV8ActivationMetadata, loadV8Transaction, type V8ActivationMetadata } from './activationV8'
 import { migrateV7ToV8WithReport, V8MigrationError } from './migrationsV8'
 import type { V8MigrationPreflightReport, V8MigrationReconciliationReport } from './migrationPreflightV8'
 import { APP_DATA_V7_KEY } from './storageV7'
@@ -61,8 +61,11 @@ export async function preflightCutoverV8(
   } catch { result.issues.push(issue('read-failure', 'Unable to read cutover source keys.')); return result }
   result.sourceRaw = v7Raw
   const activation = loadV8ActivationMetadata(storage)
+  const transaction = loadV8Transaction(storage)
   if (activation.issue !== 'none') result.issues.push(issue('unknown-activation', 'Activation metadata is unreadable or unknown.'))
   else if (activation.raw !== null) result.issues.push(issue('existing-activation', 'An activation record already exists.'))
+  if (transaction.issue !== 'none') result.issues.push(issue('unknown-activation', 'V8 transaction is unreadable or unknown.'))
+  else if (transaction.raw !== null) result.issues.push(issue('existing-activation', 'A V8 transaction already exists.'))
   if (v8Raw !== null) {
     try { parseAppDataV8Raw(v8Raw); result.issues.push(issue('existing-v8', 'A V8 document already exists.')) }
     catch { result.issues.push(issue('corrupt-v8', 'The existing V8 document is corrupt.')) }
@@ -107,7 +110,8 @@ export async function preflightCutoverV8(
   }
   try {
     if (storage.getItem(APP_DATA_V7_KEY) !== v7Raw || storage.getItem(APP_DATA_V8_KEY) !== v8Raw
-      || loadV8ActivationMetadata(storage).raw !== activation.raw) result.issues.push(issue('source-changed', 'Storage changed during preflight.'))
+      || loadV8ActivationMetadata(storage).raw !== activation.raw
+      || loadV8Transaction(storage).raw !== transaction.raw) result.issues.push(issue('source-changed', 'Storage changed during preflight.'))
   } catch { result.issues.push(issue('read-failure', 'Unable to confirm source stability.')) }
   result.canProceed = result.candidate !== null && !result.issues.some((item) => item.severity === 'blocking')
   return result

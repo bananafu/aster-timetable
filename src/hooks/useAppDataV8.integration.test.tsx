@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { APP_DATA_V8_ACTIVATION_KEY, type V8ActivationMetadata } from '../data/activationV8'
+import { APP_DATA_V8_ACTIVATION_KEY, V8_TRANSACTION_KEY, fingerprintV7Raw,
+  type V8ActivationMetadata, type V8ActivationTransaction } from '../data/activationV8'
 import { initialData } from '../data/seed'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { migrateV4ToV5 } from '../data/migrationsV5'
@@ -9,9 +10,9 @@ import { migrateV5ToV6 } from '../data/migrationsV6'
 import { migrateV6ToV7 } from '../data/migrationsV7'
 import { migrateV7ToV8 } from '../data/migrationsV8'
 import { APP_DATA_V7_KEY } from '../data/storageV7'
-import { APP_DATA_V8_KEY } from '../data/storageV8'
+import { APP_DATA_V8_KEY, persistAppDataV8 } from '../data/storageV8'
 import type { AppDataV7, AppDataV8 } from '../types'
-import { useAppDataV8 } from './useAppDataV8'
+import { checkV8HostWriteEligibility, useAppDataV8 } from './useAppDataV8'
 
 const v7 = () => migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))))
 const v8 = () => migrateV7ToV8(v7())
@@ -39,6 +40,7 @@ function Harness() {
     <output data-testid="local">{controls.exportLocalJson()}</output>
     <output data-testid="activation-fingerprint">{info.activationMetadata?.sourceV7Fingerprint ?? ''}</output>
     <button onClick={() => setData((current) => rename(current, '本頁草稿'))}>rename</button>
+    <button onClick={() => setData((current) => rename(current, '下一版'))}>rename-next</button>
     <button onClick={controls.adoptExternalV8}>adopt</button>
     <button onClick={controls.retryWrite}>retry</button>
   </>
@@ -48,10 +50,33 @@ function receive(key: string, oldValue: string | null, newValue: string | null) 
   act(() => window.dispatchEvent(new StorageEvent('storage', { key, oldValue, newValue, storageArea: localStorage })))
 }
 
+async function activeTransaction(rawV8: string, rawV7: string | null = null): Promise<V8ActivationTransaction> {
+  const source = rawV7 === null ? { type: 'empty' as const }
+    : { type: 'v7' as const, key: APP_DATA_V7_KEY as typeof APP_DATA_V7_KEY, digest: await fingerprintV7Raw(rawV7) }
+  const digest = await fingerprintV7Raw(rawV8)
+  const transaction: V8ActivationTransaction = {
+    schemaVersion: 2, transactionId: 'host-test', status: 'active', source,
+    backup: { id: 'backup-test', key: 'aster-timetable-v8-cutover-backup:backup-test',
+      digest: source.type === 'v7' ? source.digest : null },
+    externalConfirmation: { source, externalExportPrepared: true, userConfirmedExternalBackup: true },
+    candidateDigest: digest, currentDigest: digest, expectedV8Raw: null, documentRevision: 0,
+    createdAt: '2026-10-22T02:00:00.000Z', updatedAt: '2026-10-22T02:00:00.000Z',
+    lastError: null, archive: null,
+  }
+  localStorage.setItem(V8_TRANSACTION_KEY, JSON.stringify(transaction))
+  return transaction
+}
+
+async function flushActivation() {
+  await vi.waitFor(() => expect(screen.getByTestId('writable').textContent).toBe('true'), { interval: 10, timeout: 1000 })
+}
+
 describe('useAppDataV8 standalone runtime host', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     localStorage.clear()
+    Object.defineProperty(navigator, 'locks', { configurable: true,
+      value: { request: (_name: string, _options: unknown, operation: (lock: unknown) => Promise<unknown>) => operation({}) } })
   })
 
   afterEach(() => {
@@ -59,6 +84,7 @@ describe('useAppDataV8 standalone runtime host', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     localStorage.clear()
+    Reflect.deleteProperty(navigator, 'locks')
   })
 
   it('stays inactive and performs no write when both V8 and V7 are absent', () => {
@@ -122,6 +148,9 @@ describe('useAppDataV8 standalone runtime host', () => {
     expect(screen.getByTestId('status').textContent).toBe('saved')
     expect(screen.getByTestId('source').textContent).toBe('v8')
     expect(screen.getByTestId('name').textContent).toBe(current.projects[0].name)
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+    fireEvent.click(screen.getByText('rename'))
+    expect(screen.getByTestId('name').textContent).toBe(current.projects[0].name)
     expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(rawV8)
     expect(setItem).not.toHaveBeenCalled()
   })
@@ -140,10 +169,15 @@ describe('useAppDataV8 standalone runtime host', () => {
     expect(setItem).not.toHaveBeenCalled()
   })
 
-  it('writes through the single setData path and advances a receipt only after read-back confirmation', () => {
+  it('writes through the single setData path and advances a receipt only after read-back confirmation', async () => {
     const rawV8 = JSON.stringify(v8())
     localStorage.setItem(APP_DATA_V8_KEY, rawV8)
+    await activeTransaction(rawV8)
+    expect(await checkV8HostWriteEligibility(localStorage, rawV8)).toMatchObject({ eligible: true })
     render(<Harness />)
+    await flushActivation()
+    expect({ writable: screen.getByTestId('writable').textContent, status: screen.getByTestId('status').textContent,
+      error: screen.getByTestId('error-code').textContent }).toEqual({ writable: 'true', status: 'saved', error: '' })
 
     fireEvent.click(screen.getByText('rename'))
     expect(screen.getByTestId('name').textContent).toBe('本頁草稿')
@@ -151,7 +185,8 @@ describe('useAppDataV8 standalone runtime host', () => {
     expect(screen.getByTestId('revision').textContent).toBe('0')
     expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(rawV8)
 
-    act(() => vi.advanceTimersByTime(200))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('pending').textContent).toBe('false'), { interval: 10, timeout: 1000 })
     expect(screen.getByTestId('status').textContent).toBe('saved')
     expect(screen.getByTestId('pending').textContent).toBe('false')
     expect(screen.getByTestId('revision').textContent).toBe('1')
@@ -159,13 +194,15 @@ describe('useAppDataV8 standalone runtime host', () => {
     expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).projects[0].name).toBe('本頁草稿')
   })
 
-  it('preserves the local draft and does not advance the receipt when a write fails', () => {
+  it('preserves the local draft and does not advance the receipt when a write fails', async () => {
     const rawV8 = JSON.stringify(v8())
     localStorage.setItem(APP_DATA_V8_KEY, rawV8)
+    await activeTransaction(rawV8)
     render(<Harness />)
+    await flushActivation()
     fireEvent.click(screen.getByText('rename'))
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota') })
-    act(() => vi.advanceTimersByTime(200))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
 
     expect(screen.getByTestId('status').textContent).toBe('write-error')
     expect(screen.getByTestId('name').textContent).toBe('本頁草稿')
@@ -174,15 +211,39 @@ describe('useAppDataV8 standalone runtime host', () => {
     expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(rawV8)
   })
 
-  it('rejects a stale V8 snapshot without overwriting it and can adopt the external version', () => {
+  it('keeps a draft but revokes writes if V8 succeeds and the metadata update fails', async () => {
+    const rawV8 = JSON.stringify(v8())
+    localStorage.setItem(APP_DATA_V8_KEY, rawV8)
+    await activeTransaction(rawV8)
+    render(<Harness />)
+    await flushActivation()
+    fireEvent.click(screen.getByText('rename'))
+    const realSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === V8_TRANSACTION_KEY) throw new Error('quota')
+      realSetItem.call(this, key, value)
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('status').textContent).toBe('write-error'), { interval: 10, timeout: 1000 })
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+    expect(screen.getByTestId('pending').textContent).toBe('true')
+    expect(screen.getByTestId('receipt').textContent).toBe('')
+    expect(screen.getByTestId('local').textContent).toContain('本頁草稿')
+    expect(localStorage.getItem(APP_DATA_V8_KEY)).not.toBe(rawV8)
+  })
+
+  it('rejects a stale V8 snapshot without overwriting it and can adopt the external version', async () => {
     const current = v8()
     const rawV8 = JSON.stringify(current)
     localStorage.setItem(APP_DATA_V8_KEY, rawV8)
+    await activeTransaction(rawV8)
     render(<Harness />)
+    await flushActivation()
     fireEvent.click(screen.getByText('rename'))
     const external = JSON.stringify(rename(current, '外部分頁'))
     localStorage.setItem(APP_DATA_V8_KEY, external)
-    act(() => vi.advanceTimersByTime(200))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('status').textContent).toBe('conflict'), { interval: 10, timeout: 1000 })
 
     expect(screen.getByTestId('status').textContent).toBe('conflict')
     expect(screen.getByTestId('conflict-source').textContent).toBe('v8')
@@ -211,17 +272,20 @@ describe('useAppDataV8 standalone runtime host', () => {
     expect(screen.getByTestId('revision').textContent).toBe('0')
   })
 
-  it('blocks a pending write when the guarded V7 key changes', () => {
+  it('blocks a pending write when the guarded V7 key changes', async () => {
     const currentV7 = v7()
     const rawV7 = JSON.stringify(currentV7)
     const rawV8 = JSON.stringify(migrateV7ToV8(currentV7))
     localStorage.setItem(APP_DATA_V7_KEY, rawV7)
     localStorage.setItem(APP_DATA_V8_KEY, rawV8)
+    await activeTransaction(rawV8, rawV7)
     render(<Harness />)
+    await flushActivation()
     fireEvent.click(screen.getByText('rename'))
     const changedV7 = JSON.stringify({ ...currentV7, projects: currentV7.projects.map((project) => ({ ...project, name: '舊版分頁' })) })
     localStorage.setItem(APP_DATA_V7_KEY, changedV7)
-    act(() => vi.advanceTimersByTime(200))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('status').textContent).toBe('conflict'), { interval: 10, timeout: 1000 })
 
     expect(screen.getByTestId('status').textContent).toBe('conflict')
     expect(screen.getByTestId('conflict-source').textContent).toBe('v7')
@@ -273,5 +337,115 @@ describe('useAppDataV8 standalone runtime host', () => {
     render(<Harness />)
     expect(screen.getByTestId('activation-fingerprint').textContent).toBe(activation.sourceV7Fingerprint)
     expect(JSON.parse(localStorage.getItem(APP_DATA_V8_ACTIVATION_KEY)!)).toEqual(activation)
+  })
+
+  it.each(['preparing', 'prepared', 'interrupted', 'rolled-back', 'unknown'] as const)(
+    'keeps a valid V8 read-only when transaction status is %s', async (status) => {
+      const raw = JSON.stringify(v8())
+      localStorage.setItem(APP_DATA_V8_KEY, raw)
+      const transaction = await activeTransaction(raw)
+      localStorage.setItem(V8_TRANSACTION_KEY, JSON.stringify({ ...transaction, status,
+        archive: status === 'rolled-back' ? { id: 'archive-test', key: 'archive:key', digest: transaction.currentDigest } : null }))
+      render(<Harness />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+      expect(screen.getByTestId('writable').textContent).toBe('false')
+      fireEvent.click(screen.getByText('rename'))
+      expect(screen.getByTestId('name').textContent).toBe(v8().projects[0].name)
+      expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(raw)
+    },
+  )
+
+  it('rejects absent metadata, a digest mismatch, and legacy V1 metadata', async () => {
+    const raw = JSON.stringify(v8())
+    localStorage.setItem(APP_DATA_V8_KEY, raw)
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: false })
+    const active = await activeTransaction(raw)
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: true })
+    localStorage.setItem(V8_TRANSACTION_KEY, JSON.stringify({ ...active, documentRevision: 1,
+      currentDigest: `sha256:${'0'.repeat(64)}` }))
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: false })
+    localStorage.setItem(V8_TRANSACTION_KEY, JSON.stringify(active))
+    localStorage.setItem(APP_DATA_V8_ACTIVATION_KEY, '{}')
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: false })
+  })
+
+  it('revokes eligibility on a metadata event and does not persist a pending draft', async () => {
+    const raw = JSON.stringify(v8())
+    localStorage.setItem(APP_DATA_V8_KEY, raw)
+    const active = await activeTransaction(raw)
+    render(<Harness />)
+    await flushActivation()
+    fireEvent.click(screen.getByText('rename'))
+    localStorage.setItem(V8_TRANSACTION_KEY, JSON.stringify({ ...active, status: 'prepared' }))
+    receive(V8_TRANSACTION_KEY, JSON.stringify(active), localStorage.getItem(V8_TRANSACTION_KEY))
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    expect(screen.getByTestId('name').textContent).toBe('本頁草稿')
+    expect(screen.getByTestId('local').textContent).toContain('本頁草稿')
+    expect(screen.getByTestId('receipt').textContent).toBe('')
+    expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(raw)
+  })
+
+  it('rechecks metadata before writing even without a storage event', async () => {
+    const raw = JSON.stringify(v8())
+    localStorage.setItem(APP_DATA_V8_KEY, raw)
+    await activeTransaction(raw)
+    render(<Harness />)
+    await flushActivation()
+    fireEvent.click(screen.getByText('rename'))
+    localStorage.removeItem(V8_TRANSACTION_KEY)
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    expect(screen.getByTestId('status').textContent).toBe('conflict')
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+    expect(screen.getByTestId('error-code').textContent).toBe('activation-conflict')
+    expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(raw)
+  })
+
+  it('blocks a pending write when the transaction owner changes without an event', async () => {
+    const raw = JSON.stringify(v8())
+    localStorage.setItem(APP_DATA_V8_KEY, raw)
+    const active = await activeTransaction(raw)
+    render(<Harness />)
+    await flushActivation()
+    fireEvent.click(screen.getByText('rename'))
+    localStorage.setItem(V8_TRANSACTION_KEY, JSON.stringify({ ...active, transactionId: 'another-tab' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('status').textContent).toBe('conflict'), { interval: 10, timeout: 1000 })
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+    expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(raw)
+  })
+
+  it('keeps normal V8 edits eligible after a confirmed document revision', async () => {
+    const raw = JSON.stringify(v8())
+    localStorage.setItem(APP_DATA_V8_KEY, raw)
+    await activeTransaction(raw)
+    render(<Harness />)
+    await flushActivation()
+    fireEvent.click(screen.getByText('rename'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('revision').textContent).toBe('1'), { interval: 10, timeout: 1000 })
+    const first = localStorage.getItem(APP_DATA_V8_KEY)!
+    expect(JSON.parse(localStorage.getItem(V8_TRANSACTION_KEY)!).documentRevision).toBe(1)
+    expect(await checkV8HostWriteEligibility(localStorage, first)).toMatchObject({ eligible: true })
+    fireEvent.click(screen.getByText('rename-next'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('revision').textContent).toBe('2'), { interval: 10, timeout: 1000 })
+    expect(screen.getByTestId('revision').textContent).toBe('2')
+    expect(screen.getByTestId('receipt').textContent).toBe('2')
+    expect(JSON.parse(localStorage.getItem(V8_TRANSACTION_KEY)!).documentRevision).toBe(2)
+  })
+
+  it('documents the old-host boundary: storage CAS alone does not enforce the new activation gate', async () => {
+    const current = v8()
+    const raw = JSON.stringify(current)
+    localStorage.setItem(APP_DATA_V8_KEY, raw)
+    const transaction = await activeTransaction(raw)
+    localStorage.setItem(V8_TRANSACTION_KEY, JSON.stringify({ ...transaction, status: 'prepared' }))
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: false })
+    // Older already-loaded code can still call this pre-B2b primitive; Web Locks cannot force it to cooperate.
+    const result = persistAppDataV8(localStorage, current, rename(current, '舊版分頁'),
+      { raw, legacyGuardRaw: null, revision: 0 }, 0)
+    expect(result.revision).toBe(1)
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).projects[0].name).toBe('舊版分頁')
   })
 })

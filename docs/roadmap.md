@@ -1,18 +1,24 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-B2b — Activation transaction protocol（底層協定完成）
+
+已建立 V2 activation transaction schema／validator、`preparing → prepared → active` 持久化協定、唯讀中斷 inspection，以及新版 V8 Host 的 fail-closed active metadata gate。啟用 service 重驗 B2a 備份、外部確認、preflight、來源 fingerprint、V8 snapshot 與 transaction ownership；缺少 Web Lock 或任一步讀寫未確認都不回報成功。正常 V8 編輯使用 candidate baseline digest + 目前 digest／revision 契約。正式 App 仍是 V7；沒有 mount 自動啟用、雙寫或正式 cutover。
+
+B2c 尚需人工恢復／重試、rollback archive 操作與 UI；B3／B4 尚需正式 App 接入及真實瀏覽器多分頁驗收。Web Locks 僅協調遵守協定的新版頁面，無法阻止已載入舊版 Host／V7 分頁；LocalStorage 多 key 寫入仍非原子交易。正式啟用前必須決定舊頁面偵測／停用策略與不支援 Web Locks 的瀏覽器政策。
+
 ## Phase 4D R2-B2a — Backup & preflight foundation（資料契約完成）
 
 新增不可覆寫的 V7 raw／SHA-256／讀回驗證備份與 empty-source marker，以及唯讀 cutover preflight、source fingerprint guard 和綁定來源的外部 JSON 確認契約。既有 R1 migration、reconciliation 與 V8 validator 被重用；失敗與 review issue 以結構化結果保留。
 
-B2b activation transaction、B2c 中斷恢復與多分頁協調尚未實作。正式 App 仍使用 V7；V8 未正式啟用。LocalStorage 跨 key 寫入及跨分頁競爭目前仍無原子保證。
+B2b 已加入 transaction 協定與同版本 Web Lock 協調；B2c 人工恢復和正式 App cutover 尚未實作。LocalStorage 跨 key 寫入仍無原子保證。
 
 ## Phase 4D R2-A — V8 Runtime Host foundation（完成）
 
-已建立未掛入 `App.tsx` 的獨立 V8 runtime host。既有 V8 文件可透過單一更新入口使用 V8 CAS；寫入會檢查原始 V8 snapshot、V7 guard、完整 validator 與 safe update，並只在讀回確認後增加 persistence revision。寫入失敗與跨分頁衝突保留本頁草稿，可匯出本頁或原始 V7／V8 JSON，也可明確採用有效的外部 V8 版本。
+已建立未掛入 `App.tsx` 的獨立 V8 runtime host。原 R2-A 允許有效既有 V8 文件寫入；R2-B2b 已收緊為有效 V2 active transaction 才可寫。寫入會檢查原始 V8 snapshot、V7 guard、完整 validator、safe update 與 active digest／revision 證據，並只在 V8 與 metadata 都讀回確認後增加 persistence revision。寫入失敗與跨分頁衝突保留本頁草稿，可匯出本頁或原始 V7／V8 JSON。
 
 V8 不存在時只執行 R1 preflight／reconciliation 並保留唯讀 migration candidate；blocking V7 與 corrupt V8 皆不寫入、不 reset、不 fallback。另已定義獨立且不可由 mount 更新的 activation metadata 契約。本階段沒有切換正式 V7 runtime、沒有雙寫，也沒有修改 `App.tsx`。
 
-R2-B 尚需提供明確的使用者備份／啟用確認、原子建立 V8 與 activation metadata、cutover UI，以及啟用後的回滾／修復流程。
+R2-B 尚需將明確的使用者備份／啟用確認接入 UI，處理非原子多 key 寫入的中斷恢復，以及啟用後的回滾／修復流程；不得假設可以原子建立 V8 與 activation metadata。
 
 ## Phase 4D A2 — V8 Event ownership repair foundation（完成）
 

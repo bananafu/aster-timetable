@@ -1,5 +1,15 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-B2b — Activation transaction protocol（未接入正式 App）
+
+`activationV8.ts` 定義獨立 V2 transaction key `aster-timetable-data-v8-transaction-v2`；舊 V1 activation key 保留且不可與 V2 同時作為寫入證據。V2 紀錄 transaction ID、`empty`／V7 source identity、backup ID/key/digest、綁定來源的外部確認、candidate baseline digest、目前 V8 raw digest、document revision、UTC 時間及 archive reference；不複製完整 raw。狀態為 `preparing → prepared → active`、`preparing／prepared → interrupted`、`active → rollback-recovery → rolled-back`。`interrupted`／`rolled-back` 無自動返回 active 的轉換；未知或不完整格式視為 blocking。
+
+`activateCutoverV8` 是只能由未來明確操作呼叫的獨立 service；它在 Web Lock 內重新執行唯讀 preflight，讀回並驗證不可覆寫的 V7 raw backup、SHA-256 和來源綁定的外部備份確認，再依序持久化並讀回 `preparing`、V8 candidate、`prepared`、最後 `active`。每一步重查 V7 source、V8 raw 與 transaction ownership；任一錯誤回傳結構化失敗，不刪除或自動覆寫 V7／V8／backup。相同 transaction ID 的既有有效 active 紀錄會重驗證所有證據並回傳 `replayed` receipt，不重寫任何 key；preparing／prepared／interrupted 不會自動續行。`inspectCutoverV8` 僅讀取並回報中斷、partial write、digest／來源／備份問題、原始 raw 與人工重試資格，不會自行恢復。Rollback archive 仍只有契約，沒有建立或回滾執行流程。
+
+新版 `useAppDataV8` 只有在有效 V8 與 V2 `active` transaction、目前 digest／revision 證據、V7 guard 均通過時才可寫；無 metadata、非 active、未知 metadata、舊 V1 key 同時存在或 conflict 均唯讀。Candidate digest 是不可變的 cutover baseline；正常編輯後 `currentDigest` 與 `documentRevision` 隨確認的 V8 raw 前進，不以 baseline digest 永久鎖住編輯。寫入前重新讀證據，並用相同 Web Lock 協調遵守協定的新版分頁；activation metadata storage event 立即撤銷寫入資格。V8 寫入已確認但 metadata 更新失敗時不發 receipt，保留草稿並進入恢復狀態。
+
+專案目前沒有明定支援的瀏覽器矩陣或 Web Locks 最低版本。Web Locks 對遵守協定的同版本頁面提供互斥；不支援或拒絕取得 lock 時 fail closed。LocalStorage 跨 key 寫入沒有原子交易，storage event 不是鎖，也無法阻止已載入的舊版 Host／V7 分頁繼續寫入。Mock storage 測試只驗證協定分支，不證明真實瀏覽器絕對互斥。正式 App 仍使用 V7；本階段未執行正式 cutover、未建立 rollback UI、未做真實瀏覽器多分頁驗證。B2c 需提供人工恢復／重試與 archive 操作，B3／B4 需完成 App 接入與回歸驗收。
+
 ## Phase 4D R2-B2a — Backup & preflight foundation
 
 `cutoverBackupV8` 以嘗試 ID 建立獨立備份 key：從 V7 key 取得精確 raw、使用既有 SHA-256 helper 計算 digest、寫入後讀回完整 record 並重新驗證 raw／digest／metadata，只有確認成功才回傳 receipt。空白來源儲存 `empty` marker，不建立虛假的 V7 raw backup。任何失敗回傳結構化 code；備份模組不寫入 V7 或 V8 key，也不覆寫既有備份。
@@ -8,11 +18,11 @@ Rollback archive 僅定義含 V8 原始 raw、digest、原 activation backup ID 
 
 `cutoverPreflightV8` 是獨立的唯讀 API，使用既有 R1 migration、reconciliation 與 V8 validator；回傳候選文件、source identity、blocking／review issue，並檢查既有 V8、activation 與來源變更。外部備份確認契約分開記錄匯出已準備與使用者已確認，且綁定來源 digest。V7 activation guard 目前僅為檢查契約，未接入正式 runtime。
 
-LocalStorage 不提供跨 key 原子交易，備份與 preflight 的最後一次讀取之後仍可能發生其他分頁寫入。B2b／B2c 必須處理 transaction 狀態、協調與中斷恢復；本階段不啟用 V8，也不修改正式 V7 runtime。
+LocalStorage 不提供跨 key 原子交易，備份與 preflight 的最後一次讀取之後仍可能發生其他分頁寫入；B2b 已加入重新驗證與 Web Lock 協定，但無法約束不遵守協定的舊頁面。
 
 ## Phase 4D R2-A — V8 Runtime Host foundation
 
-`useAppDataV8` 直接組合既有 `loadAppDataV8`、完整 V8 validator 與 `persistAppDataV8` CAS，不重用會自動持久化 migration 的通用 storage hook。啟動時只有原本就存在且有效的 V8 文件取得寫入資格；空白 V8 與通過 R1 preflight／reconciliation 的 V7 candidate 都維持唯讀，等待 R2-B 明確 cutover。
+`useAppDataV8` 直接組合既有 `loadAppDataV8`、完整 V8 validator 與 `persistAppDataV8` CAS，不重用會自動持久化 migration 的通用 storage hook。R2-A 原先允許任何有效既有 V8 寫入；R2-B2b 已收緊為上方的 V2 active gate。空白 V8 與通過 R1 preflight／reconciliation 的 V7 candidate 都維持唯讀。
 
 Host 以原始 V8 raw、首次載入時的 V7 raw guard 與本頁 persistence revision 作為寫入 expectation。寫入前驗證 current／next 與 safe update，寫入後讀回完全相同的 raw 才增加 revision 並發出 receipt。失敗時保留本頁 draft；V8 storage event 可在無 draft 時同步，或在有 draft 時進入 conflict 並允許明確採用外部 V8。V7 guard 改變只會阻擋後續 V8 寫入，不會把新 V7 snapshot 改成 baseline，也不提供強制覆蓋入口。
 
