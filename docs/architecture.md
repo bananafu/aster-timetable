@@ -1,5 +1,11 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-C2b-2 — V8 Subject、Class 與任教配置（獨立元件）
+
+Subject 以 Project ID 隔離；TeachingUnitSubject 連結同一 Project 的 Subject 與 TeachingUnit，不是 Class 或 Timetable。既有 `subjectsV8` 負責建立、編輯、配置、引用檢查與刪除；`TeachingUnitSubjectManagerV8` 新增目前 Project 科目庫及未引用科目刪除入口，仍保留各任教單位啟用／移除操作。重名政策沿用 V8 validator 的 Project 內正規化名稱／簡稱唯一規則；不同 Project 可同名但 ID 獨立。
+
+`classesV8` 是 V8 專用班級操作：Class 指向一個 Project 與該 Project 的 TeachingUnit，建立／編輯沿用既有年級、班號、名稱及教室規則；刪除或移動前檢查固定課程、單日課程、異動及進度引用，再由 V8 validator 與安全更新檢查把關。新增 Subject 或 Class 不建立 Timetable／Lesson。`ClassManagerV8` 以 V8 Host 的 `writable`、conflict 與精確 raw／revision receipt 控制寫入成功提示；`V8SubjectClassManager` 將既有科目管理器與班級元件組合，對科目操作只轉交符合當前文件的 Host receipt revision。LocalStorage 寫入仍只由 V8 Host 負責。正式 `App.tsx`、V7 Runtime、Teacher Timetable 均未改動。
+
 ## Phase 4D R2-C2b-1 — V8 Project lifecycle adapter（未接入正式 App）
 
 `projectRuntimeV8` 沿用既有 V8 複製及刪除規則，新增只改 `activeProjectId` 的 Project 切換操作。V8 validator 容許 Project 沒有學校、任教單位或教師課表；一般建立保留既有預設學校／任教單位作為可編輯的設定起點，但不建立 Timetable，也不繼承來源科目、班級、課程、事件、異動或進度。複製為新學期需明確指定來源 Project、學期與每個 TeachingUnit 的來源有效日期、新日期及 A/B anchor；複製學校、任教單位、教師課表、科目、關聯、班級及當日有效固定課程，重建所有實體 ID 與引用，不複製 Event、override、one-off、progress。跨學期課程有效範圍使用新任教單位日期。既有 copy policy 未改動。

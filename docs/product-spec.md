@@ -1,5 +1,11 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-C2b-2 — V8 科目、班級與任教配置（尚未正式啟用）
+
+- 科目屬於個別 Project；相同名稱不代表同一筆科目，Project 內重複名稱／簡稱依現有 V8 validator。任教配置只連結同 Project 的 Subject 與 TeachingUnit；刪除前須解除配置與課程／進度引用。
+- 班級屬於個別 Project 的 TeachingUnit；年級、班號、名稱、教室沿用現有規則，刪除與跨任教單位移動不得留下課程、異動或進度的失效引用。空白 Project 可以沒有科目、班級或教師課表；新增 Subject／Class 不會自動產生 Timetable／Lesson。
+- 獨立 V8 UI 的唯讀或 conflict 狀態禁止寫入並保留 JSON 匯出／恢復接線；未儲存草稿需確認捨棄，成功提示須等待與文件一致的 persistence receipt。正式 App 尚未切換至 V8。
+
 ## Phase 4D R2-C2b-1 — V8 Project 管理（尚未正式啟用）
 
 - 「新增空白專案」只建立新 Project 及預設學校、任教單位，不建立教師課表，也不繼承任何其他 Project 的科目、班級、課程、事件、異動或進度。學校／任教單位是可編輯的既有預設，並非 schema 必要結構。

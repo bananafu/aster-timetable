@@ -10,7 +10,7 @@ import { migrateV4ToV5 } from '../data/migrationsV5'
 import { migrateV5ToV6 } from '../data/migrationsV6'
 import { migrateV6ToV7 } from '../data/migrationsV7'
 import { migrateV7ToV8 } from '../data/migrationsV8'
-import { configureSubjectForTeachingUnit, createSubjectForTeachingUnit } from '../data/subjectsV8'
+import { configureSubjectForTeachingUnit, createSubject, createSubjectForTeachingUnit } from '../data/subjectsV8'
 import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { APP_DATA_V8_KEY, loadAppDataV8 } from '../data/storageV8'
 import { isCompatibleAppDataV8, isSafeAppDataV8Update } from '../data/validators/v8'
@@ -96,6 +96,26 @@ afterEach(() => {
 })
 
 describe('TeachingUnitSubjectManagerV8', () => {
+  it('deletes only an unreferenced Project Subject after confirmation', async () => {
+    const source = fixture()
+    const projectId = source.activeProjectId!
+    const data = createSubject(source, projectId, { name: '未使用科目', shortName: '未用', color: '#123456',
+      applicableSchoolLevels: ['senior-high'] }, 'unused-v8-subject')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<Harness initial={data} />)
+    const row = screen.getByText('未使用科目').closest('.subject-configuration-item')!
+    fireEvent.click(within(row as HTMLElement).getByText('刪除'))
+    await waitFor(() => expect(documentValue().subjects.some((item) => item.id === 'unused-v8-subject')).toBe(false))
+    expect(documentValue().teachingUnitSubjects).toEqual(data.teachingUnitSubjects)
+  })
+
+  it('blocks deletion of a Subject still configured for a TeachingUnit', () => {
+    render(<Harness />)
+    const row = within(screen.getByLabelText('目前專案科目庫')).getByText('國語文').closest('.subject-configuration-item')!
+    fireEvent.click(within(row as HTMLElement).getByText('刪除'))
+    expect(screen.getByRole('alert').textContent).toContain('任教配置')
+    expect(documentValue().subjects.some((item) => item.id === 'shared-chinese')).toBe(true)
+  })
   it('updates the configured list when switching schools and school levels', () => {
     render(<Harness />)
     expect(within(screen.getByLabelText('已啟用科目')).getByText('國語文')).toBeTruthy()

@@ -1,5 +1,9 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-C2b-2 — V8 科目與班級管理（獨立元件完成）
+
+沿用 V8 Subject／TeachingUnitSubject service，補上 Project 科目庫的安全刪除入口；新增 V8 專用 Class service、班級 UI 與獨立資源管理 wrapper。Project／TeachingUnit 隔離、引用阻擋、唯讀／conflict、草稿保留及 Host receipt 驗證已由測試涵蓋。尚未接入正式 App；C2b-3 Teacher Timetable、Lesson／Event／Progress 等後續階段未開始。
+
 ## Phase 4D R2-C2b-1 — V8 Project lifecycle（獨立元件完成，正式 App 未切換）
 
 完成 V8 Project 空白新增（零 Timetable；預設學校／任教單位只是既有設定起點）、明確複製新學期、切換與引用保護刪除的獨立 UI 接線與測試；寫入資格與成功訊息依 V8 Host writable／persistence receipt，衝突保留匯出／恢復入口。未修改 `App.tsx` 或正式 V7 Runtime。C2b-2 的 Subject、Class、Teacher Timetable 接線及後續 Lesson／Event／Progress 仍未開始。

@@ -8,7 +8,7 @@ import {
   teachingUnitSubjectErrorMessage,
   updateConfiguredSubjectForTeachingUnit,
 } from '../data/teachingUnitSubjectManagementAdapter'
-import type { SubjectV8Draft } from '../data/subjectsV8'
+import { deleteSubject, getSubjectImpact, updateSubject, type SubjectV8Draft } from '../data/subjectsV8'
 import { useTeachingUnitSubjectManagementSession } from '../hooks/useTeachingUnitSubjectManagementSession'
 import type { StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
 import type { AppDataV8, SchoolLevel, TeachingUnit } from '../types'
@@ -35,6 +35,7 @@ interface Props {
   storageStatus: StorageStatus
   storagePersistence: StoragePersistence
   readOnly?: boolean
+  writable?: boolean
   createId?: () => string
   onComplete?: () => void
 }
@@ -49,6 +50,7 @@ export function TeachingUnitSubjectManagerV8({
   storageStatus,
   storagePersistence,
   readOnly = false,
+  writable = true,
   createId = uid,
   onComplete,
 }: Props) {
@@ -68,7 +70,7 @@ export function TeachingUnitSubjectManagerV8({
     storagePersistence,
   })
   const project = data.projects.find((item) => item.id === projectId)
-  const editable = !readOnly && Boolean(project && !project.archivedAt)
+  const editable = !readOnly && writable && Boolean(project && !project.archivedAt)
     && storageStatus === 'saved' && !session.locked
   const hasDraft = Boolean(editingSubjectId || draft.name.trim() || draft.shortName.trim())
   const view = useMemo(() => projectId && unit
@@ -120,7 +122,7 @@ export function TeachingUnitSubjectManagerV8({
 
   const addSubject = (event: FormEvent) => {
     event.preventDefault()
-    if (!editable || !projectId || !unit) return
+    if (!editable || !projectId || (!unit && !editingSubjectId)) return
     if (editingSubjectId) {
       const editing = data.subjects.find((subject) => subject.id === editingSubjectId)
       if (!editing) {
@@ -128,14 +130,16 @@ export function TeachingUnitSubjectManagerV8({
         return
       }
       const source = data
-      session.submit(withFreshData(source, (current) => updateConfiguredSubjectForTeachingUnit(
-        current, projectId, unit.id, editing.id, draft,
-      )), `已儲存：已更新科目「${draft.name.trim()}」。`, () => {
+      session.submit(withFreshData(source, (current) => unit && current.teachingUnitSubjects.some((relation) =>
+        relation.projectId === projectId && relation.teachingUnitId === unit.id && relation.subjectId === editing.id)
+        ? updateConfiguredSubjectForTeachingUnit(current, projectId, unit.id, editing.id, draft)
+        : updateSubject(current, projectId, editing.id, draft)), `已儲存：已更新科目「${draft.name.trim()}」。`, () => {
         setEditingSubjectId(null)
         setDraft(emptyDraft(unit))
       }, teachingUnitSubjectErrorMessage)
       return
     }
+    if (!unit) return
     const ids = { subjectId: createId(), relationId: createId() }
     let confirmExtension = false
     let preview: ReturnType<typeof addSubjectDraftToTeachingUnit>
@@ -175,6 +179,21 @@ export function TeachingUnitSubjectManagerV8({
     } : undefined, teachingUnitSubjectErrorMessage)
   }
 
+  const removeSubject = (subjectId: string, name: string) => {
+    if (!editable || !projectId) return
+    try {
+      const impact = getSubjectImpact(data, projectId, subjectId)
+      if (impact.configurations.length || impact.references.length) {
+        session.fail(`「${name}」仍有 ${impact.configurations.length} 筆任教配置與 ${impact.references.length} 筆課程／進度引用；請先處理引用。`)
+        return
+      }
+      if (!window.confirm(`永久刪除目前專案的科目「${name}」？`)) return
+      const source = data
+      session.submit(withFreshData(source, (current) => deleteSubject(current, projectId, subjectId, true)),
+        `已儲存：已刪除科目「${name}」。`, undefined, teachingUnitSubjectErrorMessage)
+    } catch (cause) { session.fail(teachingUnitSubjectErrorMessage(cause)) }
+  }
+
   const edit = (subjectId: string) => {
     if (session.locked) return
     const subject = data.subjects.find((item) => item.id === subjectId)
@@ -203,6 +222,15 @@ export function TeachingUnitSubjectManagerV8({
   }
 
   return <section className="teaching-unit-subject-manager" aria-label="依學校與學制管理科目">
+    <div className="subject-configuration-list" aria-label="目前專案科目庫">
+      <h3>目前專案科目庫</h3>
+      {data.subjects.filter((subject) => subject.projectId === projectId).length === 0 && <p className="resource-list-empty">目前專案尚無科目。</p>}
+      {data.subjects.filter((subject) => subject.projectId === projectId).map((subject) => <div className="subject-configuration-item" key={subject.id}>
+        <span><strong>{subject.name}</strong><small>{subject.shortName}</small></span>
+        <button type="button" disabled={!editable} onClick={() => edit(subject.id)}>編輯</button>
+        <button type="button" disabled={!editable} onClick={() => removeSubject(subject.id, subject.name)}>刪除</button>
+      </div>)}
+    </div>
     <div className="resource-list-tools teaching-unit-subject-scope">
       <label>學校
         <select value={schoolId} disabled={session.locked} onChange={(event) => {
