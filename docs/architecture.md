@@ -1,10 +1,16 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-C2c-2 — V8 單次異動與額外課程（獨立元件）
+
+`oneTimeLessonsV8` 沿用既有 `ScheduleOverrideV4` 的 `cancel`／`move`（原固定 Lesson ID、原日期、原節次及可追溯目標）與 `OneOffLesson` 的 `purpose: extra`（無來源 Lesson）語意，不修改 schema、固定 Lesson 或 A/B 錨點。原日期用來源 TeachingUnit 的錨點、weekday、版本有效期驗證；調課目標限同一任教單位學期與既有節次，容許跨 A/B 週。`resolveProjectDay` 依既有順序解析固定課程、停課／調離、調入與 OneOff；V8 selector 排除已停課項目，依 Project／Timetable ID 隔離。衝突使用解析後同一教師課表的實際起訖時間，包括跨任教單位；不同教師互不阻擋。撤銷沿用既有整組 override 契約，若恢復原時段會衝突則拒絕；刪除僅限獨立 `extra`。所有更新均通過 V8 validator 與 safe-update。
+
+獨立 `OneTimeLessonManagerV8` 提供三種分離表單、當日有效課程與異動紀錄，綁定開啟時的 Project／Timetable／文件 raw，並以 Host receipt 的 raw、revision 與目前文件一致才提示儲存成功。元件使用既有節次；資料 API 亦支援 schema 既有的合法自訂時間。正式 App、OverviewCalendar、永久異動及 Event 衝突政策未修改；真實瀏覽器多分頁與正式備份 UI 仍待驗收。
+
 ## Phase 4D R2-C2c-1 — V8 固定課程與 A/B 輪週（獨立元件）
 
 `recurringLessonsV8` 以既有 RecurringLesson 欄位建立、編輯、刪除及按 Project／Timetable 列出課程；完整 V8 validator 與 safe-update 保護 Project、Timetable、TeachingUnit、Class、Subject、TeachingUnitSubject 關聯。Lesson `weekPattern` 使用既有 `every`／`A`／`B`，錨點實際位於 TeachingUnit 的 `weekCycle`，沿用 `getTeachingUnitWeekPattern` 的週起始與連續輪替，不新增 Project 錨點欄位。衝突依同一教師課表、有效日期、各任教單位的實際節次時間，以及最多兩個週期的兩個錨點結果判斷；不同教師不因同節次被阻擋，A 與 B 在相同錨點下可共存。
 
-獨立 `RecurringLessonManagerV8` 提供列表、合法選項、CRUD、引用摘要、草稿 scope 保護及 Host raw／revision receipt 驗證，不修改正式 App 或 OverviewCalendar。歷史版本、日期異動、關聯 OneOff 或相同 scope 的進度阻擋刪除；有日期異動時拒絕結構性編輯。OneOff、Change、Progress 的正式編輯器及高影響刪除備份 UI 尚未實作。
+獨立 `RecurringLessonManagerV8` 提供列表、合法選項、CRUD、引用摘要、草稿 scope 保護及 Host raw／revision receipt 驗證，不修改正式 App 或 OverviewCalendar。歷史版本、日期異動、關聯 OneOff 或相同 scope 的進度阻擋刪除；有日期異動時拒絕結構性編輯。OneOff／Change 的單次操作由 C2c-2 獨立元件處理；Progress 正式編輯器及高影響刪除備份 UI 尚未實作。
 
 ## Phase 4D R2-C2b-4 — V8 資源整合與回歸（未接入正式 App）
 
