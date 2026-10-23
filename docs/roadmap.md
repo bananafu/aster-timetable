@@ -1,5 +1,9 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-C2c-1 — V8 固定課程與 A/B 輪週（獨立元件完成）
+
+已建立 V8 固定課程資料操作、TeachingUnit 既有錨點的 A/B 顯示規則、同教師跨單位實際時間衝突檢查及獨立表單／列表。引用保護、跨 scope 草稿阻擋及精確 Host receipt 由測試涵蓋。正式 App 與 OverviewCalendar 未切換；單次調課、額外單日課程、永久異動和正式刪除備份仍屬後續階段。
+
 ## Phase 4D R2-C2b-4 — V8 資源整合與回歸（獨立驗證完成）
 
 已驗證 Project、Subject、Class、任教配置、教師課表在同一 V8 文件的連續操作、validator、儲存讀回、跨 Project／Timetable 隔離、跨 TeachingUnit 合法內容及引用保護；Class 與 Timetable 管理元件亦在同一空白 bootstrap Host 上完成連續寫入。統一 Host receipt 的 raw／revision 判定並阻擋 Class 舊 Project 草稿送出。正式 App 仍為 V7；真實瀏覽器多分頁、正式備份／匯入恢復與 Lesson／Event 編輯器仍待後續階段。

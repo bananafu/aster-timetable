@@ -1,5 +1,11 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-C2c-1 — V8 固定課程與 A/B 輪週（獨立元件）
+
+`recurringLessonsV8` 以既有 RecurringLesson 欄位建立、編輯、刪除及按 Project／Timetable 列出課程；完整 V8 validator 與 safe-update 保護 Project、Timetable、TeachingUnit、Class、Subject、TeachingUnitSubject 關聯。Lesson `weekPattern` 使用既有 `every`／`A`／`B`，錨點實際位於 TeachingUnit 的 `weekCycle`，沿用 `getTeachingUnitWeekPattern` 的週起始與連續輪替，不新增 Project 錨點欄位。衝突依同一教師課表、有效日期、各任教單位的實際節次時間，以及最多兩個週期的兩個錨點結果判斷；不同教師不因同節次被阻擋，A 與 B 在相同錨點下可共存。
+
+獨立 `RecurringLessonManagerV8` 提供列表、合法選項、CRUD、引用摘要、草稿 scope 保護及 Host raw／revision receipt 驗證，不修改正式 App 或 OverviewCalendar。歷史版本、日期異動、關聯 OneOff 或相同 scope 的進度阻擋刪除；有日期異動時拒絕結構性編輯。OneOff、Change、Progress 的正式編輯器及高影響刪除備份 UI 尚未實作。
+
 ## Phase 4D R2-C2b-4 — V8 資源整合與回歸（未接入正式 App）
 
 跨資源整合測試以同一份 V8 document 連續建立 Project、Subject、Class、TeachingUnitSubject 與教師 Timetable，每步通過完整 validator，並以 V8 storage 的 snapshot／revision 契約寫入及重新載入。另以空白 bootstrap 下的共用 V8 Host 串接 Class 與 Timetable 管理元件，驗證連續寫入及 receipt。測試亦涵蓋跨 TeachingUnit 的同一教師內容、不同教師／Project 隔離、複製新學期的暫態資料排除，以及 Subject／Class／Timetable 引用保護。

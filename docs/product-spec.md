@@ -1,5 +1,11 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-C2c-1 — V8 固定課程（尚未正式啟用）
+
+- 固定課程歸屬明確的 Project、教師 Timetable、TeachingUnit、Class、Subject 與既有任教配置；可選每週、A 週、B 週。輪週沿用各 TeachingUnit 既有錨點，跨月跨年連續計算，且只在課程及學期有效日期內顯示。
+- 同一教師課表的課程依實際節次時間與同時生效的週別判斷衝突，跨 TeachingUnit 也適用；不同教師不因共用時段自動視為衝突。A／B 週在不重疊的實際日期可共用時段。
+- 獨立 V8 管理 UI 提供列表、建立、編輯、刪除、引用提示、唯讀／conflict、草稿保護及 persistence receipt；不建立 OneOff／Change／Progress，也不代表正式 App 或週課表視覺介面已接線。高影響刪除備份仍待正式 App 整合。
+
 ## Phase 4D R2-C2b-4 — V8 資源整合驗收（尚未正式啟用）
 
 - 空白 Project 起步的科目、班級、任教配置與教師課表可依序建立；每次操作須維持完整 V8 文件合法，且新資源不得自動產生課程、事件或進度。Project 與教師課表依 ID 隔離；同一教師課表可跨任教單位。
