@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { inspectCutoverSessionReadiness } from './v8SessionSafety'
 import { canTransitionV8, fingerprintV7Raw, isV8ActivationTransaction,
   loadV8Transaction, V8_TRANSACTION_KEY } from './activationV8'
 import { createCutoverBackupV8 } from './cutoverBackupV8'
@@ -12,6 +13,10 @@ import { APP_DATA_V7_KEY } from './storageV7'
 import { APP_DATA_V8_KEY } from './storageV8'
 
 const time = '2026-10-22T01:00:00.000Z'
+vi.mock('./v8SessionSafety', () => ({ inspectCutoverSessionReadiness: vi.fn() }))
+beforeEach(() => { vi.mocked(inspectCutoverSessionReadiness).mockResolvedValue({
+  readiness: 'verified', webLocks: 'available', coordination: 'available', modernSessions: [], issues: [],
+}) })
 const sourceV7 = () => migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))))
 function memory(entries: [string, string][] = []) {
   const values = new Map(entries)
@@ -148,6 +153,20 @@ describe('V8 activation transaction protocol', () => {
     expect(store.values.has(APP_DATA_V8_KEY)).toBe(true)
     expect(await inspectCutoverV8(store)).toMatchObject({ status: 'preparing', manualRetryEligible: false })
     expect(await activateCutoverV8(store, input)).toMatchObject({ ok: false, code: 'preflight-blocked' })
+  })
+
+  it('rechecks session readiness before active and leaves prepared when safety changes', async () => {
+    locks()
+    const store = memory()
+    const input = await evidence(store)
+    vi.mocked(inspectCutoverSessionReadiness)
+      .mockResolvedValueOnce({ readiness: 'verified', webLocks: 'available', coordination: 'available', modernSessions: [], issues: [] })
+      .mockResolvedValueOnce({ readiness: 'verified', webLocks: 'available', coordination: 'available', modernSessions: [], issues: [] })
+      .mockResolvedValueOnce({ readiness: 'blocked', webLocks: 'available', coordination: 'available', modernSessions: [],
+        issues: ['legacy-tabs-unverifiable'] })
+    expect(await activateCutoverV8(store, input)).toMatchObject({ ok: false, code: 'session-unsafe' })
+    expect(loadV8Transaction(store).value?.status).toBe('prepared')
+    expect(store.values.has(APP_DATA_V8_KEY)).toBe(true)
   })
 
   it('leaves a prepared transaction inspectable when final active write fails', async () => {

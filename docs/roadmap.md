@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-B2c — Conflict, recovery & rollback archive foundation（底層完成，正式啟用仍阻擋）
+
+已加入 Web Locks／BroadcastChannel capability 與暫時性 session coordination、結構化唯讀 recovery classification、不可覆寫的 V8 rollback archive 與唯讀 rollback planning。無法技術證明舊版 V7 分頁已停止寫入，因此 production cutover readiness 預設並持續 blocked；B2b activation service 在實際寫入路徑重驗 readiness。無 Web Locks 時不提供 fallback 或強制啟用。Archive 不改變 V7、V8 或 activation key。
+
+B3 前必須建立可驗證的舊版寫入停止策略，並決定人工恢復流程與支援瀏覽器矩陣；B3／B4 才能處理 UI、正式 App 接管及真實多分頁驗收。LocalStorage 跨 key 非原子、舊版分頁不可偵測仍是 Critical／High 風險。本階段沒有正式 cutover 或 rollback。
+
 ## Phase 4D R2-B2b — Activation transaction protocol（底層協定完成）
 
 已建立 V2 activation transaction schema／validator、`preparing → prepared → active` 持久化協定、唯讀中斷 inspection，以及新版 V8 Host 的 fail-closed active metadata gate。啟用 service 重驗 B2a 備份、外部確認、preflight、來源 fingerprint、V8 snapshot 與 transaction ownership；缺少 Web Lock 或任一步讀寫未確認都不回報成功。正常 V8 編輯使用 candidate baseline digest + 目前 digest／revision 契約。正式 App 仍是 V7；沒有 mount 自動啟用、雙寫或正式 cutover。

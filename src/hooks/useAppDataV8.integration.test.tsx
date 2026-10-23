@@ -203,6 +203,7 @@ describe('useAppDataV8 standalone runtime host', () => {
     fireEvent.click(screen.getByText('rename'))
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota') })
     await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('status').textContent).toBe('write-error'), { interval: 10, timeout: 1000 })
 
     expect(screen.getByTestId('status').textContent).toBe('write-error')
     expect(screen.getByTestId('name').textContent).toBe('本頁草稿')

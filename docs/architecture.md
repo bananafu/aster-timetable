@@ -1,5 +1,15 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-B2c — Session safety、唯讀恢復與 rollback archive foundation
+
+`v8SessionSafety.ts` 提供 Web Locks／BroadcastChannel capability 探測、暫時性隨機 session ID、同源 `hello`／`ack`／`close-request`／`reload-request`／`closing` 訊息及新版分頁觀察。訊息只表示可回覆的新版分頁，presence、回覆、固定等待或使用者勾選皆不能證明不支援協定的舊版 V7 分頁已停止寫入。因此目前 production `inspectCutoverSessionReadiness` **一律回報 blocked**（`legacy-tabs-unverifiable`）；B2b activation 入口在進鎖前、取得鎖後及寫入 active 前重驗，不能因 capability 存在就啟用。Web Locks 不支援或取得失敗同樣阻擋；沒有 localStorage lock fallback 或強制啟用。
+
+`recoveryInspectionV8.ts` 唯讀核對 V7／V8 raw、validator、V2 transaction、backup、digest、revision、source 與 archive；以固定優先順序分類 healthy-active、interrupted、source／V8 conflict、corrupt、backup 問題、archive-required 與 unknown-blocking。結果保留結構化 issue、原始匯出資料、唯讀與人工重試資格，不在檢視時修改 storage、重建 fingerprint 或自動續行。
+
+`rollbackArchiveV8.ts` 在 Web Lock 下建立獨立且不可覆寫的 V2 archive，記錄 exact V8 raw、SHA-256、document revision、transaction ID、source／backup／candidate lineage 及 UTC 時間；寫後讀回驗證，任一步失敗不標示 verified。損壞 V8 僅回傳救援匯出 raw。`planV8Rollback` 唯讀核對 archive、lineage、revision、目前 V8 與 V7 baseline，將無法確認的 V8-only change 標示 `unknown`。本階段不重啟 V7、不降版或刪除 V8、不標記 rolled-back。
+
+Critical 未解風險：瀏覽器無法可靠證明舊版分頁不存在；正式 cutover 維持 blocked，B3 前需可驗證的舊版寫入停止策略。High 未解風險：LocalStorage 跨 key 非原子交易；本階段測試為 mock，未做真實瀏覽器多分頁驗證。正式 App 仍由 V7 接管，B3／B4 的 UI、正式 runtime 接線與驗收均未完成。
+
 ## Phase 4D R2-B2b — Activation transaction protocol（未接入正式 App）
 
 `activationV8.ts` 定義獨立 V2 transaction key `aster-timetable-data-v8-transaction-v2`；舊 V1 activation key 保留且不可與 V2 同時作為寫入證據。V2 紀錄 transaction ID、`empty`／V7 source identity、backup ID/key/digest、綁定來源的外部確認、candidate baseline digest、目前 V8 raw digest、document revision、UTC 時間及 archive reference；不複製完整 raw。狀態為 `preparing → prepared → active`、`preparing／prepared → interrupted`、`active → rollback-recovery → rolled-back`。`interrupted`／`rolled-back` 無自動返回 active 的轉換；未知或不完整格式視為 blocking。

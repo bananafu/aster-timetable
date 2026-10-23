@@ -1,5 +1,14 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-B2c — Conflict, recovery & rollback archive foundation
+
+- 正式 cutover 前要求其他 Toki 分頁關閉或重新整理；新版 session 協調只能識別及請求可回覆的新版分頁，無回覆不代表無分頁。舊版分頁目前無可驗證的停止寫入證據，故正式啟用一律 blocked；使用者勾選不能取代技術證據。
+- Web Locks 缺失、request 失敗或協調能力不足時阻擋 cutover；唯讀 preflight 與原始 JSON 匯出仍可用。不得建立 localStorage 假鎖或強制啟用。
+- V7 baseline 變動、空白來源後新建 V7 key、V8 digest 改變或 transaction 損壞皆維持唯讀衝突恢復；不自動合併、更新 fingerprint 或改寫任一側原始資料。
+- Recovery inspection 使用固定分類優先順序，回傳結構化 blocking issue、source／transaction identity、原始資料、匯出／人工重試資格與下一步；檢視本身不寫入、不自動續行。
+- Rollback 前先建立獨立 V8 archive：exact raw、SHA-256、revision、activation lineage 與讀回驗證缺一不可。Archive 失敗不得標示 verified；損壞 V8 只提供救援匯出。Rollback planning 唯讀，V8-only change 無法判定時標記 unknown；本階段不重啟 V7 或執行正式 rollback。
+- 正式 App 仍使用 V7。B3／B4 的 cutover UI、正式 Runtime 接管與真實瀏覽器多分頁驗收尚未完成。
+
 ## Phase 4D R2-B2b — Activation transaction protocol
 
 - 正式 cutover 只能在使用者明確操作、已驗證內部 backup receipt、已準備外部 JSON 且使用者確認保存、source identity 完全一致、唯讀 preflight 通過時啟動。沒有 V7 key 時使用 `empty` source 與空白 V8 candidate，不偽造 V7 指紋。

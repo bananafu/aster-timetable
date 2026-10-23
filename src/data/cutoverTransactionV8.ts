@@ -11,6 +11,7 @@ import { isExternalBackupConfirmedV8, preflightCutoverV8,
 import { APP_DATA_V7_KEY } from './storageV7'
 import { APP_DATA_V8_KEY, parseAppDataV8Raw } from './storageV8'
 import { withV8StorageLock } from './v8Coordination'
+import { inspectCutoverSessionReadiness, type V8SessionIssue } from './v8SessionSafety'
 
 type CutoverStorage = Pick<Storage, 'getItem' | 'setItem'>
 type BackupReceipt = Extract<BackupResultV8, { ok: true }>
@@ -18,11 +19,12 @@ export type CutoverTransactionFailureCodeV8 = 'lock-unavailable' | 'lock-failure
   | 'backup-invalid' | 'confirmation-invalid' | 'source-changed' | 'v8-changed'
   | 'transaction-changed' | 'write-failure' | 'readback-failure' | 'digest-failure'
   | 'invalid-transaction'
+  | 'session-unsafe'
 export type CutoverTransactionResultV8 = {
   ok: true; transaction: V8ActivationTransaction; raw: string; reviewIssues: CutoverPreflightIssueV8[];
   replayed: boolean
 } | { ok: false; code: CutoverTransactionFailureCodeV8; transactionRaw: string | null;
-  preflightIssues?: CutoverPreflightIssueV8[] }
+  preflightIssues?: CutoverPreflightIssueV8[]; sessionIssues?: V8SessionIssue[] }
 
 function sameSource(left: SourceIdentityV8, right: SourceIdentityV8): boolean {
   return left.type === right.type && (left.type === 'empty'
@@ -89,8 +91,23 @@ export async function activateCutoverV8(
   storage: CutoverStorage,
   input: { transactionId: string; backup: BackupReceipt; confirmation: ExternalBackupConfirmationV8; createdAt: string },
 ): Promise<CutoverTransactionResultV8> {
+  const readiness = await inspectCutoverSessionReadiness()
+  if (readiness.readiness !== 'verified') {
+    const blocked = fail('session-unsafe', storage)
+    return { ok: false, code: 'session-unsafe', transactionRaw: blocked.ok ? null : blocked.transactionRaw,
+      sessionIssues: readiness.issues }
+  }
+  return runV8ActivationProtocol(storage, input)
+}
+
+/** Private transaction engine. Production readiness remains blocked until legacy-tab safety is verifiable. */
+async function runV8ActivationProtocol(
+  storage: CutoverStorage,
+  input: { transactionId: string; backup: BackupReceipt; confirmation: ExternalBackupConfirmationV8; createdAt: string },
+): Promise<CutoverTransactionResultV8> {
   try {
     return await withV8StorageLock(async () => {
+      if ((await inspectCutoverSessionReadiness()).readiness !== 'verified') return fail('session-unsafe', storage)
       const existing = loadV8Transaction(storage)
       if (existing.issue === 'none' && existing.value?.status === 'active'
         && existing.value.transactionId === input.transactionId && existing.raw !== null) {
@@ -171,6 +188,7 @@ export async function activateCutoverV8(
       if (beforeActive) return fail(beforeActive, storage)
       if (!verifySourceRaw(storage, preflight.sourceRaw)) return fail('source-changed', storage)
       if (!await verifyBackup(storage, input.backup, source, preflight.sourceRaw)) return fail('backup-invalid', storage)
+      if ((await inspectCutoverSessionReadiness()).readiness !== 'verified') return fail('session-unsafe', storage)
       if (!canTransitionV8('prepared', 'active')) return fail('invalid-transaction', storage)
       const active: V8ActivationTransaction = { ...prepared, status: 'active', updatedAt: nextTimestamp(input.createdAt) }
       const third = persistTransaction(storage, active, second.raw)
