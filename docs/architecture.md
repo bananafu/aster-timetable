@@ -1,5 +1,11 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-C2b-1 — V8 Project lifecycle adapter（未接入正式 App）
+
+`projectRuntimeV8` 沿用既有 V8 複製及刪除規則，新增只改 `activeProjectId` 的 Project 切換操作。V8 validator 容許 Project 沒有學校、任教單位或教師課表；一般建立保留既有預設學校／任教單位作為可編輯的設定起點，但不建立 Timetable，也不繼承來源科目、班級、課程、事件、異動或進度。複製為新學期需明確指定來源 Project、學期與每個 TeachingUnit 的來源有效日期、新日期及 A/B anchor；複製學校、任教單位、教師課表、科目、關聯、班級及當日有效固定課程，重建所有實體 ID 與引用，不複製 Event、override、one-off、progress。跨學期課程有效範圍使用新任教單位日期。既有 copy policy 未改動。
+
+獨立 `ProjectLifecycleV8` 元件不掛入 `App.tsx`：新增／複製分開、關閉髒草稿需確認、唯讀或衝突禁止寫入並提供匯出／採用外部資料接線。成功回呼及關閉僅在 Host 回傳與預期 V8 raw 完全相同、revision 已前進的 persistence receipt 後觸發；失敗保留畫面與草稿。刪除顯示各類引用影響、備份提醒與再次確認；正式額外備份 UI 仍待後續接線。
+
 ## Phase 4D R2-C2a — V8-only bootstrap foundation（未接入正式 App）
 
 開發階段決策改為直接建立完全空白 V8；正式 App 目前仍是 V7，既有 R1／B2 V7 migration、備份、交易與恢復模組保留作歷史路徑，但不是未來 App 空白初始化的必要流程。`storageV8.loadAppDataV8Only` 是唯讀檢視：區分 fresh、legacy key、V8 valid／corrupt、未知或既有 activation，以及 bootstrap preparing／active／interrupted；不讀取 V7 migration candidate、不持久化、不自動清除任何 key。Host 可明確以 `loadMode: 'v8-only'` 使用此路徑；預設舊模式保留供既有獨立回歸測試使用。

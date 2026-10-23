@@ -12,6 +12,7 @@ import {
   deleteProject,
   getProjectDeletionImpact,
   ProjectLifecycleV8Error,
+  switchActiveProject,
 } from './projectRuntimeV8'
 import { copyProject as copyProjectV7 } from './projectRuntime'
 import { createSubject, deleteSubject, updateSubject } from './subjectsV8'
@@ -110,10 +111,22 @@ function copyFixture(): AppDataV8 {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('AppDataV8 Project lifecycle operations', () => {
+  it('switches only the active Project pointer and rejects missing or archived targets', () => {
+    const data = addSecondProject()
+    const snapshot = structuredClone(data)
+    const switched = switchActiveProject(data, data.projects[0].id)
+    expect(switched.activeProjectId).toBe(data.projects[0].id)
+    expect({ ...switched, activeProjectId: data.activeProjectId }).toEqual(snapshot)
+    expect(data).toEqual(snapshot)
+    expect(code(() => switchActiveProject(data, 'missing'))).toBe('not-found')
+    const archived = { ...data, activeProjectId: data.projects[0].id, projects: data.projects.map((item) => item.id === 'project-b'
+      ? { ...item, archivedAt: '2027-08-01T00:00:00.000Z' } : item) }
+    expect(code(() => switchActiveProject(archived, 'project-b'))).toBe('not-found')
+  })
   it('creates a blank Project with required structure and no inherited domain data', () => {
     const source = base()
     const snapshot = structuredClone(source)
-    const ids = ['blank-project', 'blank-school', 'blank-unit', 'blank-timetable']
+    const ids = ['blank-project', 'blank-school', 'blank-unit']
     const created = createBlankProject(source, {
       name: 'Blank', teacherName: 'Teacher', academicYear: 116, semester: 'second',
       startDate: '2028-02-01', endDate: '2028-06-30',
@@ -121,7 +134,8 @@ describe('AppDataV8 Project lifecycle operations', () => {
 
     expect(created.activeProjectId).toBe('blank-project')
     expect(created.projects.filter((item) => item.id === 'blank-project')).toHaveLength(1)
-    expect(created.timetables.filter((item) => item.projectId === 'blank-project')).toHaveLength(1)
+    expect(created.timetables.filter((item) => item.projectId === 'blank-project')).toEqual([])
+    expect(created.timetables).toEqual(snapshot.timetables)
     expect(created.schools.filter((item) => item.projectId === 'blank-project')).toHaveLength(1)
     expect(created.teachingUnits.filter((item) => item.projectId === 'blank-project')).toHaveLength(1)
     expect(created.subjects.filter((item) => item.projectId === 'blank-project')).toEqual([])

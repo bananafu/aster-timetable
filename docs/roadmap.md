@@ -1,5 +1,9 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-C2b-1 — V8 Project lifecycle（獨立元件完成，正式 App 未切換）
+
+完成 V8 Project 空白新增（零 Timetable；預設學校／任教單位只是既有設定起點）、明確複製新學期、切換與引用保護刪除的獨立 UI 接線與測試；寫入資格與成功訊息依 V8 Host writable／persistence receipt，衝突保留匯出／恢復入口。未修改 `App.tsx` 或正式 V7 Runtime。C2b-2 的 Subject、Class、Teacher Timetable 接線及後續 Lesson／Event／Progress 仍未開始。
+
 ## Phase 4D R2-C2a — V8-only bootstrap foundation（底層完成，正式 App 未切換）
 
 開發階段取消 V7 測試資料必須遷移的要求。已建立明確呼叫的空白 V8 bootstrap、版本化 active 證據、唯讀 V8-only loader、V8 Host 雙證據互斥 gate，以及不自動執行的開發專用舊 key 清理工具。V7 或其他已知舊 key 存在時阻擋 bootstrap；不遷移、複製或清除 V7。無 Web Locks 時禁止初始化與寫入，無 localStorage 假鎖。bootstrap 每步讀回驗證；正常編輯更新目前 digest／revision，兩個 key 均確認後才發 receipt。部分寫入保持唯讀恢復，不自動續行；LocalStorage 跨 key 非原子、舊版不遵守協定頁面仍無法被鎖約束。

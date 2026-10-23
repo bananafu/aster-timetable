@@ -1,6 +1,6 @@
 import type { AppDataV8 } from '../types'
 import {
-  createBlankProject as createLegacyBlankProject,
+  BLANK_PROJECT_PERIODS,
   type CopyProjectInput,
   type NewProjectInput,
 } from './projectRuntime'
@@ -103,8 +103,35 @@ export function createBlankProject(
 ): AppDataV8 {
   assertData(data)
   const checkedCreateId = checkedIdFactory(data, createId)
-  const next = createLegacyBlankProject(data, input, checkedCreateId, now) as AppDataV8
+  const name = input.name?.trim()
+  if (!name || !Number.isInteger(input.academicYear) || input.academicYear <= 0
+    || !['first', 'second', 'summer', 'custom'].includes(input.semester)
+    || (input.semester === 'custom' && !input.customLabel?.trim())
+    || !isDateKey(input.startDate) || !isDateKey(input.endDate) || input.startDate > input.endDate
+    || !Number.isFinite(Date.parse(now))) fail('invalid-input', 'New Project input is invalid.')
+  const projectId = checkedCreateId()
+  const schoolId = checkedCreateId()
+  const unitId = checkedCreateId()
+  const next: AppDataV8 = {
+    ...data, activeProjectId: projectId,
+    projects: [...data.projects, { id: projectId, name,
+      term: { academicYear: input.academicYear, semester: input.semester,
+        customLabel: input.semester === 'custom' ? input.customLabel?.trim() : undefined },
+      createdAt: now, updatedAt: now }],
+    schools: [...data.schools, { id: schoolId, projectId, name: '我的學校', color: '#A5A051' }],
+    teachingUnits: [...data.teachingUnits, { id: unitId, projectId, schoolId, name: '主要任教單位',
+      schoolLevel: 'senior-high', startDate: input.startDate, endDate: input.endDate,
+      timezone: 'Asia/Taipei', periods: BLANK_PROJECT_PERIODS.map((period) => ({ ...period })),
+      weekCycle: { enabled: true, anchorDate: input.startDate, anchorPattern: 'A' } }],
+  }
   return assertResult(data, next)
+}
+
+export function switchActiveProject(data: AppDataV8, projectId: string): AppDataV8 {
+  assertData(data)
+  const project = data.projects.find((item) => item.id === projectId)
+  if (!project || project.archivedAt) fail('not-found', 'Project is not available.')
+  return assertResult(data, { ...data, activeProjectId: projectId })
 }
 
 /**
