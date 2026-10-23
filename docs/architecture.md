@@ -1,5 +1,15 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-C2a — V8-only bootstrap foundation（未接入正式 App）
+
+開發階段決策改為直接建立完全空白 V8；正式 App 目前仍是 V7，既有 R1／B2 V7 migration、備份、交易與恢復模組保留作歷史路徑，但不是未來 App 空白初始化的必要流程。`storageV8.loadAppDataV8Only` 是唯讀檢視：區分 fresh、legacy key、V8 valid／corrupt、未知或既有 activation，以及 bootstrap preparing／active／interrupted；不讀取 V7 migration candidate、不持久化、不自動清除任何 key。Host 可明確以 `loadMode: 'v8-only'` 使用此路徑；預設舊模式保留供既有獨立回歸測試使用。
+
+`activationV8.ts` 定義獨立版本化 `empty-bootstrap` key、完整 validator、attempt ID、不可變 `initialDigest`、目前 V8 raw 的 `currentDigest`、`documentRevision` 與 UTC 時間。狀態為 preparing／active／interrupted；interrupted 不會自動轉 active。`bootstrapEmptyV8` 僅可明確呼叫：要求 Web Locks，在同一鎖內重做 preflight，拒絕 V7 或任何已知舊版 Toki data key、既有／損壞 V8、V1／V2／bootstrap metadata，以及孤立的 cutover backup／rollback archive key。它依序寫入並讀回 preparing、validator 合法的空白 V8、active；失敗保留原始與部分資料並回傳結構化診斷，不重試、不覆寫。若 preparing 第一筆寫入完全未落盤，storage 仍可能呈 fresh；呼叫端不得把失敗回傳當成成功。
+
+V8 Host 的寫入 gate 只接受互斥的有效 V2 active cutover 或 empty-bootstrap active 證據；bootstrap 的初始 digest 必須對應標準空白文件，且 V7 key 維持不存在。寫前重新驗證 metadata、V8 raw digest 與原始 snapshot。每次已確認的正常編輯只推進 `currentDigest`／`documentRevision`，保留初始 digest；V8 文件和 metadata 都讀回且 gate 再驗通過後才核發 receipt。任一失敗保留本頁草稿與原始 JSON 匯出，進入唯讀錯誤／衝突。Web Locks 只協調遵守協定的新版分頁；LocalStorage 跨 key 不具原子性，也不具真正 CAS。
+
+`devLegacyResetV8.ts` 只在明確開發模式可用，唯讀列出 v1／v3／v4／v5／v6／v7 實際存在 key 及 exact raw；呼叫端需先提供逐筆匯出與精確清單，再傳入明確選取及一致確認。清理只對指定舊 key 使用 `removeItem` 並讀回確認，不觸碰 V8、activation、backup、archive、其他 origin 資料；沒有 App UI、import／mount 自動執行或本階段實際資料清除。
+
 ## Phase 4D R2-B2c — Session safety、唯讀恢復與 rollback archive foundation
 
 `v8SessionSafety.ts` 提供 Web Locks／BroadcastChannel capability 探測、暫時性隨機 session ID、同源 `hello`／`ack`／`close-request`／`reload-request`／`closing` 訊息及新版分頁觀察。訊息只表示可回覆的新版分頁，presence、回覆、固定等待或使用者勾選皆不能證明不支援協定的舊版 V7 分頁已停止寫入。因此目前 production `inspectCutoverSessionReadiness` **一律回報 blocked**（`legacy-tabs-unverifiable`）；B2b activation 入口在進鎖前、取得鎖後及寫入 active 前重驗，不能因 capability 存在就啟用。Web Locks 不支援或取得失敗同樣阻擋；沒有 localStorage lock fallback 或強制啟用。

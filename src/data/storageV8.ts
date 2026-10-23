@@ -1,5 +1,6 @@
 import type { StorageStatus } from '../hooks/useLocalStorage'
 import type { AppDataV7, AppDataV8 } from '../types'
+import { loadV8ActivationMetadata, loadV8BootstrapMetadata, loadV8Transaction } from './activationV8'
 import { upgradeLegacyV8EventOwnership } from './eventOwnershipV8'
 import type { V8MigrationPreflightReport, V8MigrationReconciliationReport } from './migrationPreflightV8'
 import {
@@ -9,9 +10,35 @@ import {
   type V8MigrationErrorCode,
 } from './migrationsV8'
 import { APP_DATA_V7_KEY, loadAppDataV7, type AppDataV7LoadResult } from './storageV7'
+import { APP_DATA_V6_KEY } from './storageV6'
+import { APP_DATA_V5_KEY } from './storageV5'
+import { APP_DATA_V1_KEY, APP_DATA_V3_KEY, APP_DATA_V4_KEY } from './storageV4'
 import { isCompatibleAppDataV8, isSafeAppDataV8Update } from './validators/v8'
 
 export const APP_DATA_V8_KEY = 'aster-timetable-data-v8'
+export function createEmptyAppDataV8(): AppDataV8 {
+  return {
+    schemaVersion: 8, activeProjectId: null, projects: [], timetables: [], schools: [],
+    teachingUnits: [], subjects: [], teachingUnitSubjects: [], classes: [], recurringLessons: [],
+    events: [], overrides: [], oneOffLessons: [], teachingProgress: [], migrationWarnings: [],
+  }
+}
+export const TOKI_LEGACY_DATA_KEYS = [APP_DATA_V1_KEY, APP_DATA_V3_KEY, APP_DATA_V4_KEY,
+  APP_DATA_V5_KEY, APP_DATA_V6_KEY, APP_DATA_V7_KEY] as const
+
+export type V8OnlyLoadStatus = 'fresh' | 'bootstrap-preparing' | 'bootstrap-active' | 'bootstrap-interrupted'
+  | 'existing-v8' | 'existing-activation' | 'corrupt-v8' | 'unknown-metadata'
+  | 'legacy-v7-present' | 'legacy-present' | 'read-error'
+export interface V8OnlyLoadResult {
+  status: V8OnlyLoadStatus
+  value: AppDataV8
+  rawV8: string | null
+  rawV7: string | null
+  legacyKeys: string[]
+  rawActivationV1: string | null
+  rawTransactionV2: string | null
+  rawBootstrap: string | null
+}
 
 export type AppDataV8LoadIssue = 'none' | 'missing' | 'corrupt' | 'read-failure' | 'migration-failure' | 'version-conflict'
 
@@ -84,6 +111,47 @@ export function parseAppDataV8Raw(raw: string): AppDataV8 {
   const upgraded = upgradeLegacyV8TeachingUnitSubjects(upgradeLegacyV8EventOwnership(parsed))
   if (!isCompatibleAppDataV8(upgraded)) throw new Error('Invalid AppData v8')
   return upgraded
+}
+
+/** V8-only inspection never reads a migration candidate or writes any storage key. */
+export function loadAppDataV8Only(storage: ReadStorage, initialValue: AppDataV8): V8OnlyLoadResult {
+  let rawV8: string | null = null
+  let rawV7: string | null = null
+  let legacyKeys: string[] = []
+  const activation = loadV8ActivationMetadata(storage)
+  const transaction = loadV8Transaction(storage)
+  const bootstrap = loadV8BootstrapMetadata(storage)
+  const base = () => ({ rawV8, rawV7, legacyKeys, rawActivationV1: activation.raw,
+    rawTransactionV2: transaction.raw, rawBootstrap: bootstrap.raw })
+  try {
+    rawV8 = storage.getItem(APP_DATA_V8_KEY)
+    rawV7 = storage.getItem(APP_DATA_V7_KEY)
+    legacyKeys = TOKI_LEGACY_DATA_KEYS.filter((key) => storage.getItem(key) !== null)
+  } catch { return { ...base(), status: 'read-error', value: initialValue } }
+  if ([activation.issue, transaction.issue, bootstrap.issue].includes('read-failure')) {
+    return { ...base(), status: 'read-error', value: initialValue }
+  }
+  if ([activation.issue, transaction.issue, bootstrap.issue].includes('corrupt')
+    || [activation.raw, transaction.raw, bootstrap.raw].filter((raw) => raw !== null).length > 1) {
+    return { ...base(), status: 'unknown-metadata', value: initialValue }
+  }
+  let value = initialValue
+  if (rawV8 !== null) {
+    try { value = parseAppDataV8Raw(rawV8) }
+    catch { return { ...base(), status: 'corrupt-v8', value: initialValue } }
+  }
+  if (bootstrap.value) {
+    if (bootstrap.value.status === 'active' && rawV8 === null) return { ...base(), status: 'unknown-metadata', value }
+    if (bootstrap.value.status === 'active' && rawV7 !== null) return { ...base(), status: 'legacy-v7-present', value }
+    return { ...base(), status: `bootstrap-${bootstrap.value.status}`, value }
+  }
+  if (activation.raw !== null || transaction.raw !== null) {
+    return { ...base(), status: rawV8 === null ? 'existing-activation' : 'existing-v8', value }
+  }
+  if (rawV8 !== null) return { ...base(), status: 'existing-v8', value }
+  if (rawV7 !== null) return { ...base(), status: 'legacy-v7-present', value }
+  if (legacyKeys.length) return { ...base(), status: 'legacy-present', value }
+  return { ...base(), status: 'fresh', value }
 }
 
 export function loadAppDataV8(storage: ReadStorage, initialValue: AppDataV8): AppDataV8LoadResult {

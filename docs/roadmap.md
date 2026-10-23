@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-C2a — V8-only bootstrap foundation（底層完成，正式 App 未切換）
+
+開發階段取消 V7 測試資料必須遷移的要求。已建立明確呼叫的空白 V8 bootstrap、版本化 active 證據、唯讀 V8-only loader、V8 Host 雙證據互斥 gate，以及不自動執行的開發專用舊 key 清理工具。V7 或其他已知舊 key 存在時阻擋 bootstrap；不遷移、複製或清除 V7。無 Web Locks 時禁止初始化與寫入，無 localStorage 假鎖。bootstrap 每步讀回驗證；正常編輯更新目前 digest／revision，兩個 key 均確認後才發 receipt。部分寫入保持唯讀恢復，不自動續行；LocalStorage 跨 key 非原子、舊版不遵守協定頁面仍無法被鎖約束。
+
+C2b 尚需 Project／Subject／Class／Timetable 的 V8 功能接線；課程、一次性課程、Event、Progress、正式 App 切換及發布前 JSON 匯入／恢復驗收仍屬後續工作。本階段沒有修改 `App.tsx`、正式 V7 Runtime，也沒有執行資料清理或正式啟用。
+
 ## Phase 4D R2-B2c — Conflict, recovery & rollback archive foundation（底層完成，正式啟用仍阻擋）
 
 已加入 Web Locks／BroadcastChannel capability 與暫時性 session coordination、結構化唯讀 recovery classification、不可覆寫的 V8 rollback archive 與唯讀 rollback planning。無法技術證明舊版 V7 分頁已停止寫入，因此 production cutover readiness 預設並持續 blocked；B2b activation service 在實際寫入路徑重驗 readiness。無 Web Locks 時不提供 fallback 或強制啟用。Archive 不改變 V7、V8 或 activation key。

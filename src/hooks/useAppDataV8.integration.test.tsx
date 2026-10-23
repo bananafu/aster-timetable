@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { APP_DATA_V8_ACTIVATION_KEY, V8_TRANSACTION_KEY, fingerprintV7Raw,
+import { APP_DATA_V8_ACTIVATION_KEY, V8_BOOTSTRAP_KEY, V8_TRANSACTION_KEY, fingerprintV7Raw,
   type V8ActivationMetadata, type V8ActivationTransaction } from '../data/activationV8'
+import { bootstrapEmptyV8 } from '../data/bootstrapV8'
+import { createBlankProject } from '../data/projectRuntimeV8'
 import { initialData } from '../data/seed'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { migrateV4ToV5 } from '../data/migrationsV5'
@@ -21,8 +23,8 @@ const rename = (data: AppDataV8, name: string): AppDataV8 => ({
   projects: data.projects.map((project, index) => index === 0 ? { ...project, name } : project),
 })
 
-function Harness() {
-  const [data, setData, status, controls, persistence, info] = useAppDataV8()
+function Harness({ loadMode }: { loadMode?: 'legacy-candidate' | 'v8-only' } = {}) {
+  const [data, setData, status, controls, persistence, info] = useAppDataV8({ loadMode })
   return <>
     <output data-testid="status">{status}</output>
     <output data-testid="name">{data.projects[0]?.name ?? ''}</output>
@@ -39,8 +41,16 @@ function Harness() {
     <output data-testid="raw-v8">{controls.rawV8 ?? ''}</output>
     <output data-testid="local">{controls.exportLocalJson()}</output>
     <output data-testid="activation-fingerprint">{info.activationMetadata?.sourceV7Fingerprint ?? ''}</output>
+    <output data-testid="only-status">{info.v8OnlyStatus ?? ''}</output>
+    <output data-testid="bootstrap-status">{info.bootstrapMetadata?.status ?? ''}</output>
+    <output data-testid="bootstrap-raw">{controls.exportStoredBootstrapJson() ?? ''}</output>
     <button onClick={() => setData((current) => rename(current, '本頁草稿'))}>rename</button>
     <button onClick={() => setData((current) => rename(current, '下一版'))}>rename-next</button>
+    <button onClick={() => {
+      let id = 0
+      setData((current) => createBlankProject(current, { name: '全新專案', teacherName: '老師',
+        academicYear: 115, semester: 'first', startDate: '2026-08-01', endDate: '2027-01-31' }, () => `new-${++id}`))
+    }}>create-project</button>
     <button onClick={controls.adoptExternalV8}>adopt</button>
     <button onClick={controls.retryWrite}>retry</button>
   </>
@@ -434,6 +444,129 @@ describe('useAppDataV8 standalone runtime host', () => {
     expect(screen.getByTestId('revision').textContent).toBe('2')
     expect(screen.getByTestId('receipt').textContent).toBe('2')
     expect(JSON.parse(localStorage.getItem(V8_TRANSACTION_KEY)!).documentRevision).toBe(2)
+  })
+
+  it('exposes a V8-only fresh state without creating data or a V7 migration candidate', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    render(<Harness loadMode="v8-only" />)
+    expect(screen.getByTestId('only-status').textContent).toBe('fresh')
+    expect(screen.getByTestId('status').textContent).toBe('inactive')
+    expect(screen.getByTestId('migration').textContent).toBe('')
+    expect(setItem).not.toHaveBeenCalled()
+    cleanup()
+    localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(v7()))
+    render(<Harness loadMode="v8-only" />)
+    expect(screen.getByTestId('only-status').textContent).toBe('legacy-v7-present')
+    expect(screen.getByTestId('status').textContent).toBe('read-error')
+    expect(screen.getByTestId('migration').textContent).toBe('')
+    expect(localStorage.getItem(APP_DATA_V8_KEY)).toBeNull()
+  })
+
+  it('keeps a partial bootstrap read-only and exposes the exact metadata raw', async () => {
+    const started = await bootstrapEmptyV8(localStorage, { attemptId: 'partial' })
+    if (!started.ok) throw new Error('fixture failed')
+    const preparing = { ...started.receipt.metadata, status: 'preparing', activatedAt: null }
+    const raw = `  ${JSON.stringify(preparing)}\n`
+    localStorage.setItem(V8_BOOTSTRAP_KEY, raw)
+    render(<Harness loadMode="v8-only" />)
+    expect(screen.getByTestId('only-status').textContent).toBe('bootstrap-preparing')
+    expect(screen.getByTestId('status').textContent).toBe('read-error')
+    expect(screen.getByTestId('bootstrap-raw').textContent).toBe(raw)
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+  })
+
+  it('writes from verified empty bootstrap and advances only current digest and revision', async () => {
+    const started = await bootstrapEmptyV8(localStorage, { attemptId: 'host-bootstrap' })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    render(<Harness loadMode="v8-only" />)
+    expect(screen.getByTestId('only-status').textContent).toBe('bootstrap-active')
+    await flushActivation()
+    fireEvent.click(screen.getByText('create-project'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('revision').textContent).toBe('1'), { interval: 10, timeout: 1000 })
+    const first = JSON.parse(localStorage.getItem(V8_BOOTSTRAP_KEY)!)
+    expect(first.initialDigest).toBe(started.receipt.digest)
+    expect(first.currentDigest).toBe(await fingerprintV7Raw(localStorage.getItem(APP_DATA_V8_KEY)!))
+    expect(first.documentRevision).toBe(1)
+    expect(screen.getByTestId('receipt').textContent).toBe('1')
+    expect(await checkV8HostWriteEligibility(localStorage, localStorage.getItem(APP_DATA_V8_KEY))).toMatchObject({ eligible: true })
+    fireEvent.click(screen.getByText('rename-next'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('revision').textContent).toBe('2'), { interval: 10, timeout: 1000 })
+    const second = JSON.parse(localStorage.getItem(V8_BOOTSTRAP_KEY)!)
+    expect(second.initialDigest).toBe(first.initialDigest)
+    expect(second.documentRevision).toBe(2)
+    expect(second.currentDigest).toBe(await fingerprintV7Raw(localStorage.getItem(APP_DATA_V8_KEY)!))
+    expect(screen.getByTestId('receipt').textContent).toBe('2')
+  })
+
+  it('revokes bootstrap write eligibility on metadata event, pre-write change or recreated V7', async () => {
+    const started = await bootstrapEmptyV8(localStorage, { attemptId: 'revoke-test' })
+    if (!started.ok) throw new Error('fixture failed')
+    const raw = localStorage.getItem(APP_DATA_V8_KEY)!
+    render(<Harness loadMode="v8-only" />)
+    await flushActivation()
+    const metadata = localStorage.getItem(V8_BOOTSTRAP_KEY)!
+    receive(V8_BOOTSTRAP_KEY, metadata, null)
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+    expect(screen.getByTestId('status').textContent).toBe('conflict')
+    cleanup()
+    render(<Harness loadMode="v8-only" />)
+    await flushActivation()
+    fireEvent.click(screen.getByText('create-project'))
+    localStorage.setItem(V8_BOOTSTRAP_KEY, JSON.stringify({ ...started.receipt.metadata, status: 'preparing', activatedAt: null }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+    expect(screen.getByTestId('receipt').textContent).toBe('')
+    expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(raw)
+    cleanup()
+    localStorage.setItem(V8_BOOTSTRAP_KEY, metadata)
+    render(<Harness loadMode="v8-only" />)
+    await flushActivation()
+    localStorage.setItem(APP_DATA_V7_KEY, '{}')
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: false })
+    fireEvent.click(screen.getByText('create-project'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    expect(screen.getByTestId('receipt').textContent).toBe('')
+    expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(raw)
+  })
+
+  it('keeps a bootstrap draft without a receipt if metadata persistence fails after the V8 write', async () => {
+    const started = await bootstrapEmptyV8(localStorage, { attemptId: 'metadata-fail' })
+    if (!started.ok) throw new Error('fixture failed')
+    render(<Harness loadMode="v8-only" />)
+    await flushActivation()
+    fireEvent.click(screen.getByText('create-project'))
+    const realSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === V8_BOOTSTRAP_KEY) throw new Error('quota')
+      realSetItem.call(this, key, value)
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await vi.waitFor(() => expect(screen.getByTestId('status').textContent).toBe('conflict'), { interval: 10, timeout: 1000 })
+    expect(screen.getByTestId('writable').textContent).toBe('false')
+    expect(screen.getByTestId('pending').textContent).toBe('true')
+    expect(screen.getByTestId('receipt').textContent).toBe('')
+    expect(screen.getByTestId('local').textContent).toContain('全新專案')
+    expect(localStorage.getItem(APP_DATA_V8_KEY)).not.toBe(started.receipt.raw)
+    expect(await checkV8HostWriteEligibility(localStorage, localStorage.getItem(APP_DATA_V8_KEY))).toMatchObject({ eligible: false })
+  })
+
+  it('blocks mismatched bootstrap digest and ambiguous V2 evidence', async () => {
+    const started = await bootstrapEmptyV8(localStorage, { attemptId: 'evidence' })
+    if (!started.ok) throw new Error('fixture failed')
+    const raw = localStorage.getItem(APP_DATA_V8_KEY)!
+    localStorage.setItem(V8_BOOTSTRAP_KEY, JSON.stringify({ ...started.receipt.metadata,
+      currentDigest: `sha256:${'a'.repeat(64)}`, documentRevision: 1 }))
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: false })
+    localStorage.setItem(V8_BOOTSTRAP_KEY, JSON.stringify(started.receipt.metadata))
+    localStorage.setItem(V8_BOOTSTRAP_KEY, JSON.stringify({ ...started.receipt.metadata,
+      initialDigest: `sha256:${'b'.repeat(64)}`, documentRevision: 1 }))
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: false })
+    localStorage.setItem(V8_BOOTSTRAP_KEY, JSON.stringify(started.receipt.metadata))
+    await activeTransaction(raw)
+    expect(await checkV8HostWriteEligibility(localStorage, raw)).toMatchObject({ eligible: false })
   })
 
   it('documents the old-host boundary: storage CAS alone does not enforce the new activation gate', async () => {

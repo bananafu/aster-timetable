@@ -1,5 +1,13 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-C2a — 開發階段空白 V8 初始化
+
+- 未來正式 App 以 V8 為唯一 Runtime；新環境直接使用完全空白的 V8 文件，不要求匯入 V7 測試資料。C2a 僅建立底層契約，**正式 App 尚未切換**。
+- 空白 bootstrap 只能由明確呼叫啟動。Web Locks 不支援或取得失敗、V7 或其他已知舊 data key 存在、既有／損壞 V8、既有 V1／V2 activation、未知或中斷 bootstrap 都必須阻擋；不得自動遷移、清除、接管或覆寫。
+- Bootstrap metadata 記錄空白來源、嘗試 ID、初始與目前 SHA-256 digest、document revision、狀態及時間。preparing、V8 document、active 分步寫入讀回；中斷與部分完成保持唯讀，不自動恢復。有效 V8 文件本身不賦予寫入資格，只有驗證通過的 active bootstrap 或原有 V2 active cutover 證據可寫。
+- 開發清理只可在明確開發模式對選取的舊測試 data key 操作；先列出 exact raw 供外部 JSON 保存，顯示精確清單並取得使用者確認。不得在 mount 自動清理，不得用 `localStorage.clear()` 或前綴模糊刪除，也不刪 V8、activation、備份或 rollback archive。本階段沒有正式清理 UI，沒有實際執行清理。
+- 正常 V8 更新維持完整 validator、stale snapshot／V7 guard、Web Lock、digest／revision 與讀回 receipt。LocalStorage 跨 key 非原子；不遵守協定的舊頁面仍可能造成衝突，不能以測試假設絕對互斥。正式發布前仍需驗收 JSON 匯出、匯入與恢復。
+
 ## Phase 4D R2-B2c — Conflict, recovery & rollback archive foundation
 
 - 正式 cutover 前要求其他 Toki 分頁關閉或重新整理；新版 session 協調只能識別及請求可回覆的新版分頁，無回覆不代表無分頁。舊版分頁目前無可驗證的停止寫入證據，故正式啟用一律 blocked；使用者勾選不能取代技術證據。

@@ -6,6 +6,23 @@ export const APP_DATA_V8_ACTIVATION_KEY = 'aster-timetable-data-v8-activation'
 export const V8_ACTIVATION_METADATA_VERSION = 1
 export const V8_TRANSACTION_KEY = 'aster-timetable-data-v8-transaction-v2'
 export const V8_TRANSACTION_VERSION = 2
+export const V8_BOOTSTRAP_KEY = 'aster-timetable-data-v8-empty-bootstrap-v1'
+export const V8_BOOTSTRAP_VERSION = 1
+
+export type V8BootstrapStatus = 'preparing' | 'active' | 'interrupted'
+export interface V8BootstrapMetadata {
+  schemaVersion: typeof V8_BOOTSTRAP_VERSION
+  kind: 'empty-bootstrap'
+  attemptId: string
+  status: V8BootstrapStatus
+  initialDigest: `sha256:${string}`
+  currentDigest: `sha256:${string}`
+  documentRevision: number
+  createdAt: string
+  updatedAt: string
+  activatedAt: string | null
+  errorCode: string | null
+}
 
 export type V8TransactionStatus = 'preparing' | 'prepared' | 'active' | 'interrupted' | 'rollback-recovery' | 'rolled-back'
 export interface V8ActivationTransaction {
@@ -29,6 +46,36 @@ export interface V8ActivationTransaction {
 const digest = (value: unknown): value is `sha256:${string}` => typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value)
 const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value)
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
+export function isV8BootstrapMetadata(value: unknown): value is V8BootstrapMetadata {
+  if (!record(value) || Object.keys(value).length !== 11) return false
+  const candidate = value as unknown as V8BootstrapMetadata
+  if (candidate.schemaVersion !== V8_BOOTSTRAP_VERSION || candidate.kind !== 'empty-bootstrap'
+    || !id(candidate.attemptId) || !['preparing', 'active', 'interrupted'].includes(candidate.status)
+    || !digest(candidate.initialDigest) || !digest(candidate.currentDigest)
+    || !Number.isSafeInteger(candidate.documentRevision) || candidate.documentRevision < 0
+    || !canonicalUtcTimestamp(candidate.createdAt) || !canonicalUtcTimestamp(candidate.updatedAt)
+    || candidate.updatedAt < candidate.createdAt) return false
+  if (candidate.status === 'active') return canonicalUtcTimestamp(candidate.activatedAt)
+    && candidate.activatedAt >= candidate.createdAt && candidate.activatedAt <= candidate.updatedAt
+    && candidate.errorCode === null
+    && (candidate.documentRevision !== 0 || candidate.currentDigest === candidate.initialDigest)
+  return candidate.activatedAt === null && candidate.documentRevision === 0
+    && candidate.currentDigest === candidate.initialDigest
+    && (candidate.status === 'preparing' ? candidate.errorCode === null
+      : typeof candidate.errorCode === 'string' && candidate.errorCode.length > 0)
+}
+
+export function loadV8BootstrapMetadata(storage: Pick<Storage, 'getItem'>): {
+  value: V8BootstrapMetadata | null; raw: string | null; issue: 'none' | 'corrupt' | 'read-failure'
+} {
+  let raw: string | null = null
+  try {
+    raw = storage.getItem(V8_BOOTSTRAP_KEY)
+    if (raw === null) return { value: null, raw, issue: 'none' }
+    const parsed: unknown = JSON.parse(raw)
+    return isV8BootstrapMetadata(parsed) ? { value: parsed, raw, issue: 'none' } : { value: null, raw, issue: 'corrupt' }
+  } catch { return { value: null, raw, issue: raw === null ? 'read-failure' : 'corrupt' } }
+}
 const sourceIdentity = (value: unknown): value is SourceIdentityV8 => record(value)
   && (value.type === 'empty' ? Object.keys(value).length === 1
     : value.type === 'v7' && Object.keys(value).length === 3 && value.key === APP_DATA_V7_KEY && digest(value.digest))
