@@ -1,12 +1,16 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-C2b-3 — V8 教師課表管理（獨立元件完成）
+
+已建立 Project-scoped 教師課表建立、改名、僅設定複製、引用保護刪除、ID 選取及按教師過濾內容的 V8 service／selector／獨立 UI 與測試。Timetable 不屬於單一 TeachingUnit，跨任教單位的合法資料仍可顯示。UI 的成功訊息以 Host 的精確 raw 與 revision receipt 為準；唯讀／衝突保留匯出與恢復入口。尚未接入正式 App、OverviewCalendar 或新增 Lesson／Event 編輯器；正式高影響刪除備份與瀏覽器多分頁驗收仍待後續階段。
+
 ## Phase 4D R2-C2b-2 — V8 科目與班級管理（獨立元件完成）
 
-沿用 V8 Subject／TeachingUnitSubject service，補上 Project 科目庫的安全刪除入口；新增 V8 專用 Class service、班級 UI 與獨立資源管理 wrapper。Project／TeachingUnit 隔離、引用阻擋、唯讀／conflict、草稿保留及 Host receipt 驗證已由測試涵蓋。尚未接入正式 App；C2b-3 Teacher Timetable、Lesson／Event／Progress 等後續階段未開始。
+沿用 V8 Subject／TeachingUnitSubject service，補上 Project 科目庫的安全刪除入口；新增 V8 專用 Class service、班級 UI 與獨立資源管理 wrapper。Project／TeachingUnit 隔離、引用阻擋、唯讀／conflict、草稿保留及 Host receipt 驗證已由測試涵蓋。尚未接入正式 App；Teacher Timetable 由 C2b-3 獨立處理，Lesson／Event／Progress 編輯仍待後續階段。
 
 ## Phase 4D R2-C2b-1 — V8 Project lifecycle（獨立元件完成，正式 App 未切換）
 
-完成 V8 Project 空白新增（零 Timetable；預設學校／任教單位只是既有設定起點）、明確複製新學期、切換與引用保護刪除的獨立 UI 接線與測試；寫入資格與成功訊息依 V8 Host writable／persistence receipt，衝突保留匯出／恢復入口。未修改 `App.tsx` 或正式 V7 Runtime。C2b-2 的 Subject、Class、Teacher Timetable 接線及後續 Lesson／Event／Progress 仍未開始。
+完成 V8 Project 空白新增（零 Timetable；預設學校／任教單位只是既有設定起點）、明確複製新學期、切換與引用保護刪除的獨立 UI 接線與測試；寫入資格與成功訊息依 V8 Host writable／persistence receipt，衝突保留匯出／恢復入口。未修改 `App.tsx` 或正式 V7 Runtime。Subject／Class 與 Teacher Timetable 已分別由 C2b-2／C2b-3 處理；Lesson／Event／Progress 編輯仍待後續階段。
 
 ## Phase 4D R2-C2a — V8-only bootstrap foundation（底層完成，正式 App 未切換）
 

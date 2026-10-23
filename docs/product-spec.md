@@ -1,5 +1,12 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R2-C2b-3 — V8 教師課表管理（尚未正式啟用）
+
+- 每位教師一份獨立 Timetable，Timetable 直接歸屬 Project，不強制歸屬單一 TeachingUnit；同一份課表可包含多任教單位的合法內容。不同 Project／教師的課程、活動與進度必須依 Timetable ID 隔離，不以名稱辨識。
+- 一般新增課表只建立名稱、教師名稱及獨立 ID；無 TeachingUnit 也可建立，不自動建立 Lesson、OneOff、Change、Event 或 Progress。編輯只變更目標課表設定；明確複製只複製設定至指定 Project 並重建 ID，不複製課程或活動。
+- 刪除前顯示固定課程、單日課程、異動、已解析事件及進度引用摘要；任何有效引用皆阻擋，不級聯刪除。無引用時仍需明確確認。正式高影響刪除備份 UI 仍待接線。
+- 獨立 V8 UI 的唯讀／衝突狀態禁止寫入並提供 JSON 匯出及恢復接線；草稿捨棄需確認，成功提示需精確 raw 與對應 revision 的 Host receipt。正式 App 與 OverviewCalendar 尚未切換至 V8。
+
 ## Phase 4D R2-C2b-2 — V8 科目、班級與任教配置（尚未正式啟用）
 
 - 科目屬於個別 Project；相同名稱不代表同一筆科目，Project 內重複名稱／簡稱依現有 V8 validator。任教配置只連結同 Project 的 Subject 與 TeachingUnit；刪除前須解除配置與課程／進度引用。

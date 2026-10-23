@@ -1,5 +1,11 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-C2b-3 — V8 教師課表管理（獨立元件，未接入正式 App）
+
+Timetable 直接屬於 Project，以 `teacherName` 表達教師，不具 TeachingUnit 外鍵；同一教師課表可包含多個任教單位的 Lesson、OneOff、Change、Event 與 Progress。`timetablesV8` 重用 `eventTopologyV8` 的建立／刪除安全操作，新增僅更新目標名稱／教師名稱，以及僅複製 Timetable 設定的明確複製操作。跨 Project 複製建立新 ID，不攜帶課程、活動或進度。刪除先計算目標課表各類引用；有引用即拒絕，不級聯刪除，也不因其他教師有引用而錯誤阻擋。
+
+`timetableSelectionV8` 以 Project + Timetable ID 選取並重新校驗，依兩者篩選教師可見的課程、異動、已解析事件與進度；不以同名或單一 TeachingUnit 限制。獨立 `TimetableManagerV8` 提供列表、建立、編輯、設定複製、刪除及選取，唯讀／衝突時保留匯出與恢復接線。表單綁定開啟時的 Project、目標 Timetable ID 與文件快照，範圍變更時阻擋舊草稿寫入。資料寫入僅交給 V8 Host，精確 raw 與對應 revision 的 receipt 確認後才回報成功；正式高影響刪除備份 UI、Lesson／Event 編輯器及 `App.tsx` 接線尚未完成。
+
 ## Phase 4D R2-C2b-2 — V8 Subject、Class 與任教配置（獨立元件）
 
 Subject 以 Project ID 隔離；TeachingUnitSubject 連結同一 Project 的 Subject 與 TeachingUnit，不是 Class 或 Timetable。既有 `subjectsV8` 負責建立、編輯、配置、引用檢查與刪除；`TeachingUnitSubjectManagerV8` 新增目前 Project 科目庫及未引用科目刪除入口，仍保留各任教單位啟用／移除操作。重名政策沿用 V8 validator 的 Project 內正規化名稱／簡稱唯一規則；不同 Project 可同名但 ID 獨立。
