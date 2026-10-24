@@ -1,5 +1,25 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R2-D2 — 教師獨立科目庫接線（開發預覽）
+
+產品仍稱 Toki V8；內部 schema 9 使用獨立 `aster-timetable-data-v9` key，不更改 V7／V8 原始 key。使用者在 V8 Preview 的「教學資源」逐筆確認無法自動判定的科目歸屬與多教師任教配置，先匯出 V8 exact raw 並明確確認外部檔案已保存，才可啟動轉換。候選文件必須由同一份 V8 raw 與決策重新產生，通過獨立 V9 validator；舊 V8 raw 與 activation raw 寫入獨立、不可覆寫的 backup record，包含 SHA-256 digest、候選 raw、決策及讀回驗證。接著於 Web Lock 內按 `preparing → V9 文件 → active` 寫入；localStorage 跨 key 並非原子交易。中途失敗保留原始資料及部分紀錄，唯讀顯示；使用者可明確續接已驗證的同一候選，不自動重試或刪除任何 key。
+
+`useAppDataV9` 每次寫入前重新驗證 active metadata、目前文件 digest／revision、備份與原 V8／activation／V7 基準，執行 validator 及 safe-update，寫入兩個新 key 並讀回後才核發 raw＋revision receipt。storage event 撤銷資格；來源 V8 若被舊分頁改動，V9 停寫並保留匯出／採用外部版本入口。新版 V8 Host 在偵測 V9 文件、metadata 或孤立備份時亦停寫。若只有備份寫入成功，介面僅在唯一備份且來源未變時允許明確續接；多筆孤立備份必須人工處理。已載入不遵守協定的舊版分頁無法即時強制阻止；Web Locks 只協調遵守相同鎖的分頁，並非真正 CAS。同版本多分頁已完成隔離瀏覽器驗收；舊版分頁寫入的是 V7／V8 舊 key，不能直接覆寫 active V9 文件，但可能使來源基準失效，與正在進行的非原子 V9 寫入競爭時仍須人工檢查資料及 receipt。
+
+V8 Preview 啟用後改掛新 Host，提供 Project 新增／切換、教師課表新增／改名／僅設定複製／引用保護刪除，以及按教師隔離的科目新增／改名／安全刪除與跨任教單位配置。D2 管理整合使用 `managementV9` 將既有 V8 學校、任教單位、班級及 Project 複製規則套用於唯讀 V8 驗證投影，只將經 V9 validator／safe-update 通過的結果交給 `useAppDataV9.update`；沒有直接寫入舊 key。新學期複製按來源課表重建 Subject 的 `timetableId` 與所有相關 ID，僅選取各任教單位指定來源日期有效的固定課程；不複製 OneOff、Change、Event、Progress。Project 封存／重新啟用保留資料；永久刪除只有在無教師課表、科目、班級或其他教學依賴時開放，絕不以 V8 的級聯刪除處理有內容的新版專案。來源 Project 尚無教師課表時，管理 adapter 的狹義空白複製分支只複製學校、任教單位與班級設定，不虛構教師或課程；有教師課表時仍沿用既有 V8 copy policy。正式課程、事件與進度編輯器仍未接入新路徑。
+
+## Phase 4D R2-D2-B1 — Timetable-owned Subject 資料契約與唯讀盤點（歷史階段）
+
+`src/types/v9.ts` 定義獨立的 V9 文件與 `SubjectV9.projectId + timetableId`；現行 V8 schema、key、validator、Host 與 Preview 均不變。V9 validator 先以不改動輸入的 V8 投影重用既有非科目文件規則，再檢查 Subject 的 Timetable 歸屬、課表內名稱／簡稱唯一性，以及 Lesson、OneOff、Change replacement、Progress 的 Subject 與 Timetable 一致性。`TeachingUnitSubject` 不新增冗餘 `timetableId`：它仍以 Subject ID 連結同 Project 的 TeachingUnit，Subject 自身唯一擁有一份 Timetable，可合法配置於多個不同學制的 TeachingUnit；適用學制欄位仍須明確涵蓋該單位。不同教師即使同名，須使用獨立 Subject ID。
+
+`inspectSubjectMigrationV9` 僅掃描 V8 文件的五類直接／配置引用，輸出每筆 Subject 的候選課表、分類、引用數、複製需求與結構化阻擋 issue；無引用及只有任教配置者不猜測教師，多教師引用者標示須複製並待審核。`buildSubjectMigrationCandidateV9` 僅在每筆 Subject、任教配置均有明確課表及新 ID 決策時，於記憶體產生並驗證候選文件；不讀寫 Storage。此段描述 B1 原階段能力；後續接線如上。歷史課程仍依 Subject ID 顯示目前名稱，暫不新增名稱快照。
+
+## Phase 4D R2-D2 — V8 教學設定與資源接線
+
+V8 預覽導覽直接掛載既有 `TimetableManagerV8` 與 `V8SubjectClassManager`，同一份 `useAppDataV8` 文件、Host setter、writable 與 raw／revision receipt 為唯一寫入來源。教師課表選取為 Project-scoped UI state，切換 Project 後重新校驗，重載後可重新選取既有 Timetable；不為 Timetable 新增 TeachingUnit 外鍵。`AcademicSettingsV8` 使用專屬 `academicSettingsV8` 操作學校、任教單位日期、A/B 錨點與節次；操作前後經 V8 validator／safe-update，若單位已有班級、任教配置、課程、事件或進度引用，變更其歸屬、學制、日期、錨點或節次會明確阻擋，不靜默重寫歷史。設定元件只在 Host receipt raw／revision 與目前文件相符時回報成功。正式 V7 App、V7 dispatcher、bootstrap／activation 協定及課程畫面未改。
+
+普通新增 Project 僅建立必要的學校與任教單位，不繼承教學資源；Subject 清單始終由目前 Project ID 篩選。D2 科目管理器在 Project 切換時重推學校、任教單位與搜尋狀態；若有舊草稿則保留並禁止寫入，待使用者明確確認捨棄。教師課表表單綁定開啟時的 Project、選取 Timetable 與文件 raw；切換 Timetable 須確認捨棄舊草稿，空白新課表不帶入其他教師的 Lesson 或科目選取。Project 內的 Subject 庫可供所有教師日後選課，但課表本身沒有已選科目欄位。
+
 ## Phase 4D R2-D1 — V8 開發預覽 App Shell
 
 `DevAppEntry` 在開發模式預設渲染原 V7 `App`，只有使用者明確開啟 `#/v8-preview` 才卸載 V7 App 並渲染 `V8PreviewApp`；production 不提供此入口，也不因 hash 掛載 V8。路由不使用 localStorage。V8 預覽使用 `loadAppDataV8Only` 唯讀檢視，再由明確確認呼叫既有 Web Locks `bootstrapEmptyV8`；不得清除或遷移舊 key。既有 V8 只由 `useAppDataV8({ loadMode: 'v8-only' })` 載入，activation gate、validator、衝突與 receipt 均沿用 Host。開發預覽接入 `ProjectLifecycleV8`，其餘頁面明確標示開發中。正式 V7 Runtime、V8 bootstrap／activation 協定及正式週課表未改。V7 在全新 origin 首次掛載會持久化 V7 key；要驗收空白 V8，須在乾淨開發 origin 首次載入時直接進入預覽 hash，而不是先打開 V7 再切換。瀏覽器真實多分頁與完整備份／匯入恢復仍待驗收。產品對等表見 `docs/v7-v8-feature-parity.md`。

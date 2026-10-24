@@ -1,9 +1,11 @@
 import { useEffect, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import type { AppDataV8, SemesterKind } from '../types'
 import type { AppDataV8Persistence, AppDataV8RuntimeControls, AppDataV8RuntimeInfo, AppDataV8RuntimeStatus } from '../hooks/useAppDataV8'
-import { copyProject, createBlankProject, deleteProject, getProjectDeletionImpact, switchActiveProject,
+import { copyProject, createBlankProject, deleteProject, getProjectDeletionImpact,
   type CopyProjectUnitV8Input } from '../data/projectRuntimeV8'
 import { Modal } from './Modal'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { previewReadOnlyMessage } from '../previewReadOnlyV8'
 
 type Props = {
   data: AppDataV8
@@ -100,21 +102,19 @@ export function ProjectLifecycleV8({ data, setData, status, persistence, info, c
   }
   const exportData = () => onExport?.(controls.exportLocalJson())
 
-  return <Modal title="V8 專案管理" onClose={close}><div className="project-settings">
-    {!canWrite && <div role="status" className="form-error">目前無法寫入：{status}。請先匯出本頁資料並處理唯讀或衝突狀態。
+  return <Modal title="V8 專案管理" subtitle="建立、複製與安全管理課表專案。切換專案請使用左側選單。" onClose={close}><div className="project-settings">
+    {!canWrite && <div role="status" className="form-error">{previewReadOnlyMessage(status)}
       <button type="button" onClick={exportData} disabled={!onExport}>匯出本頁 JSON</button>
       <button type="button" onClick={controls.adoptExternalV8}>採用外部 V8</button>
+      <details><summary>診斷資訊</summary><code>{status}</code></details>
     </div>}
     {waitingRaw && <p role="status">等待 V8 寫入確認…</p>}
-    {page !== 'root' && <button type="button" onClick={() => { if (!dirty || window.confirm('捨棄尚未提交的專案草稿？')) setPage('root') }}>返回專案管理</button>}
+    {page !== 'root' && <div className="settings-breadcrumb"><button type="button" onClick={() => { if (!dirty || window.confirm('捨棄尚未提交的專案草稿？')) setPage('root') }}><ChevronLeft size={15} />返回專案管理</button></div>}
     {page === 'root' && <><nav className="settings-menu" aria-label="V8 專案管理">
-      <button type="button" onClick={() => { setDraft(newDraft()); setPage('blank') }}>新增空白專案</button>
-      <button type="button" onClick={beginCopy} disabled={!data.projects.length}>複製為新學期</button>
-      <button type="button" onClick={() => setPage('delete')} disabled={!data.projects.length}>刪除專案</button>
-    </nav><label>切換專案<select value={data.activeProjectId ?? ''} disabled={!canWrite}
-      onChange={(event) => { try { submit(switchActiveProject(data, event.target.value)) } catch (reason) { setError(issueText(reason)) } }}>
-      <option value="" disabled>選擇專案</option>{data.projects.filter((item) => !item.archivedAt).map((project) =>
-        <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></>}
+      <button type="button" className="settings-menu-item" onClick={() => { setDraft(newDraft()); setPage('blank') }}><span><strong>新增空白專案</strong><small>建立獨立專案，不複製其他專案的教學資源。</small></span><ChevronRight size={17} /></button>
+      <button type="button" className="settings-menu-item" onClick={beginCopy} disabled={!data.projects.length}><span><strong>複製為新學期</strong><small>另選來源專案與有效日期，依既有複製政策建立。</small></span><ChevronRight size={17} /></button>
+    </nav><section className="preview-danger-section"><h3>危險操作</h3><p>刪除前請先確認引用及保留外部備份。</p>
+      <button type="button" className="danger-button" onClick={() => setPage('delete')} disabled={!data.projects.length}>刪除專案</button></section></>}
     {(page === 'blank' || page === 'copy') && <form className="form-grid project-create-form" onSubmit={page === 'blank' ? submitBlank : submitCopy}>
       <p className="full">{page === 'blank' ? '只建立新專案及預設學校、任教單位；教師課表與科目等資源均不自動建立。'
         : '複製學校、任教單位、教師課表、科目、班級及指定日期有效的固定課程；不複製事件、異動、單日課程或進度。所有實體 ID 重新建立。'}</p>
@@ -137,9 +137,9 @@ export function ProjectLifecycleV8({ data, setData, status, persistence, info, c
             <label>A/B anchor<input required type="date" value={value.anchorDate} onChange={(event) => update({ anchorDate: event.target.value })} /></label>
             <label>anchor 週型<select value={value.anchorPattern} onChange={(event) => update({ anchorPattern: event.target.value as 'A' | 'B' })}>
               <option value="A">A 週</option><option value="B">B 週</option></select></label></fieldset> })}
-      <button className="primary-button" type="submit" disabled={!canWrite}>{page === 'blank' ? '新增並切換' : '複製並切換'}</button>
+      <div className="form-actions full"><button type="button" onClick={() => { if (!dirty || window.confirm('捨棄尚未提交的專案草稿？')) setPage('root') }}>取消</button><button className="primary-button" type="submit" disabled={!canWrite}>{page === 'blank' ? '新增並切換' : '複製並切換'}</button></div>
     </form>}
-    {page === 'delete' && <section><label>刪除對象<select value={deleteId} onChange={(event) => { setDeleteId(event.target.value); setBackupAcknowledged(false) }}>
+    {page === 'delete' && <section className="preview-delete-form"><h3>刪除專案</h3><label>刪除對象<select value={deleteId} onChange={(event) => { setDeleteId(event.target.value); setBackupAcknowledged(false) }}>
       <option value="">選擇專案</option>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
       {impact && <><p>將刪除：{impact.subjects} 科目、{impact.classes} 班級、{impact.timetables} 教師課表、{impact.recurringLessons} 固定課程、{impact.oneOffLessons} 單日課程、{impact.overrides} 異動、{impact.events} 事件、{impact.teachingProgress} 進度；其他專案保留。</p>
         <button type="button" onClick={exportData} disabled={!onExport}>匯出刪除前 JSON</button>

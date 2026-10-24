@@ -28,6 +28,7 @@ import {
   type V8OnlyLoadStatus,
 } from '../data/storageV8'
 import { APP_DATA_V7_KEY } from '../data/storageV7'
+import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_BACKUP_PREFIX } from '../data/storageV9'
 import { isCompatibleAppDataV8, isSafeAppDataV8Update } from '../data/validators/v8'
 import { withV8StorageLock } from '../data/v8Coordination'
 import type { AppDataV8 } from '../types'
@@ -60,7 +61,7 @@ export interface AppDataV8RuntimeInfo {
 }
 
 export async function checkV8HostWriteEligibility(
-  storage: Pick<Storage, 'getItem'>,
+  storage: Pick<Storage, 'getItem'> & Partial<Pick<Storage, 'key' | 'length'>>,
   expectedRaw: string | null,
   expectedTransactionId?: string,
 ): Promise<{ eligible: boolean; transaction: V8ActivationTransaction | null; bootstrap: V8BootstrapMetadata | null }> {
@@ -70,6 +71,10 @@ export async function checkV8HostWriteEligibility(
     const blocked = { eligible: false, transaction: loaded.value, bootstrap: bootstrap.value }
     if (loaded.issue !== 'none' || bootstrap.issue !== 'none'
       || (loaded.raw !== null && bootstrap.raw !== null)
+      || storage.getItem(APP_DATA_V9_KEY) !== null || storage.getItem(V9_ACTIVATION_KEY) !== null
+      || (typeof storage.length === 'number' && storage.key !== undefined
+        && Array.from({ length: storage.length }, (_, index) => storage.key!(index))
+          .some((key) => key?.startsWith(V9_BACKUP_PREFIX)))
       || storage.getItem(APP_DATA_V8_ACTIVATION_KEY) !== null
       || storage.getItem(APP_DATA_V8_KEY) !== expectedRaw || expectedRaw === null) return blocked
     parseAppDataV8Raw(expectedRaw)
@@ -356,7 +361,9 @@ export function useAppDataV8(options: { loadMode?: 'legacy-candidate' | 'v8-only
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === V8_TRANSACTION_KEY || event.key === APP_DATA_V8_ACTIVATION_KEY || event.key === V8_BOOTSTRAP_KEY) {
+      if (event.key === V8_TRANSACTION_KEY || event.key === APP_DATA_V8_ACTIVATION_KEY
+        || event.key === V8_BOOTSTRAP_KEY || event.key === APP_DATA_V9_KEY
+        || event.key === V9_ACTIVATION_KEY || event.key?.startsWith(V9_BACKUP_PREFIX)) {
         if (event.key === V8_BOOTSTRAP_KEY) setRawBootstrap(event.newValue)
         activationGenerationRef.current += 1
         writableRef.current = false

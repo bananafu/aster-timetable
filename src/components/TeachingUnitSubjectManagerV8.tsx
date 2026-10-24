@@ -59,6 +59,8 @@ export function TeachingUnitSubjectManagerV8({
   const units = data.teachingUnits.filter((unit) => unit.projectId === projectId)
   const [schoolId, setSchoolId] = useState(() => schools[0]?.id ?? '')
   const [unitId, setUnitId] = useState(() => units.find((unit) => unit.schoolId === schoolId)?.id ?? '')
+  const [scopeProjectId, setScopeProjectId] = useState(projectId)
+  const [staleScope, setStaleScope] = useState(false)
   const [query, setQuery] = useState('')
   const unit = units.find((item) => item.id === unitId && item.schoolId === schoolId)
   const [draft, setDraft] = useState<SubjectV8Draft>(() => emptyDraft(unit))
@@ -70,12 +72,41 @@ export function TeachingUnitSubjectManagerV8({
     storagePersistence,
   })
   const project = data.projects.find((item) => item.id === projectId)
+  const scopeChanged = staleScope || scopeProjectId !== projectId
   const editable = !readOnly && writable && Boolean(project && !project.archivedAt)
-    && storageStatus === 'saved' && !session.locked
+    && storageStatus === 'saved' && !session.locked && !scopeChanged
   const hasDraft = Boolean(editingSubjectId || draft.name.trim() || draft.shortName.trim())
   const view = useMemo(() => projectId && unit
     ? getTeachingUnitSubjectView(data, projectId, unit.id, query, catalog)
     : { configured: [], available: [] }, [data, projectId, query, unit])
+
+  useEffect(() => {
+    if (scopeProjectId === projectId) return
+    if (hasDraft || session.locked) { setStaleScope(true); return }
+    const nextSchoolId = schools[0]?.id ?? ''
+    const nextUnit = units.find((item) => item.schoolId === nextSchoolId)
+    setSchoolId(nextSchoolId)
+    setUnitId(nextUnit?.id ?? '')
+    setDraft(emptyDraft(nextUnit))
+    setEditingSubjectId(null)
+    setQuery('')
+    setScopeProjectId(projectId)
+  }, [hasDraft, projectId, schools, scopeProjectId, session.locked, units])
+
+  const discardStaleScope = () => {
+    if (session.locked) { session.fail('科目操作尚未確認儲存，暫時不能捨棄草稿。'); return }
+    if (hasDraft && !window.confirm('專案已切換，確定捨棄前一專案的科目草稿？')) return
+    const nextSchoolId = schools[0]?.id ?? ''
+    const nextUnit = units.find((item) => item.schoolId === nextSchoolId)
+    setSchoolId(nextSchoolId)
+    setUnitId(nextUnit?.id ?? '')
+    setDraft(emptyDraft(nextUnit))
+    setEditingSubjectId(null)
+    setQuery('')
+    setScopeProjectId(projectId)
+    setStaleScope(false)
+    session.clearMessage()
+  }
 
   useEffect(() => {
     if (session.locked || hasDraft) return
@@ -91,6 +122,7 @@ export function TeachingUnitSubjectManagerV8({
   }, [hasDraft, schoolId, schools, session.locked, unitId, units])
 
   const requestScope = (nextSchoolId: string, nextUnitId: string) => {
+    if (scopeChanged) { session.fail('專案已切換；請先確認是否捨棄前一專案的草稿。'); return }
     if (session.locked) {
       session.fail('科目操作尚未確認儲存，暫時不能切換學校或學制。')
       return
@@ -195,8 +227,8 @@ export function TeachingUnitSubjectManagerV8({
   }
 
   const edit = (subjectId: string) => {
-    if (session.locked) return
-    const subject = data.subjects.find((item) => item.id === subjectId)
+    if (session.locked || scopeChanged) return
+    const subject = data.subjects.find((item) => item.id === subjectId && item.projectId === projectId)
     if (!subject) return
     if (hasDraft && editingSubjectId !== subjectId
       && !window.confirm('尚有未儲存的科目輸入，確定捨棄並編輯另一個科目？')) return
@@ -222,6 +254,9 @@ export function TeachingUnitSubjectManagerV8({
   }
 
   return <section className="teaching-unit-subject-manager" aria-label="依學校與學制管理科目">
+    {scopeChanged && <p role="alert" className="form-error">專案已切換；前一專案的科目草稿已保留，但不能寫入目前專案。
+      <button type="button" onClick={discardStaleScope}>捨棄舊草稿並使用目前專案</button>
+    </p>}
     <div className="subject-configuration-list" aria-label="目前專案科目庫">
       <h3>目前專案科目庫</h3>
       {data.subjects.filter((subject) => subject.projectId === projectId).length === 0 && <p className="resource-list-empty">目前專案尚無科目。</p>}
@@ -233,7 +268,7 @@ export function TeachingUnitSubjectManagerV8({
     </div>
     <div className="resource-list-tools teaching-unit-subject-scope">
       <label>學校
-        <select value={schoolId} disabled={session.locked} onChange={(event) => {
+        <select value={schoolId} disabled={session.locked || scopeChanged} onChange={(event) => {
           const nextSchoolId = event.target.value
           const nextUnit = units.find((item) => item.schoolId === nextSchoolId)
           requestScope(nextSchoolId, nextUnit?.id ?? '')
@@ -242,7 +277,7 @@ export function TeachingUnitSubjectManagerV8({
         </select>
       </label>
       <label>學制
-        <select value={unitId} disabled={session.locked || !schoolId} onChange={(event) => requestScope(schoolId, event.target.value)}>
+        <select value={unitId} disabled={session.locked || scopeChanged || !schoolId} onChange={(event) => requestScope(schoolId, event.target.value)}>
           {units.filter((item) => item.schoolId === schoolId).map((item) => <option key={item.id} value={item.id}>
             {levelLabel[item.schoolLevel]}{units.filter((peer) => peer.schoolId === schoolId && peer.schoolLevel === item.schoolLevel).length > 1 ? `・${item.name}` : ''}
           </option>)}
@@ -284,7 +319,8 @@ export function TeachingUnitSubjectManagerV8({
         </div>
         {view.available.length === 0 && <p className="resource-list-empty">沒有其他可啟用的既有科目。</p>}
       </div>
-
+    </>}
+    {(unit || scopeChanged) &&
       <form className="subject-management-row teaching-unit-subject-create" aria-label={editingSubjectId ? '編輯科目表單' : '新增科目表單'} onSubmit={addSubject}>
         <label>科目名稱<input aria-label={editingSubjectId ? '編輯科目名稱' : '新科目名稱'} value={draft.name} disabled={!editable} onChange={(event) => {
           setDraft((current) => ({ ...current, name: event.target.value })); session.clearMessage()
@@ -303,7 +339,7 @@ export function TeachingUnitSubjectManagerV8({
           <button type="submit" className="primary-button" disabled={!editable}>{editingSubjectId ? '儲存科目' : '新增科目'}</button>
         </div>
       </form>
-    </>}
+    }
 
     {session.locked && <p className="teaching-unit-subject-status" role="status">正在確認科目資料是否已儲存…</p>}
     {session.error && <p className="form-error" role="alert">{session.error}</p>}

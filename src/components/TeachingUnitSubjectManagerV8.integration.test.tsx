@@ -11,6 +11,7 @@ import { migrateV5ToV6 } from '../data/migrationsV6'
 import { migrateV6ToV7 } from '../data/migrationsV7'
 import { migrateV7ToV8 } from '../data/migrationsV8'
 import { configureSubjectForTeachingUnit, createSubject, createSubjectForTeachingUnit } from '../data/subjectsV8'
+import { createBlankProject, switchActiveProject } from '../data/projectRuntimeV8'
 import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { APP_DATA_V8_KEY, loadAppDataV8 } from '../data/storageV8'
 import { isCompatibleAppDataV8, isSafeAppDataV8Update } from '../data/validators/v8'
@@ -96,6 +97,64 @@ afterEach(() => {
 })
 
 describe('TeachingUnitSubjectManagerV8', () => {
+  it('keeps the Subject library Project-scoped and blocks an old Project draft until explicit discard', () => {
+    const source = fixture()
+    const projectA = source.activeProjectId!
+    const ids = ['project-b', 'school-project-b', 'unit-project-b']
+    const withB = createBlankProject(source, { name: 'Project B', academicYear: 116, semester: 'first',
+      startDate: '2027-08-01', endDate: '2028-01-31' }, () => ids.shift()!)
+    const activeA = switchActiveProject(withB, projectA)
+    const setData = vi.fn()
+    const props = { data: activeA, setData, storageStatus: 'saved' as const,
+      storagePersistence: { pending: false, revision: 0 }, createId: vi.fn()
+        .mockReturnValueOnce('subject-project-b').mockReturnValueOnce('relation-project-b') }
+    const { rerender } = render(<TeachingUnitSubjectManagerV8 {...props} />)
+    expect(within(screen.getByLabelText('目前專案科目庫')).getByText('國語文')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: 'A 的未存草稿' } })
+    rerender(<TeachingUnitSubjectManagerV8 {...props} data={withB} />)
+    expect(within(screen.getByLabelText('目前專案科目庫')).queryByText('國語文')).toBeNull()
+    expect(screen.getByText('目前專案尚無科目。')).toBeTruthy()
+    expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe('A 的未存草稿')
+    expect((screen.getByText('新增科目') as HTMLButtonElement).disabled).toBe(true)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    fireEvent.click(screen.getByText('捨棄舊草稿並使用目前專案'))
+    expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe('A 的未存草稿')
+    confirm.mockReturnValue(true)
+    fireEvent.click(screen.getByText('捨棄舊草稿並使用目前專案'))
+    expect((screen.getByLabelText('新科目名稱') as HTMLInputElement).value).toBe('')
+    fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: 'B 的科目' } })
+    fireEvent.change(screen.getByLabelText('新科目簡稱'), { target: { value: 'B科' } })
+    fireEvent.click(screen.getByText('新增科目'))
+    expect(setData).toHaveBeenCalledOnce()
+    const next = (setData.mock.calls[0][0] as (data: AppDataV8) => AppDataV8)(withB)
+    expect(next.subjects.filter((subject) => subject.projectId === 'project-b').map((subject) => subject.name))
+      .toEqual(['B 的科目'])
+    expect(next.subjects.filter((subject) => subject.projectId === projectA)).toEqual(activeA.subjects)
+  })
+
+  it('re-derives school, unit, and search selection when Projects change without a draft', () => {
+    const source = fixture()
+    const projectA = source.activeProjectId!
+    const ids = ['project-b', 'school-project-b', 'unit-project-b']
+    const withB = createBlankProject(source, { name: 'Project B', academicYear: 116, semester: 'first',
+      startDate: '2027-08-01', endDate: '2028-01-31' }, () => ids.shift()!)
+    const activeA = switchActiveProject(withB, projectA)
+    const props = { data: activeA, setData: vi.fn(), storageStatus: 'saved' as const,
+      storagePersistence: { pending: false, revision: 0 } }
+    const { rerender } = render(<TeachingUnitSubjectManagerV8 {...props} />)
+    selectSchool('school-b')
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '國語文' } })
+    rerender(<TeachingUnitSubjectManagerV8 {...props} data={withB} />)
+    expect((screen.getByLabelText('學校') as HTMLSelectElement).value).toBe('school-project-b')
+    expect((screen.getByLabelText('學制') as HTMLSelectElement).value).toBe('unit-project-b')
+    expect((screen.getByLabelText('搜尋科目') as HTMLInputElement).value).toBe('')
+    expect(screen.getByText('目前專案尚無科目。')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    rerender(<TeachingUnitSubjectManagerV8 {...props} data={activeA} />)
+    expect((screen.getByLabelText('學校') as HTMLSelectElement).value).toBe('school-a')
+    expect(within(screen.getByLabelText('目前專案科目庫')).getByText('國語文')).toBeTruthy()
+  })
+
   it('deletes only an unreferenced Project Subject after confirmation', async () => {
     const source = fixture()
     const projectId = source.activeProjectId!

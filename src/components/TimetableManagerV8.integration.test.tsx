@@ -5,6 +5,7 @@ import type { AppDataV8 } from '../types'
 import { createEmptyAppDataV8 } from '../data/storageV8'
 import { createBlankProject } from '../data/projectRuntimeV8'
 import { createTeacherTimetableV8 } from '../data/timetablesV8'
+import { createSubjectForTeachingUnit } from '../data/subjectsV8'
 import { TimetableManagerV8 } from './TimetableManagerV8'
 
 function fixture() {
@@ -57,7 +58,7 @@ describe('standalone V8 teacher Timetable manager', () => {
     expect((screen.getByLabelText('目前選取的教師課表') as HTMLSelectElement).value).toBe('teacher-a')
     rerender(<TimetableManagerV8 {...props} data={{ ...withB, activeProjectId: b }} writable={false} status="conflict" />)
     expect((screen.getByLabelText('目前選取的教師課表') as HTMLSelectElement).value).toBe('teacher-b')
-    expect((screen.getByText('新增教師課表') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /新增教師課表/ }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByText('匯出本頁 JSON'))
     expect(props.onExport).toHaveBeenCalledWith('{}')
   })
@@ -73,7 +74,7 @@ describe('standalone V8 teacher Timetable manager', () => {
     expect(props.onClose).not.toHaveBeenCalled()
     fireEvent.submit(screen.getByLabelText('教師課表表單'))
     rerender(<TimetableManagerV8 {...props} status="write-error" />)
-    expect(screen.getByRole('alert').textContent).toContain('草稿已保留')
+    expect(screen.getAllByRole('alert').some((item) => item.textContent?.includes('草稿已保留'))).toBe(true)
     expect((screen.getByLabelText('課表名稱') as HTMLInputElement).value).toBe('草稿')
   })
 
@@ -108,7 +109,7 @@ describe('standalone V8 teacher Timetable manager', () => {
     expect(next.timetables.map((item) => item.id)).toEqual(['teacher-b'])
   })
 
-  it('keeps an open draft scoped to its original Project and edit target', () => {
+  it('confirms timetable switches, discards old selection drafts, and blocks stale Project drafts', () => {
     const base = fixture()
     const [a, b] = base.projects
     const first = createTeacherTimetableV8(base, a.id, { name: '甲課表', teacherName: '甲' }, 'teacher-a')
@@ -117,15 +118,46 @@ describe('standalone V8 teacher Timetable manager', () => {
     const { props, rerender } = mount({ data: activeA })
     fireEvent.click(screen.getByText('編輯教師課表'))
     fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '修改甲' } })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     fireEvent.change(screen.getByLabelText('目前選取的教師課表'), { target: { value: 'teacher-b' } })
-    fireEvent.submit(screen.getByLabelText('教師課表表單'))
-    const next = vi.mocked(props.setData).mock.calls[0][0] as AppDataV8
-    expect(next.timetables.find((item) => item.id === 'teacher-a')?.name).toBe('修改甲')
-    expect(next.timetables.find((item) => item.id === 'teacher-b')?.name).toBe('乙課表')
+    expect((screen.getByLabelText('目前選取的教師課表') as HTMLSelectElement).value).toBe('teacher-a')
+    expect((screen.getByLabelText('課表名稱') as HTMLInputElement).value).toBe('修改甲')
+    expect(props.setData).not.toHaveBeenCalled()
+    confirm.mockReturnValue(true)
+    fireEvent.change(screen.getByLabelText('目前選取的教師課表'), { target: { value: 'teacher-b' } })
+    expect((screen.getByLabelText('目前選取的教師課表') as HTMLSelectElement).value).toBe('teacher-b')
+    expect(screen.queryByLabelText('教師課表表單')).toBeNull()
+    fireEvent.click(screen.getByText('編輯教師課表'))
+    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '修改乙' } })
     const activeB = { ...both, activeProjectId: b.id }
     rerender(<TimetableManagerV8 {...props} data={activeB} />)
     fireEvent.submit(screen.getByLabelText('教師課表表單'))
-    expect(props.setData).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole('alert').textContent).toContain('草稿已保留')
+    expect(props.setData).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('alert').some((item) => item.textContent?.includes('草稿已保留'))).toBe(true)
+  })
+
+  it('does not copy Project Subjects or another teacher lesson into a new blank timetable', () => {
+    const base = fixture()
+    const projectId = base.activeProjectId!
+    const withSubject = createSubjectForTeachingUnit(base, projectId,
+      base.teachingUnits.find((unit) => unit.projectId === projectId)!.id,
+      { name: '數學', shortName: '數', color: '#123456', applicableSchoolLevels: ['senior-high'] },
+      'subject-a', 'relation-a')
+    const withTeacher = createTeacherTimetableV8(withSubject, projectId,
+      { name: '甲課表', teacherName: '甲' }, 'teacher-a')
+    const { props } = mount({ data: withTeacher })
+    expect(screen.getByText(/科目庫由目前專案共用；新增空白教師課表不會預選科目/)).toBeTruthy()
+    fireEvent.click(screen.getByText('新增教師課表'))
+    expect((screen.getByLabelText('課表名稱') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('教師名稱') as HTMLInputElement).value).toBe('')
+    fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '乙課表' } })
+    fireEvent.change(screen.getByLabelText('教師名稱'), { target: { value: '乙' } })
+    fireEvent.submit(screen.getByLabelText('教師課表表單'))
+    const next = vi.mocked(props.setData).mock.calls[0][0] as AppDataV8
+    expect(next.timetables.map((item) => item.name)).toEqual(['甲課表', '乙課表'])
+    expect(next.subjects).toEqual(withTeacher.subjects)
+    expect(next.teachingUnitSubjects).toEqual(withTeacher.teachingUnitSubjects)
+    expect(next.recurringLessons).toEqual(withTeacher.recurringLessons)
+    expect(next.oneOffLessons).toEqual(withTeacher.oneOffLessons)
   })
 })
