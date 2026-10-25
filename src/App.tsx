@@ -580,7 +580,11 @@ export default function App() {
     <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
       <Sidebar activePage={activePage} onNavigate={navigateFromSidebar} open={sidebarOpen} onOpen={() => setSidebarOpen(true)} onClose={() => setSidebarOpen(false)} storageStatus={storageStatus} projects={appData.projects} activeProjectId={appData.activeProjectId} onProjectChange={switchProject} canManageResources={canManageResources} resourceMode={resourceDialog?.source === 'sidebar' ? resourceDialog.mode : null} subjectCount={selectedSubjectCount} classCount={activeClassCount} collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} subjectManagerButtonRef={sidebarSubjectManagerButtonRef} classManagerButtonRef={sidebarClassManagerButtonRef} />
       <main className={`main-area ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
-        {storageStatus !== 'read-error' && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))} onAddProject={openNewProject} onAddTimetable={openBlankTimetable} canAddTimetable={canCreateTimetable} addTimetableReason={createTimetableUnavailableReason} onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject) || storageStatus !== 'saved'} />}
+        {storageStatus !== 'read-error' && <Topbar weekStart={weekStart} onWeekChange={(days) => setWeekStart(addDays(weekStart, days))} onToday={() => setWeekStart(startOfWeek(new Date()))}
+          addActions={[{ id: 'project', label: '新增專案', onSelect: openNewProject },
+            { id: 'timetable', label: '新增空白課表', onSelect: openBlankTimetable,
+              disabled: !canCreateTimetable, reason: createTimetableUnavailableReason }]}
+          onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject) || storageStatus !== 'saved'} />}
         {storageStatus !== 'saved' && <StorageSafetyNotice status={storageStatus} controls={storageControls} />}
         {storageStatus === 'read-error' ? <section className="content"><div className="panel blocked-editor"><h1>資料尚未載入</h1><p>為避免在不完整資料上編輯，目前已鎖定課表。請先匯出原始 JSON，或經二次確認後重設。</p></div></section> : !displayProject ? <FirstUse data={appData} setData={setAppData} onViewArchived={viewArchivedProject} /> : <>
         <div className="content">

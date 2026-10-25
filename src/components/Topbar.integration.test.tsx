@@ -10,8 +10,9 @@ describe('Topbar add menu', () => {
     const onAddProject = vi.fn()
     const onAddTimetable = vi.fn()
     render(<Topbar weekStart={new Date(2026, 8, 7)} onWeekChange={vi.fn()} onToday={vi.fn()}
-      onMenu={vi.fn()} onAddProject={onAddProject} onAddTimetable={onAddTimetable}
-      canAddTimetable={canAddTimetable} addTimetableReason="請先建立課表專案。" />)
+      onMenu={vi.fn()} addActions={[{ id: 'project', label: '新增專案', onSelect: onAddProject },
+        { id: 'timetable', label: '新增空白課表', onSelect: onAddTimetable,
+          disabled: !canAddTimetable, reason: '請先建立課表專案。' }]} />)
     return { onAddProject, onAddTimetable }
   }
 

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { addDays, startOfWeek } from '../lib/date'
 import { useAppDataV9 } from '../hooks/useAppDataV9'
 import { resumeTimetableSubjectsV9 } from '../data/activateSubjectV9'
 import { V9_BACKUP_PREFIX } from '../data/storageV9'
@@ -9,21 +10,22 @@ import { createBlankProjectV9, createTeacherSubjectV9, createTeacherTimetableV9,
 import type { AppDataV9, SubjectV9 } from '../types/v9'
 import { PreviewProjectSwitcher } from './PreviewProjectSwitcher'
 import { TimetableSwitcher } from './TimetableControls'
-import { PreviewSidebar, PreviewTopbar, type PreviewNavItem } from './PreviewShellNavigation'
+import { PreviewSidebar, type PreviewNavItem } from './PreviewShellNavigation'
+import { Topbar } from './Topbar'
 import { AcademicClassManagerV9 } from './AcademicClassManagerV9'
 import { Modal } from './Modal'
 import { archiveProjectV9, copyProjectV9, deleteEmptyProjectV9,
   getProjectV9Impact, reactivateProjectV9 } from '../data/managementV9'
-import { GraduationCap, LayoutDashboard, LibraryBig, Settings, Shapes } from 'lucide-react'
+import { CalendarDays, GraduationCap, LayoutDashboard, LibraryBig, Settings, Shapes } from 'lucide-react'
 
-type Page = 'overview' | 'projects' | 'timetables' | 'subjects' | 'settings'
+type Page = 'overview' | 'projects' | 'timetables' | 'subjects' | 'events' | 'settings'
 type CopyUnitDraft = { sourceEffectiveDate: string; startDate: string; endDate: string; anchorDate: string; anchorPattern: 'A' | 'B' }
 const pages: (PreviewNavItem & { id: Page })[] = [
   { id: 'overview', label: '總覽', icon: LayoutDashboard },
-  { id: 'projects', label: '專案', icon: Shapes },
   { id: 'timetables', label: '教師課表', icon: GraduationCap },
   { id: 'subjects', label: '科目與班級', icon: LibraryBig },
-  { id: 'settings', label: '任教單位', icon: Settings },
+  { id: 'events', label: '會議與活動', icon: CalendarDays },
+  { id: 'settings', label: '設定', icon: Settings },
 ]
 type Scope = { projectId: string | null; timetableId: string | null; raw: string }
 const blank = (): SubjectDraftV9 => ({ name: '', shortName: '', color: '#A66D52', applicableSchoolLevels: ['senior-high'] })
@@ -41,6 +43,7 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
   const host = useAppDataV9()
   const data = host.data
   const [page, setPage] = useState<Page>('overview')
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [menuOpen, setMenuOpen] = useState(false)
   const [selection, setSelection] = useState<{ projectId: string | null; timetableId: string | null }>(
     { projectId: null, timetableId: null })
@@ -188,8 +191,8 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
   return <>
     <PreviewSidebar open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={() => setMenuOpen(false)} activePage={page}
       collapsed={sidebarCollapsed} onCollapsedChange={onSidebarCollapsedChange}
-      mobileItemIds={['overview', 'timetables', 'subjects']}
-      items={pages} label="V8 教師科目庫導覽" onNavigate={(id) => navigate(id as Page)}
+      mobileItemIds={['overview', 'timetables', 'events']}
+      items={pages} label="Toki 工作區導覽" onNavigate={(id) => navigate(id as Page)}
       controls={<div className="project-switcher v8-preview-switchers">目前專案
         <PreviewProjectSwitcher projects={data?.projects ?? []} selectedId={projectId} disabled={!writable} onSelect={selectProject} />
         <div className="preview-timetable-control"><span>目前教師課表</span>
@@ -197,19 +200,32 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
             buttonLabel="切換目前教師課表" buttonText={timetable?.name ?? '尚未建立課表'} />
         </div>
       </div>}
-      footer={<div className="storage-status" role="status">{writable ? '可寫入' : verifying ? '正在確認資料' : '唯讀／需處理'}</div>} />
-    <main className="main-area"><PreviewTopbar title="V8 教師獨立科目庫" onMenu={() => setMenuOpen(true)} onReturn={onReturn} />
-      <div className="content"><section className="page-heading"><div><p className="eyebrow">Toki / V8</p>
-        <h1>{{ overview: '總覽', projects: '課表專案', timetables: '教師課表', subjects: '科目與班級', settings: '任教單位' }[page]}</h1></div></section>
-        <section className="panel v8-preview-panel"><p>目前專案：{project?.name ?? '尚未建立'}；目前教師課表：{timetable?.name ?? '尚未建立'}。</p>
-          {!writable && <div role={verifying ? 'status' : 'alert'} className="preview-readonly-notice">{verifying ? '正在確認資料及啟用紀錄，暫停寫入。' : readOnlyReason}
+      footer={<><button type="button" aria-label="專案管理" title="專案管理" onClick={() => navigate('projects')}>
+        <Shapes size={19} strokeWidth={1.8} aria-hidden="true" /><span className="sidebar-item-label">專案管理</span>
+      </button><div className="storage-status" role="status">{writable ? '可寫入' : verifying ? '正在確認資料' : '唯讀／需處理'}</div></>} />
+    <main className="main-area"><Topbar weekStart={weekStart}
+      onWeekChange={(days) => setWeekStart((current) => addDays(current, days))}
+      onToday={() => setWeekStart(startOfWeek(new Date()))} onMenu={() => setMenuOpen(true)}
+      trailing={<button className="today-button preview-return-button" onClick={onReturn}>返回 V7</button>}
+      addActions={[
+        { id: 'lesson', label: '新增課程', disabled: true, reason: 'V9 課程新增尚未開放。' },
+        { id: 'meeting', label: '新增會議', disabled: true, reason: 'V9 會議新增尚未開放。' },
+        { id: 'activity', label: '新增活動', disabled: true, reason: 'V9 活動新增尚未開放。' },
+        { id: 'project', label: '新增專案', onSelect: () => navigate('projects'), disabled: !writable,
+          reason: '目前資料不可寫入，請先確認資料狀態。' },
+      ]} />
+      <div className="content"><section className="page-heading"><div><p className="eyebrow">Toki / Preview</p>
+        <h1>{{ overview: '總覽', projects: '課表專案', timetables: '教師課表', subjects: '科目與班級', events: '會議與活動', settings: '設定' }[page]}</h1></div></section>
+        {!writable && <section className="panel v8-preview-panel preview-safety-panel"><div role={verifying ? 'status' : 'alert'} className="preview-readonly-notice">{verifying ? '正在確認資料及啟用紀錄，暫停寫入。' : readOnlyReason}
             <button onClick={() => void host.adoptExternal().then((ok) => {
               if (!ok) setMessage('外部版本或原始來源未通過驗證；仍維持唯讀，請先匯出資料。')
             })}>檢查並採用外部版本</button>
-            <details><summary>診斷資訊</summary><code>{host.status}{host.errorCode ? ` / ${host.errorCode}` : ''}</code></details></div>}
-          {message && <p role="status">{message}</p>}
+            <p>資料救援與匯出請至「設定」查看。</p></div></section>}
+        {message && <p role="status">{message}</p>}
+        {page === 'settings' && <section className="panel v8-preview-panel preview-recovery-panel">
           <details className="v8-preview-advanced"><summary>進階資料管理與救援匯出</summary>
             <p>只有在備份、資料衝突或轉換恢復時才需要使用。匯出不會更動原始資料。</p>
+            <p>目前狀態：<code>{host.status}{host.errorCode ? ` / ${host.errorCode}` : ''}</code></p>
           <div className="v8-preview-actions">{host.exportLocalJson() && <button onClick={() => download(JSON.stringify({
             documentRaw: host.exportLocalJson(), draft: { projectDraft, tableDraft, subjectDraft,
               editingSubjectId: editing, editingTableId, scope: draftScope },
@@ -222,11 +238,20 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
             匯出備份 {key.slice(V9_BACKUP_PREFIX.length)}</button>)}
           {(host.status === 'preparing' || host.status === 'interrupted') &&
             <button disabled={busy} onClick={() => void resume()}>確認續接中斷的科目庫轉換</button>}
-          </div></details>
-        </section>
-        {data && page === 'overview' && <section className="panel v8-preview-panel"><h2>教師獨立科目庫</h2>
-          <p>這份課表有 {subjects.length} 筆科目；同一教師可將科目配置到多個任教單位。不同教師可以使用同名科目。</p>
-          <button onClick={() => navigate('subjects')}>管理目前教師科目</button></section>}
+          </div></details></section>}
+        {data && page === 'overview' && <><section className="dashboard-cards v9-overview-cards" aria-label="目前工作區">
+          <article className="summary-card"><span>目前專案</span><strong>{project?.name ?? '尚未建立'}</strong>
+            <button type="button" onClick={() => navigate('projects')}>管理專案</button></article>
+          <article className="summary-card"><span>目前教師課表</span><strong>{timetable?.name ?? '尚未建立'}</strong>
+            <button type="button" onClick={() => navigate('timetables')}>查看教師課表</button></article>
+          <article className="summary-card"><span>目前教師科目</span><strong>{subjects.length} 科</strong>
+            <button type="button" onClick={() => navigate('subjects')}>查看科目工作區</button></article>
+        </section><section className="panel v8-preview-panel v9-overview-empty"><h2>本週行事曆</h2>
+          <p>V9 工作區尚未接入課程與事件檢視；日期導覽只調整畫面週次，不會建立或修改資料。</p>
+        </section></>}
+        {page === 'events' && <section className="panel v8-preview-panel v9-workspace-empty"><h2>會議與活動</h2>
+          <p>V9 工作區的會議與活動尚未接入。此處不會顯示或建立事件；既有 V7 功能仍可從正式入口使用。</p>
+        </section>}
         {data && projectManagerOpen && <Modal title="課表專案管理" subtitle="新增、複製、封存與安全刪除"
           onClose={() => { if (confirmDiscard()) { resetDrafts(); setProjectManagerOpen(false) } }}>
           <section className="project-settings preview-management-page preview-project-manager"><div className="preview-section-heading"><div><h2>課表專案</h2><p>切換專案請使用左側的專案 Popover；管理彈窗不會因導覽而切換背景頁面。</p></div></div>
