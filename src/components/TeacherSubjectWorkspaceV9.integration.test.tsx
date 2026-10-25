@@ -48,7 +48,37 @@ async function activated() {
   return { sourceRaw: saved.raw, projectId: source.activeProjectId! }
 }
 
+function switchPreviewTimetable(id: string) {
+  fireEvent.click(screen.getByRole('button', { name: '切換目前教師課表' }))
+  const option = screen.getByRole('menu', { name: '教師課表' })
+    .querySelector<HTMLButtonElement>(`[data-timetable-id="${id}"]`)
+  if (!option) throw new Error(`Missing timetable option: ${id}`)
+  fireEvent.click(option)
+}
+
+function selectedPreviewTimetableId() {
+  fireEvent.click(screen.getByRole('button', { name: '切換目前教師課表' }))
+  const id = screen.getByRole('menu', { name: '教師課表' })
+    .querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]')?.dataset.timetableId ?? null
+  fireEvent.keyDown(document, { key: 'Escape' })
+  return id
+}
+
 describe('V8 Preview teacher-owned Subject library', () => {
+  it('Preview Logo 調整桌面內容欄寬，手機導覽切換頁面不觸發資料寫入', async () => {
+    await activated()
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    const raw = localStorage.getItem(APP_DATA_V9_KEY)
+    expect(document.querySelector('.app-shell')?.classList.contains('sidebar-is-collapsed')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '展開側邊欄' }))
+    expect(document.querySelector('.app-shell')?.classList.contains('sidebar-is-collapsed')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '手機導覽：科目與班級' }))
+    expect(screen.getByRole('heading', { level: 1, name: '科目與班級' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '手機導覽：更多' }))
+    expect(document.querySelector('.sidebar')?.classList.contains('sidebar-open')).toBe(true)
+    expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(raw)
+  })
+
   it('uses the Project popover and separates copy, archive and guarded deletion', async () => {
     await activated()
     render(<V8PreviewApp onReturn={vi.fn()} />)
@@ -143,7 +173,7 @@ describe('V8 Preview teacher-owned Subject library', () => {
     expect(subjectCount).toBe(1)
     fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
     const teacherB = JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).timetables[1].id
-    fireEvent.change(screen.getByLabelText('切換目前教師課表'), { target: { value: teacherB } })
+    switchPreviewTimetable(teacherB)
     fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
     expect(screen.getByText('此教師尚無科目；不繼承其他教師的科目。')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('科目名稱'), { target: { value: '數學' } })
@@ -217,14 +247,14 @@ describe('V8 Preview teacher-owned Subject library', () => {
     fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
     fireEvent.change(screen.getByLabelText('科目名稱'), { target: { value: '未儲存科目' } })
     vi.mocked(window.confirm).mockReturnValueOnce(false)
-    fireEvent.change(screen.getByLabelText('切換目前教師課表'), { target: { value: teacherB } })
+    switchPreviewTimetable(teacherB)
     expect((screen.getByLabelText('科目名稱') as HTMLInputElement).value).toBe('未儲存科目')
-    expect((screen.getByLabelText('切換目前教師課表') as HTMLSelectElement).value).toBe('teacher-a')
-    fireEvent.change(screen.getByLabelText('切換目前教師課表'), { target: { value: teacherB } })
+    expect(selectedPreviewTimetableId()).toBe('teacher-a')
+    switchPreviewTimetable(teacherB)
     expect(screen.queryByRole('dialog', { name: '教師科目管理' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
     expect((screen.getByLabelText('科目名稱') as HTMLInputElement).value).toBe('')
-    expect((screen.getByLabelText('切換目前教師課表') as HTMLSelectElement).value).toBe(teacherB)
+    expect(selectedPreviewTimetableId()).toBe(teacherB)
     expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects).toHaveLength(0)
   })
 

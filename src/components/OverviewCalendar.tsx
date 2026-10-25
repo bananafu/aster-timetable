@@ -24,7 +24,9 @@ function eventLabel(event: CalendarEventV4) {
 
 function CourseItem({ lesson, onLessonClick, onOneOffClick }: { lesson: ResolvedScheduleOccurrence; onLessonClick?: Props['onLessonClick']; onOneOffClick?: Props['onOneOffClick'] }) {
   const cancelled = lesson.kind === 'recurring' && lesson.status === 'cancelled'
-  const status = cancelled ? '已取消' : lesson.kind === 'one-off' ? '單日課程' : lesson.status === 'replaced' ? '已替換' : lesson.status === 'moved' ? '已移動' : null
+  const status = cancelled ? '已取消' : lesson.kind === 'one-off'
+    ? { extra: '單日新增', 'make-up': '補課', substitute: '代課' }[lesson.purpose]
+    : lesson.status === 'replaced' ? '已替換' : lesson.status === 'moved' ? '已移動' : null
   const onClick = lesson.kind === 'one-off'
     ? onOneOffClick && (() => onOneOffClick(lesson.id))
     : onLessonClick && (() => onLessonClick(lesson.id, lesson.date, lesson.overrideId))

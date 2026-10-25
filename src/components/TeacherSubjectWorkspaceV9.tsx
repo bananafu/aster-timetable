@@ -8,6 +8,7 @@ import { createBlankProjectV9, createTeacherSubjectV9, createTeacherTimetableV9,
   switchActiveProjectV9, updateTeacherTimetableV9, type SubjectDraftV9 } from '../data/teacherSubjectsV9'
 import type { AppDataV9, SubjectV9 } from '../types/v9'
 import { PreviewProjectSwitcher } from './PreviewProjectSwitcher'
+import { TimetableSwitcher } from './TimetableControls'
 import { PreviewSidebar, PreviewTopbar, type PreviewNavItem } from './PreviewShellNavigation'
 import { AcademicClassManagerV9 } from './AcademicClassManagerV9'
 import { Modal } from './Modal'
@@ -33,8 +34,9 @@ function download(raw: string, filename: string) {
 }
 
 /** Internal schema 9, presented as the Toki V8 teacher-owned Subject workspace. */
-export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered }: {
+export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollapsed, onSidebarCollapsedChange }: {
   onReturn: () => void; onRecovered: () => void
+  sidebarCollapsed: boolean; onSidebarCollapsedChange: (collapsed: boolean) => void
 }) {
   const host = useAppDataV9()
   const data = host.data
@@ -184,15 +186,16 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered }: {
       endDate: '', anchorDate: '', anchorPattern: 'A' as const }), ...patch } }))
   }
   return <>
-    <PreviewSidebar open={menuOpen} onClose={() => setMenuOpen(false)} activePage={page}
+    <PreviewSidebar open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={() => setMenuOpen(false)} activePage={page}
+      collapsed={sidebarCollapsed} onCollapsedChange={onSidebarCollapsedChange}
+      mobileItemIds={['overview', 'timetables', 'subjects']}
       items={pages} label="V8 教師科目庫導覽" onNavigate={(id) => navigate(id as Page)}
       controls={<div className="project-switcher v8-preview-switchers">目前專案
         <PreviewProjectSwitcher projects={data?.projects ?? []} selectedId={projectId} disabled={!writable} onSelect={selectProject} />
-        <label>目前教師課表<select aria-label="切換目前教師課表" value={timetableId ?? ''} disabled={!tables.length}
-          onChange={(event) => chooseTable(event.target.value)}>
-          {!tables.length && <option value="">尚未建立課表</option>}
-          {tables.map((item) => <option key={item.id} value={item.id}>{item.name}・{item.teacherName}</option>)}
-        </select></label>
+        <div className="preview-timetable-control"><span>目前教師課表</span>
+          <TimetableSwitcher timetables={tables} selectedId={timetableId} onSelect={chooseTable}
+            buttonLabel="切換目前教師課表" buttonText={timetable?.name ?? '尚未建立課表'} />
+        </div>
       </div>}
       footer={<div className="storage-status" role="status">{writable ? '可寫入' : verifying ? '正在確認資料' : '唯讀／需處理'}</div>} />
     <main className="main-area"><PreviewTopbar title="V8 教師獨立科目庫" onMenu={() => setMenuOpen(true)} onReturn={onReturn} />

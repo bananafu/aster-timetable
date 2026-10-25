@@ -78,4 +78,22 @@ describe('OverviewCalendar', () => {
     expect(screen.getByRole('region', { name: '2026-09-12 週六' }).textContent).toContain('週末會議')
     expect(screen.queryByRole('button', { name: /編輯單日課程/ })).toBeNull()
   })
+
+  it.each([
+    { purpose: 'extra' as const, label: '單日新增' },
+    { purpose: 'make-up' as const, label: '補課' },
+    { purpose: 'substitute' as const, label: '代課' },
+  ])('以既有用途欄位顯示單日課程的 $label 標籤', ({ purpose, label }) => {
+    const { data, projectId, timetableId } = fixture()
+    const withOneOff = createOneOffLesson(data, { projectId, timetableId,
+      teachingUnitId: data.teachingUnits[0].id, classId: data.classes[0].id,
+      subjectId: data.subjects[0].id, date: '2026-09-08', purpose,
+      time: { mode: 'custom', startTime: '18:15', endTime: '19:00' } },
+    () => '00000000-0000-4000-8000-000000000092')
+    render(<OverviewCalendar data={withOneOff} projectId={projectId} timetableId={timetableId} weekStart={monday} />)
+    const course = within(screen.getByRole('region', { name: '2026-09-08 週二' }))
+      .getByRole('button', { name: '編輯單日課程 國文・二年 1 班' })
+    expect(within(course).getByText(label).tagName).toBe('EM')
+    expect(course.textContent).not.toContain('單日課程')
+  })
 })

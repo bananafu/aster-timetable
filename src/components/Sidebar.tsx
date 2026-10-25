@@ -2,11 +2,14 @@ import { AlertCircle, CalendarDays, Check, GraduationCap, LayoutDashboard, Libra
 import type { Ref } from 'react'
 import type { StorageStatus } from '../hooks/useLocalStorage'
 import type { TimetableProject } from '../types'
+import { MobileBottomNavigation } from './PreviewShellNavigation'
+import { PreviewProjectSwitcher } from './PreviewProjectSwitcher'
 
 interface SidebarProps {
   activePage: string
   onNavigate: (page: string) => void
   open: boolean
+  onOpen: () => void
   onClose: () => void
   storageStatus: StorageStatus
   projects: TimetableProject[]
@@ -28,7 +31,7 @@ const navItems = [
   { id: 'events', label: '會議與活動', icon: Users },
 ]
 
-export function Sidebar({ activePage, onNavigate, open, onClose, storageStatus, projects, activeProjectId, onProjectChange, canManageResources = Boolean(activeProjectId) && storageStatus === 'saved', resourceMode = null, subjectCount, classCount, collapsed, onCollapsedChange, subjectManagerButtonRef, classManagerButtonRef }: SidebarProps) {
+export function Sidebar({ activePage, onNavigate, open, onOpen, onClose, storageStatus, projects, activeProjectId, onProjectChange, canManageResources = Boolean(activeProjectId) && storageStatus === 'saved', resourceMode = null, subjectCount, classCount, collapsed, onCollapsedChange, subjectManagerButtonRef, classManagerButtonRef }: SidebarProps) {
   const statusLabel = storageStatus === 'saved' ? '已儲存至此裝置'
     : storageStatus === 'conflict' ? '偵測到多分頁衝突'
       : storageStatus === 'read-error' ? '資料讀取失敗，已暫停寫入'
@@ -44,7 +47,10 @@ export function Sidebar({ activePage, onNavigate, open, onClose, storageStatus, 
           </button>
           <button className="icon-button mobile-only" onClick={onClose} aria-label="關閉選單"><X size={20} /></button>
         </div>
-        <label className="project-switcher">課表專案<select value={activeProjectId ?? ''} onChange={(event) => onProjectChange(event.target.value)} disabled={storageStatus === 'read-error'}>{projects.filter((project) => !project.archivedAt).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+        <div className="project-switcher"><span>課表專案</span>
+          <PreviewProjectSwitcher projects={projects.filter((project) => !project.archivedAt)}
+            selectedId={activeProjectId} disabled={storageStatus === 'read-error'} onSelect={onProjectChange} />
+        </div>
         <nav className="side-nav" aria-label="主要導覽">
           <p className="nav-label">工作空間</p>
           {navItems.map(({ id, label, icon: Icon }) => (
@@ -72,6 +78,8 @@ export function Sidebar({ activePage, onNavigate, open, onClose, storageStatus, 
           </div>
         </div>
       </aside>
+      <MobileBottomNavigation items={navItems} activePage={resourceMode ? '' : activePage}
+        onNavigate={(id) => { onNavigate(id); onClose() }} onMore={onOpen} />
     </>
   )
 }

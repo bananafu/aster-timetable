@@ -13,6 +13,7 @@ import { resumeOrphanedSubjectUpgradeV9 } from './data/activateSubjectV9'
 import { SubjectUpgradeV9 } from './components/SubjectUpgradeV9'
 import { TeacherSubjectWorkspaceV9 } from './components/TeacherSubjectWorkspaceV9'
 import { PreviewProjectSwitcher } from './components/PreviewProjectSwitcher'
+import { TimetableSwitcher } from './components/TimetableControls'
 import { PreviewSidebar, PreviewTopbar, type PreviewNavItem } from './components/PreviewShellNavigation'
 import { switchActiveProject } from './data/projectRuntimeV8'
 import { CalendarDays, GraduationCap, LayoutDashboard, LibraryBig, Settings } from 'lucide-react'
@@ -53,6 +54,7 @@ export function V8PreviewApp({ onReturn }: { onReturn: () => void }) {
   const [bootstrapping, setBootstrapping] = useState(false)
   const [error, setError] = useState('')
   const [session, setSession] = useState(0)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const returnToV7 = () => {
     if (inspection.rawV7 === null && !window.confirm('返回 V7 可能在此儲存空間建立 V7 key；之後 V8 為保護資料將停止寫入。仍要返回？')) return
     onReturn()
@@ -82,8 +84,9 @@ export function V8PreviewApp({ onReturn }: { onReturn: () => void }) {
     if (result.ok) { setV9Inspection(loadAppDataV9(localStorage)); setSession((value) => value + 1) }
     else setError(`無法續接：${result.code}。請保留並匯出備份及原始資料供人工檢查。`)
   }
-  return <div className="app-shell v8-preview-shell">
+  return <div className={`app-shell v8-preview-shell ${sidebarCollapsed && (v9Inspection.status !== 'absent' || canLoadHost && !orphanBackups.length) ? 'sidebar-is-collapsed' : ''}`}>
     {v9Inspection.status !== 'absent' ? <TeacherSubjectWorkspaceV9 key={session} onReturn={returnToV7}
+      sidebarCollapsed={sidebarCollapsed} onSidebarCollapsedChange={setSidebarCollapsed}
       onRecovered={() => { setV9Inspection(loadAppDataV9(localStorage)); setSession((value) => value + 1) }} />
       : orphanBackups.length ? <><aside className="sidebar"><div className="brand"><strong>Toki</strong><span>・V8 開發預覽</span></div></aside>
         <main className="main-area"><header className="topbar"><strong>科目庫轉換恢復</strong><button onClick={returnToV7}>返回 V7</button></header>
@@ -97,6 +100,7 @@ export function V8PreviewApp({ onReturn }: { onReturn: () => void }) {
             {error && <p role="alert" className="form-error">{error}</p>}
           </section></div></main></>
       : canLoadHost ? <V8Workspace key={session} onReturn={returnToV7}
+        sidebarCollapsed={sidebarCollapsed} onSidebarCollapsedChange={setSidebarCollapsed}
         onV9Activated={() => { setV9Inspection(loadAppDataV9(localStorage)); setSession((value) => value + 1) }}
         onV9StorageChanged={() => { setV9Inspection(loadAppDataV9(localStorage));
           setOrphanBackups(orphanedSubjectBackups()); setSession((value) => value + 1) }} /> : <>
@@ -117,8 +121,9 @@ export function V8PreviewApp({ onReturn }: { onReturn: () => void }) {
   </div>
 }
 
-function V8Workspace({ onReturn, onV9Activated, onV9StorageChanged }: {
+function V8Workspace({ onReturn, onV9Activated, onV9StorageChanged, sidebarCollapsed, onSidebarCollapsedChange }: {
   onReturn: () => void; onV9Activated: () => void; onV9StorageChanged: () => void
+  sidebarCollapsed: boolean; onSidebarCollapsedChange: (collapsed: boolean) => void
 }) {
   const [data, setData, status, controls, persistence, info] = useAppDataV8({ loadMode: 'v8-only' })
   const [page, setPage] = useState<Page>('overview')
@@ -155,19 +160,19 @@ function V8Workspace({ onReturn, onV9Activated, onV9StorageChanged }: {
   const subjectReview = page === 'resources' ? inspectSubjectMigrationV9(data) : null
   const currentSubjectReview = subjectReview?.entries.filter((item) => item.projectId === data.activeProjectId) ?? []
   return <>
-    <PreviewSidebar open={menuOpen} onClose={() => setMenuOpen(false)} activePage={page}
+    <PreviewSidebar open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={() => setMenuOpen(false)} activePage={page}
+      collapsed={sidebarCollapsed} onCollapsedChange={onSidebarCollapsedChange}
+      mobileItemIds={['overview', 'resources', 'timetables']}
       items={pages} label="V8 導覽" onNavigate={(id) => { setPage(id as Page); setMenuOpen(false) }}
       controls={<div className="project-switcher v8-preview-switchers">課表專案
         <PreviewProjectSwitcher projects={data.projects.filter((item) => !item.archivedAt)} selectedId={data.activeProjectId}
           disabled={!canWrite || !!switchExpected || projectOpen || resourceOpen || page === 'settings' || page === 'timetables'} onSelect={selectProject} />
         <button onClick={() => setProjectOpen(true)}>專案設定</button>
-        <label>目前教師課表<select aria-label="切換目前教師課表" value={selectedTimetableId ?? ''}
-          disabled={!data.timetables.some((item) => item.projectId === data.activeProjectId)}
-          onChange={(event) => selectTimetable(event.target.value)}>
-          {!selectedTimetableId && <option value="">尚未建立課表</option>}
-          {data.timetables.filter((item) => item.projectId === data.activeProjectId).map((item) =>
-            <option key={item.id} value={item.id}>{item.name}・{item.teacherName}</option>)}
-        </select></label></div>}
+        <div className="preview-timetable-control"><span>目前教師課表</span>
+          <TimetableSwitcher timetables={data.timetables.filter((item) => item.projectId === data.activeProjectId)}
+            selectedId={selectedTimetableId} onSelect={selectTimetable} buttonLabel="切換目前教師課表"
+            buttonText={selectedTimetable?.name ?? '尚未建立課表'} />
+        </div></div>}
       footer={<><button onClick={() => { setProjectOpen(true); setMenuOpen(false) }}><Settings size={19} aria-hidden="true" /><span className="sidebar-item-label">專案管理</span></button>
         <p>目前教師課表：{selectedTimetable ? `${selectedTimetable.name}・${selectedTimetable.teacherName}` : '尚未建立'}</p>
         <div className={`storage-status ${status}`} role="status">V8：{canWrite ? '可寫入' : '唯讀／待確認'}</div></>} />

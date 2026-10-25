@@ -3,22 +3,50 @@ import { GraduationCap, Menu, X, type LucideIcon } from 'lucide-react'
 
 export type PreviewNavItem = { id: string; label: string; icon: LucideIcon }
 
-export function PreviewSidebar({ open, onClose, activePage, items, onNavigate, controls, footer, label }: {
+/** The same mobile destinations accompany both Sidebar variants. */
+export function MobileBottomNavigation({ items, activePage, onNavigate, onMore }: {
+  items: PreviewNavItem[]
+  activePage: string
+  onNavigate: (id: string) => void
+  onMore: () => void
+}) {
+  return <nav className="mobile-bottom-nav" aria-label="手機底部導覽">
+    {items.map(({ id, label, icon: Icon }) => <button key={id} type="button"
+      aria-label={`手機導覽：${label}`} aria-current={activePage === id ? 'page' : undefined}
+      data-label={label} onClick={() => onNavigate(id)}>
+      <Icon size={20} strokeWidth={1.8} aria-hidden="true" />
+    </button>)}
+    <button type="button" aria-label="手機導覽：更多" data-label="更多" onClick={onMore}>
+      <Menu size={20} strokeWidth={1.8} aria-hidden="true" />
+    </button>
+  </nav>
+}
+
+export function PreviewSidebar({ open, onOpen, onClose, activePage, items, mobileItemIds, onNavigate,
+  controls, footer, label, collapsed, onCollapsedChange }: {
   open: boolean
+  onOpen: () => void
   onClose: () => void
   activePage: string
   items: PreviewNavItem[]
+  mobileItemIds: string[]
   onNavigate: (id: string) => void
   controls: ReactNode
   footer: ReactNode
   label: string
+  collapsed: boolean
+  onCollapsedChange: (collapsed: boolean) => void
 }) {
   return <>
     {open && <button className="sidebar-backdrop" aria-label="關閉選單" onClick={onClose} />}
-    <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
+    <aside className={`sidebar ${open ? 'sidebar-open' : ''} ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <div className="brand">
-        <span className="brand-mark" role="img" aria-label="Toki 品牌標誌"><GraduationCap size={21} aria-hidden="true" /></span>
-        <span className="sidebar-brand"><strong>Toki</strong><span lang="ja">とき・時間</span></span>
+        <button type="button" className="brand-toggle" aria-label={collapsed ? '展開側邊欄' : '收合側邊欄'}
+          title={collapsed ? '展開側邊欄' : '收合側邊欄'} aria-expanded={!collapsed}
+          onClick={() => onCollapsedChange(!collapsed)}>
+          <span className="brand-mark" role="img" aria-label="Toki 品牌標誌"><GraduationCap size={21} aria-hidden="true" /></span>
+          <span className="sidebar-brand"><strong>Toki</strong><span lang="ja">とき・時間</span></span>
+        </button>
         <button className="icon-button mobile-only" aria-label="關閉選單" onClick={onClose}><X size={20} /></button>
       </div>
       {controls}
@@ -26,6 +54,7 @@ export function PreviewSidebar({ open, onClose, activePage, items, onNavigate, c
         <p className="nav-label">工作空間</p>
         {items.map(({ id, label: itemLabel, icon: Icon }) => <button key={id}
           className={activePage === id ? 'active' : ''} aria-current={activePage === id ? 'page' : undefined}
+          aria-label={itemLabel} title={collapsed ? itemLabel : undefined}
           onClick={() => onNavigate(id)}>
           <Icon size={19} strokeWidth={1.8} aria-hidden="true" />
           <span className="sidebar-item-label">{itemLabel}</span>
@@ -33,6 +62,8 @@ export function PreviewSidebar({ open, onClose, activePage, items, onNavigate, c
       </nav>
       <div className="sidebar-bottom">{footer}</div>
     </aside>
+    <MobileBottomNavigation items={items.filter((item) => mobileItemIds.includes(item.id))}
+      activePage={activePage} onNavigate={onNavigate} onMore={onOpen} />
   </>
 }
 

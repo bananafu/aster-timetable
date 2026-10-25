@@ -13,14 +13,25 @@ interface ControlsProps {
   notice?: string
 }
 
-export function TimetableControls({ timetables, selected, canManage, onSelect, onEdit, notice }: ControlsProps) {
+type SwitcherTimetable = Pick<Timetable, 'id' | 'name' | 'teacherName'>
+
+/** Presentation only; each host keeps its own timetable selection and persistence rules. */
+export function TimetableSwitcher({ timetables, selectedId, onSelect, disabled = false,
+  buttonLabel = '切換課表', buttonText = '切換課表' }: {
+  timetables: SwitcherTimetable[]
+  selectedId: string | null
+  onSelect: (id: string) => void
+  disabled?: boolean
+  buttonLabel?: string
+  buttonText?: string
+}) {
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const switcherRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const selectedIndex = Math.max(0, timetables.findIndex((item) => item.id === selectedId))
   useEffect(() => {
     if (!switcherOpen) return
-    const selectedIndex = Math.max(0, timetables.findIndex((item) => item.id === selected?.id))
     queueMicrotask(() => optionRefs.current[selectedIndex]?.focus())
     const handlePointerDown = (event: MouseEvent) => {
       if (!switcherRef.current?.contains(event.target as Node)) setSwitcherOpen(false)
@@ -37,7 +48,7 @@ export function TimetableControls({ timetables, selected, canManage, onSelect, o
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [selected?.id, switcherOpen, timetables])
+  }, [selectedIndex, switcherOpen])
 
   const moveOptionFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || timetables.length === 0) return
@@ -50,32 +61,37 @@ export function TimetableControls({ timetables, selected, canManage, onSelect, o
     optionRefs.current[nextIndex]?.focus()
   }
 
+  return <div className="timetable-switcher" ref={switcherRef}>
+    <button ref={triggerRef} type="button" aria-label={buttonLabel} aria-haspopup="menu" aria-expanded={switcherOpen}
+      disabled={disabled || timetables.length === 0} onClick={() => setSwitcherOpen((value) => !value)} onKeyDown={(event) => {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+        event.preventDefault()
+        setSwitcherOpen(true)
+      }}>{buttonText} <ChevronDown aria-hidden="true" /></button>
+    {switcherOpen && <div className="timetable-switcher-popover" role="menu" aria-label="教師課表" onKeyDown={moveOptionFocus}>
+      {timetables.map((item, index) => <button
+        ref={(element) => { optionRefs.current[index] = element }}
+        type="button"
+        role="menuitemradio"
+        data-timetable-id={item.id}
+        aria-checked={item.id === selectedId}
+        key={item.id}
+        onClick={() => {
+          onSelect(item.id)
+          setSwitcherOpen(false)
+          triggerRef.current?.focus()
+        }}
+      ><span><strong>{item.name}</strong><small>{item.teacherName ?? '待補授課教師'}</small></span>{item.id === selectedId && <Check aria-label="目前課表" />}</button>)}
+    </div>}
+  </div>
+}
+
+export function TimetableControls({ timetables, selected, canManage, onSelect, onEdit, notice }: ControlsProps) {
   return <div className="timetable-controls">
     <div className="timetable-teacher"><span>授課教師</span><strong>{selected ? selected.teacherName ?? '待補授課教師' : '請選擇教師課表'}</strong></div>
     {notice && <p className="settings-empty" role="status">{notice}</p>}
     <div className="timetable-control-row">
-      <div className="timetable-switcher" ref={switcherRef}>
-        <button ref={triggerRef} type="button" aria-label="切換課表" aria-haspopup="menu" aria-expanded={switcherOpen} onClick={() => setSwitcherOpen((value) => !value)} onKeyDown={(event) => {
-          if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-          event.preventDefault()
-          setSwitcherOpen(true)
-        }}>切換課表 <ChevronDown aria-hidden="true" /></button>
-        {switcherOpen && <div className="timetable-switcher-popover" role="menu" aria-label="教師課表" onKeyDown={moveOptionFocus}>
-          {timetables.map((item, index) => <button
-            ref={(element) => { optionRefs.current[index] = element }}
-            type="button"
-            role="menuitemradio"
-            data-timetable-id={item.id}
-            aria-checked={item.id === selected?.id}
-            key={item.id}
-            onClick={() => {
-              onSelect(item.id)
-              setSwitcherOpen(false)
-              triggerRef.current?.focus()
-            }}
-          ><span><strong>{item.name}</strong><small>{item.teacherName ?? '待補授課教師'}</small></span>{item.id === selected?.id && <Check aria-label="目前課表" />}</button>)}
-        </div>}
-      </div>
+      <TimetableSwitcher timetables={timetables} selectedId={selected?.id ?? null} onSelect={onSelect} />
       {canManage && <button type="button" onClick={(event) => { event.currentTarget.focus(); onEdit() }} disabled={!selected}>編輯課表資訊</button>}
     </div>
   </div>
