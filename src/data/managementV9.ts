@@ -1,5 +1,6 @@
 import type { AppDataV9 } from '../types/v9'
 import type { ClassV8Draft } from './classesV8'
+import type { NewProjectInput } from './projectRuntime'
 import type { CopyProjectV8Input } from './projectRuntimeV8'
 import type { SchoolV8Draft, TeachingUnitV8Draft } from './academicSettingsV8'
 import { createSchoolV8, createTeachingUnitV8, updateSchoolV8, updateTeachingUnitV8 } from './academicSettingsV8'
@@ -13,6 +14,36 @@ const valid = (data: AppDataV9) => {
 const safe = (current: AppDataV9, next: AppDataV9): AppDataV9 => {
   if (!isSafeAppDataV9Update(current, next)) throw new Error('管理操作未通過新版資料安全檢查。')
   return next
+}
+
+/** Formal-product creation starts with only the Project record; setup remains an explicit later action. */
+export function createEmptyProjectV9(data: AppDataV9, input: NewProjectInput,
+  id: string, now = new Date().toISOString()): AppDataV9 {
+  valid(data)
+  const name = input.name?.trim()
+  const customLabel = input.semester === 'custom' ? input.customLabel?.trim() : undefined
+  const validDate = (value: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+    const parsed = new Date(`${value}T00:00:00Z`)
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+  }
+  const occupied = new Set([
+    ...data.projects, ...data.schools, ...data.teachingUnits, ...data.timetables, ...data.subjects,
+    ...data.teachingUnitSubjects, ...data.classes, ...data.recurringLessons, ...data.oneOffLessons,
+    ...data.overrides, ...data.events, ...data.teachingProgress, ...data.migrationWarnings,
+  ].flatMap((item) => 'seriesId' in item ? [item.id, item.seriesId] : [item.id]))
+  if (!name || !Number.isInteger(input.academicYear) || input.academicYear <= 0
+    || !['first', 'second', 'summer', 'custom'].includes(input.semester)
+    || (input.semester === 'custom' && !customLabel)
+    || !validDate(input.startDate) || !validDate(input.endDate) || input.startDate > input.endDate
+    || !id?.trim() || id !== id.trim() || occupied.has(id)
+    || Number.isNaN(Date.parse(now))) {
+    throw new Error('空白專案資料或新 ID 不合法。')
+  }
+  return safe(data, { ...data, activeProjectId: id,
+    projects: [...data.projects, { id, name,
+      term: { academicYear: input.academicYear, semester: input.semester,
+        customLabel }, createdAt: now, updatedAt: now }] })
 }
 
 /** Reuses the established V8 resource rules; only the selected entity collection is copied back. */
