@@ -11,11 +11,11 @@ import { OneOffLessonEditor } from './components/OneOffLessonEditor'
 import { TimetableControls, TimetableInfoDialog, TimetableForm, type TimetableCopyDetails } from './components/TimetableControls'
 import { CourseResourceManagerDialog } from './components/CourseResourceManager'
 import { projectToLegacyView, switchActiveProject } from './data/projectRuntime'
-import { copyTimetable, createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
-import { deleteTimetable } from './data/deleteTimetableV7'
+import { type TimetableDetails } from './data/timetablesV6'
 import { selectDisplayProject, selectProjectSubjectsForLevel } from './data/subjectSelectorsV8'
 import { isCompatibleAppDataV7 } from './data/validators/v7'
-import { useAppDataV4 } from './hooks/useAppDataV4'
+import { useFormalV7AppController } from './formalRuntime'
+import { createFormalV7ProjectLifecycleActions, formalV7TimetableActions } from './formalV7ProjectTimetableActions'
 import { useOneOffPersistence } from './hooks/useOneOffPersistence'
 import { useResourceManagementSession } from './hooks/useResourceManagementSession'
 import { type StorageControls, type StorageStatus } from './hooks/useLocalStorage'
@@ -62,11 +62,7 @@ function timetableCopySourceFingerprint(data: AppDataV4, projectId: string, time
 }
 
 function timetableDeleteImpact(data: AppDataV4, projectId: string, timetableId: string) {
-  return {
-    lessons: data.recurringLessons.filter((item) => item.projectId === projectId && item.timetableId === timetableId).length,
-    overrides: data.overrides.filter((item) => item.projectId === projectId && item.timetableId === timetableId).length,
-    oneOffLessons: (data.oneOffLessons ?? []).filter((item) => item.projectId === projectId && item.timetableId === timetableId).length,
-  }
+  return formalV7TimetableActions.deletionImpact(data, projectId, timetableId)
 }
 
 function timetableDeleteFingerprint(data: AppDataV4, projectId: string, timetableId: string): string | null {
@@ -100,7 +96,10 @@ function downloadRawData(raw: string) {
 }
 
 export default function App() {
-  const [appData, setAppData, storageStatus, storageControls, storagePersistence] = useAppDataV4()
+  const { document: appData, updateDocument: setAppData, storageStatus, storageControls,
+    storagePersistence } = useFormalV7AppController()
+  const projectLifecycleActions = useMemo(() =>
+    createFormalV7ProjectLifecycleActions(appData, setAppData, uid), [appData, setAppData])
   const resourceSession = useResourceManagementSession(appData, setAppData, storageStatus, storagePersistence)
   const oneOffWrites = useOneOffPersistence(appData, setAppData, storageStatus, storagePersistence)
   // Timetable selection is view state; it must never update persisted AppData.
@@ -369,7 +368,7 @@ export default function App() {
     try {
       if (timetableDialog.mode === 'create') {
         const id = uid()
-        setAppData((current) => createTimetable(current, timetableDialog.projectId, details, id))
+        setAppData((current) => formalV7TimetableActions.create(current, timetableDialog.projectId, details, id))
         setTimetableSelection({ projectId: timetableDialog.projectId, timetableId: id })
         setSelectedLessonId(null)
         setSelectedLessonDate(null)
@@ -389,7 +388,7 @@ export default function App() {
         setAppData((current) => {
           const currentItem = current.timetables?.find((item) => item.id === timetableDialog.timetableId && item.projectId === timetableDialog.projectId)
           if (!currentItem || currentItem.name !== timetableDialog.original.name || currentItem.teacherName !== timetableDialog.original.teacherName) throw new Error('Timetable changed')
-          return updateTimetable(current, timetableDialog.timetableId, details)
+          return formalV7TimetableActions.update(current, timetableDialog.timetableId, details)
         })
         return
       }
@@ -422,7 +421,7 @@ export default function App() {
       setTimetableNotice('')
       setAppData((current) => {
         if (timetableCopySourceFingerprint(current, timetableDialog.projectId, timetableDialog.timetableId) !== timetableDialog.sourceFingerprint) throw new Error('Source changed')
-        return copyTimetable(current, { projectId: timetableDialog.projectId, sourceTimetableId: timetableDialog.timetableId, baseDate: details.baseDate, name: details.name, teacherName: details.teacherName }, (() => { let first = true; return () => { if (first) { first = false; return id } return uid() } })())
+        return formalV7TimetableActions.copy(current, { projectId: timetableDialog.projectId, sourceTimetableId: timetableDialog.timetableId, baseDate: details.baseDate, name: details.name, teacherName: details.teacherName }, (() => { let first = true; return () => { if (first) { first = false; return id } return uid() } })())
       })
     } catch (reason) {
       copySubmittingRef.current = false
@@ -458,7 +457,7 @@ export default function App() {
           || timetableDeleteFingerprint(current, timetableDialog.projectId, timetableDialog.timetableId) !== timetableDialog.deleteFingerprint) {
           throw new Error('課表或資料已變更，請重新開啟刪除確認。')
         }
-        const next = deleteTimetable(current, timetableDialog.projectId, timetableDialog.timetableId)
+        const next = formalV7TimetableActions.delete(current, timetableDialog.projectId, timetableDialog.timetableId)
         expectedData = JSON.stringify(next)
         return next
       })
@@ -586,7 +585,7 @@ export default function App() {
               disabled: !canCreateTimetable, reason: createTimetableUnavailableReason }]}
           onMenu={() => setSidebarOpen(true)} readOnly={Boolean(historicalProject) || storageStatus !== 'saved'} />}
         {storageStatus !== 'saved' && <StorageSafetyNotice status={storageStatus} controls={storageControls} />}
-        {storageStatus === 'read-error' ? <section className="content"><div className="panel blocked-editor"><h1>資料尚未載入</h1><p>為避免在不完整資料上編輯，目前已鎖定課表。請先匯出原始 JSON，或經二次確認後重設。</p></div></section> : !displayProject ? <FirstUse data={appData} setData={setAppData} onViewArchived={viewArchivedProject} /> : <>
+        {storageStatus === 'read-error' ? <section className="content"><div className="panel blocked-editor"><h1>資料尚未載入</h1><p>為避免在不完整資料上編輯，目前已鎖定課表。請先匯出原始 JSON，或經二次確認後重設。</p></div></section> : !displayProject ? <FirstUse data={appData} setData={setAppData} actions={projectLifecycleActions} onViewArchived={viewArchivedProject} /> : <>
         <div className="content">
           {historicalProject && <section className="history-mode" role="status"><div><strong>歷史專案・唯讀</strong><span>目前查看「{historicalProject.name}」，不會修改此專案。</span></div><button onClick={() => { setHistoricalProjectId(null); setTimetableSelection({ projectId: appData.activeProjectId, timetableId: appData.timetables?.find((item) => item.projectId === appData.activeProjectId)?.id ?? null }) }}>返回目前專案</button></section>}
           {appData.migrationWarnings.length > 0 && <section className="migration-summary" role="status"><strong>有 {appData.migrationWarnings.length} 筆資料需要確認</strong><span>未歸屬資料已保留，且不會自動套用至課表。</span></section>}
@@ -626,7 +625,7 @@ export default function App() {
       </main>
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
-      {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} initialPage={projectLifecycleInitialPage} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onClose={closeProjectSettings} onViewArchived={viewArchivedProject} />}</>}
+      {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} actions={projectLifecycleActions} initialPage={projectLifecycleInitialPage} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onClose={closeProjectSettings} onViewArchived={viewArchivedProject} />}</>}
       {addChoiceOpen && <AddChoiceDialog initialFocus={addChoiceFocus} canAddLesson={canAddLesson} addLessonReason={addLessonUnavailableReason} canAddOneOff={canAddOneOff} addOneOffReason={createTimetableUnavailableReason || (!displayTimetable ? missingTimetableReason : '目前資料仍在儲存，請稍後再試。')} onAddOneOff={() => openOneOff(toDateKey(new Date()), undefined, 'add-choice')} onAddLesson={() => {
         if (!canAddLesson) return
         setAddChoiceOpen(false)

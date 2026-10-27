@@ -113,9 +113,10 @@ interface InfoDialogProps {
   onCopy: (details: TimetableCopyDetails) => void
   onDelete: () => void
   onClose: () => void
+  copyMode?: 'schedule' | 'settings'
 }
 
-export function TimetableInfoDialog({ timetable, defaultDate, error, submitting, deleteImpact, onEdit, onCopy, onDelete, onClose }: InfoDialogProps) {
+export function TimetableInfoDialog({ timetable, defaultDate, error, submitting, deleteImpact, onEdit, onCopy, onDelete, onClose, copyMode = 'schedule' }: InfoDialogProps) {
   const [name, setName] = useState(timetable.name)
   const [teacherName, setTeacherName] = useState(timetable.teacherName ?? '')
   const [copyOpen, setCopyOpen] = useState(false)
@@ -164,8 +165,8 @@ export function TimetableInfoDialog({ timetable, defaultDate, error, submitting,
         <div className="form-actions full"><button type="button" onClick={close} disabled={submitting}>取消</button><button type="submit" className="primary-button" disabled={submitting}>{submitting ? '正在儲存…' : '儲存課表資訊'}</button></div>
       </form>
       <section className="timetable-copy-section" aria-label="複製課表">
-        <h3>複製課表</h3><p>依基準日期複製有效的固定課程版本與 A／B 週配置；不複製單日異動或單日課程。</p>
-        <button type="button" onClick={() => setCopyOpen((value) => !value)} disabled={!canCopy || submitting} aria-expanded={copyOpen}>複製課表</button>
+        <h3>{copyMode === 'settings' ? '只複製課表設定' : '複製課表'}</h3><p>{copyMode === 'settings' ? '只複製課表設定；不複製固定課程、單日課程、課程異動或 Event。' : '依基準日期複製有效的固定課程版本與 A／B 週配置；不複製單日異動或單日課程。'}</p>
+        <button type="button" onClick={() => setCopyOpen((value) => !value)} disabled={!canCopy || submitting} aria-expanded={copyOpen}>{copyMode === 'settings' ? '只複製課表設定' : '複製課表'}</button>
         {!canCopy && <p>請先補齊授課教師姓名，才能複製。</p>}
         {copyOpen && <form className="form-grid" aria-label="複製課表設定" onSubmit={(event) => { event.preventDefault(); onCopy({ name: copyName, teacherName: copyTeacher, baseDate }) }}>
           {editDirty && <p className="settings-empty full">請先儲存或還原上方課表資訊，再複製課表。</p>}
@@ -173,7 +174,7 @@ export function TimetableInfoDialog({ timetable, defaultDate, error, submitting,
           <label className="full">副本授課教師姓名<input value={copyTeacher} onChange={(event) => setCopyTeacher(event.target.value)} required disabled={submitting} /></label>
           <label className="full">基準日期<input type="date" value={baseDate} onChange={(event) => setBaseDate(event.target.value)} required disabled={submitting} /></label>
           {error && !deleteOpen && <p className="form-error full" role="alert">{error}</p>}
-          <div className="form-actions full"><button type="submit" className="primary-button" disabled={submitting || editDirty}>{submitting ? '正在儲存…' : '複製並切換'}</button></div>
+          <div className="form-actions full"><button type="submit" className="primary-button" disabled={submitting || editDirty}>{submitting ? '正在儲存…' : copyMode === 'settings' ? '複製設定並切換' : '複製並切換'}</button></div>
         </form>}
       </section>
       <section className="timetable-delete-section" aria-label="刪除課表">
