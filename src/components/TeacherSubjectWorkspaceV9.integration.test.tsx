@@ -9,7 +9,8 @@ import { createBlankProject } from '../data/projectRuntimeV8'
 import { APP_DATA_V8_KEY, createEmptyAppDataV8, persistAppDataV8 } from '../data/storageV8'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, persistAppDataV9 } from '../data/storageV9'
 import { createClassV9 } from '../data/managementV9'
-import { configureTeacherSubjectV9, createTeacherSubjectV9 } from '../data/teacherSubjectsV9'
+import { configureTeacherSubjectV9, createBlankProjectV9, createTeacherSubjectV9,
+  createTeacherTimetableV9 } from '../data/teacherSubjectsV9'
 import { createRecurringLessonV8 } from '../data/recurringLessonsV8'
 import { asV8ValidationProjection } from '../data/validators/v9'
 import { createTeacherTimetableV8 } from '../data/timetablesV8'
@@ -230,6 +231,7 @@ describe('V8 Preview teacher-owned Subject library', () => {
     fireEvent(window, new StorageEvent('storage', { key: V9_ACTIVATION_KEY, oldValue: activation,
       newValue: '{corrupt' }))
     await waitFor(() => expect((screen.getByRole('button', { name: '儲存科目' }) as HTMLButtonElement).disabled).toBe(true))
+    expect((screen.getByRole('button', { name: '加入預設科目 數學' }) as HTMLButtonElement).disabled).toBe(true)
     expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(originalV9)
     fireEvent.click(screen.getByRole('button', { name: '檢查並採用外部版本' }))
     await waitFor(() => expect((screen.getByRole('button', { name: '儲存科目' }) as HTMLButtonElement).disabled).toBe(false))
@@ -261,6 +263,200 @@ describe('V8 Preview teacher-owned Subject library', () => {
     fireEvent.change(screen.getByLabelText('科目簡稱'), { target: { value: '英' } })
     fireEvent.click(screen.getByRole('button', { name: '儲存科目' }))
     await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects).toHaveLength(2))
+  })
+
+  it('keeps a blank Project empty while filtering and consecutively adding senior-high catalog Subjects', async () => {
+    const { projectId } = await activated()
+    const originalRaw = localStorage.getItem(APP_DATA_V9_KEY)
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: '儲存科目' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(originalRaw)
+    expect(JSON.parse(originalRaw!).subjects).toHaveLength(0)
+    expect(screen.getByRole('button', { name: '加入預設科目 物理' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '加入預設科目 理化' })).toBeNull()
+    expect(screen.getByRole('button', { name: '加入預設科目 數學' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '加入預設科目 班會' })).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '數學科' } })
+    const addMath = screen.getByRole('button', { name: '加入預設科目 數學' })
+    fireEvent.click(addMath)
+    fireEvent.click(addMath)
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects).toHaveLength(1))
+    expect(screen.getByRole('dialog', { name: '教師科目管理' })).toBeTruthy()
+    expect(screen.getByText('已加入預設科目「數學」，資料已保存。')).toBeTruthy()
+    const first = JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!)
+    expect(first.subjects[0]).toMatchObject({ projectId, timetableId: 'teacher-a', name: '數學' })
+    expect(first.subjects[0].id).not.toBe('core.mathematics')
+    expect(first.teachingUnitSubjects).toHaveLength(1)
+    expect(first.teachingUnitSubjects[0].subjectId).toBe(first.subjects[0].id)
+    expect(screen.queryByRole('button', { name: '加入預設科目 數學' })).toBeNull()
+    expect(screen.getByLabelText('目錄科目 數學 狀態').textContent).toBe('已加入')
+
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '班級活動' } })
+    fireEvent.click(screen.getByRole('button', { name: '加入預設科目 班會' }))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects).toHaveLength(2))
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).teachingUnitSubjects).toHaveLength(2)
+    expect(screen.getByRole('dialog', { name: '教師科目管理' })).toBeTruthy()
+  })
+
+  it('filters the same catalog by an explicitly selected junior-high TeachingUnit', async () => {
+    await activated()
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '設定' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: '管理教學設定' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '管理教學設定' }))
+    fireEvent.click(screen.getByRole('button', { name: '新增任教單位' }))
+    fireEvent.change(screen.getByLabelText('任教單位名稱'), { target: { value: '國中部' } })
+    fireEvent.change(screen.getByLabelText('學制'), { target: { value: 'junior-high' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存任教單位' }))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).teachingUnits).toHaveLength(2))
+    const units = JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).teachingUnits
+    const juniorUnit = units
+      .find((item: { schoolLevel: string }) => item.schoolLevel === 'junior-high')
+    const seniorUnit = units.find((item: { schoolLevel: string }) => item.schoolLevel === 'senior-high')
+    fireEvent.click(screen.getByRole('button', { name: '關閉對話框' }))
+    const beforeBrowse = localStorage.getItem(APP_DATA_V9_KEY)
+    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    expect(screen.getByText('高中部：顯示 28 個目錄科目')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '加入預設科目 物理' })).toBeTruthy()
+    expect(JSON.parse(beforeBrowse!).subjects).toHaveLength(0)
+    fireEvent.change(screen.getByLabelText('目錄任教單位'), { target: { value: juniorUnit.id } })
+    expect(screen.getByText('國中部：顯示 25 個目錄科目')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '加入預設科目 理化' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '加入預設科目 物理' })).toBeNull()
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '不存在的科目' } })
+    expect(screen.getByText('國中部：顯示 0 個目錄科目')).toBeTruthy()
+    expect(screen.getByText('此學制沒有符合搜尋條件的目錄科目。')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '' } })
+    expect(screen.getByText('國中部：顯示 25 個目錄科目')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '加入預設科目 數學' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '社團活動' } })
+    expect(screen.getByRole('button', { name: '加入預設科目 社團' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('目錄任教單位'), { target: { value: seniorUnit.id } })
+    expect(screen.getByText('高中部：顯示 28 個目錄科目')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '加入預設科目 物理' })).toBeTruthy()
+    expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(beforeBrowse)
+  })
+
+  it('keeps identical catalog selections isolated between Projects and teacher Timetables', async () => {
+    const { projectId } = await activated()
+    const originalRaw = localStorage.getItem(APP_DATA_V9_KEY)!
+    const current = JSON.parse(originalRaw) as AppDataV9
+    let sequence = 0
+    let fixture = createBlankProjectV9(current, { name: 'Project B', academicYear: 116,
+      semester: 'first', startDate: '2027-08-01', endDate: '2028-01-31' }, () => `scope-${++sequence}`)
+    const projectB = fixture.activeProjectId!
+    fixture = createTeacherTimetableV9(fixture, projectB, { name: '乙課表', teacherName: '乙' }, 'teacher-b')
+    await persistAppDataV9(localStorage, current, fixture,
+      { raw: originalRaw, metadataRaw: localStorage.getItem(V9_ACTIVATION_KEY)!, revision: 0 })
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: '加入預設科目 數學' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '加入預設科目 數學' }))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects).toHaveLength(1))
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+    fireEvent.click(screen.getByRole('button', { name: '切換專案' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Project A/ }))
+    await waitFor(() => expect(screen.getByText('Project A・甲／甲課表')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    const mathButton = screen.getByRole('button', { name: '加入預設科目 數學' }) as HTMLButtonElement
+    expect(mathButton.disabled).toBe(false)
+    fireEvent.click(mathButton)
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects).toHaveLength(2))
+    const subjects = JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects
+    expect(subjects.map((item: { projectId: string }) => item.projectId).sort()).toEqual([projectId, projectB].sort())
+    expect(subjects.map((item: { timetableId: string }) => item.timetableId).sort()).toEqual(['teacher-a', 'teacher-b'])
+    expect(new Set(subjects.map((item: { id: string }) => item.id)).size).toBe(2)
+  })
+
+  it('does not report catalog success when Host rejects the write', async () => {
+    await activated()
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    const add = screen.getByRole('button', { name: '加入預設科目 數學' }) as HTMLButtonElement
+    await waitFor(() => expect(add.disabled).toBe(false))
+    const before = localStorage.getItem(APP_DATA_V9_KEY)
+    const metadata = JSON.parse(localStorage.getItem(V9_ACTIVATION_KEY)!)
+    localStorage.setItem(V9_ACTIVATION_KEY, JSON.stringify({ ...metadata,
+      documentRevision: metadata.documentRevision + 1 }))
+    fireEvent.click(add)
+    await waitFor(() => expect(screen.getByText(/未確認儲存/)).toBeTruthy())
+    expect(screen.queryByText(/已加入預設科目「數學」，資料已保存/)).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(before)
+    expect(JSON.parse(before!).subjects).toHaveLength(0)
+  })
+
+  it('keeps subject edit in a dialog and asks before discarding its draft', async () => {
+    await activated()
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: '儲存科目' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.change(screen.getByLabelText('科目名稱'), { target: { value: '數學' } })
+    fireEvent.change(screen.getByLabelText('科目簡稱'), { target: { value: '數' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存科目' }))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects).toHaveLength(1))
+    fireEvent.click(screen.getByRole('button', { name: '編輯' }))
+    expect(screen.getByRole('dialog', { name: '編輯科目' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('科目名稱'), { target: { value: '數學進階' } })
+    vi.mocked(window.confirm).mockReturnValueOnce(false)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: '編輯科目' })).toBeTruthy()
+    expect((screen.getByLabelText('科目名稱') as HTMLInputElement).value).toBe('數學進階')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '編輯科目' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: '教師科目管理' })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '編輯' }))
+  })
+
+  it('keeps the class creation form below the list for consecutive writes and edits in a dialog', async () => {
+    await activated()
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理班級' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: '新增班級' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '新增班級' }))
+    fireEvent.change(screen.getByLabelText('年級'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('班號'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存班級' }))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).classes).toHaveLength(1))
+    expect(screen.getByRole('form', { name: '新版管理表單' })).toBeTruthy()
+    await waitFor(() => expect((screen.getByRole('button', { name: '儲存班級' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.change(screen.getByLabelText('年級'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('班號'), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存班級' }))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).classes).toHaveLength(2))
+    fireEvent.click(screen.getAllByRole('button', { name: '編輯' })[0])
+    expect(screen.getByRole('dialog', { name: '編輯班級' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByRole('dialog', { name: '編輯班級' })).toBeNull()
+  })
+
+  it('shows only the active Project classes in the workspace and manager', async () => {
+    const { projectId } = await activated()
+    const originalRaw = localStorage.getItem(APP_DATA_V9_KEY)!
+    const current = JSON.parse(originalRaw) as AppDataV9
+    const withClass = createClassV9(current, projectId,
+      { teachingUnitId: current.teachingUnits[0].id, grade: 1, classNumber: 2 }, 'class-a')
+    let sequence = 0
+    const withB = createBlankProjectV9(withClass, { name: 'Project B', academicYear: 116,
+      semester: 'first', startDate: '2027-08-01', endDate: '2028-01-31' }, () => `new-${++sequence}`)
+    await persistAppDataV9(localStorage, current, withB,
+      { raw: originalRaw, metadataRaw: localStorage.getItem(V9_ACTIVATION_KEY)!, revision: 0 })
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
+    expect(screen.getByText('Project B・尚未選取教師課表')).toBeTruthy()
+    expect(screen.getByText('尚無班級')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '管理班級' }))
+    expect(screen.queryByText('102')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).classes).toMatchObject([{ id: 'class-a', projectId }])
   })
 
   it('keeps a dirty Subject draft when teacher switching is declined and resets it only after confirmation', async () => {

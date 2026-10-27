@@ -1,5 +1,9 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { addDays, startOfWeek } from '../lib/date'
+import { normalizeSubjectText, searchSubjectCatalog } from '../lib/subjectSearch'
+import { DEFAULT_SUBJECT_CATALOG, OPTIONAL_SUBJECT_CATALOG,
+  type SubjectCatalogEntry } from '../data/defaultSubjects'
+import { analyzeSubjectCatalog } from '../data/subjectCatalogAnalysis'
 import { useAppDataV9 } from '../hooks/useAppDataV9'
 import { resumeTimetableSubjectsV9 } from '../data/activateSubjectV9'
 import { V9_BACKUP_PREFIX } from '../data/storageV9'
@@ -7,6 +11,7 @@ import { createBlankProjectV9, createTeacherSubjectV9, createTeacherTimetableV9,
   configureTeacherSubjectV9, deleteTeacherSubjectV9,
   deleteTeacherTimetableV9, duplicateTeacherTimetableV9, renameTeacherSubjectV9,
   switchActiveProjectV9, updateTeacherTimetableV9, type SubjectDraftV9 } from '../data/teacherSubjectsV9'
+import { TeacherSubjectV9Error } from '../data/teacherSubjectsV9'
 import type { AppDataV9, SubjectV9 } from '../types/v9'
 import { PreviewProjectSwitcher } from './PreviewProjectSwitcher'
 import { TimetableSwitcher } from './TimetableControls'
@@ -29,6 +34,7 @@ const pages: (PreviewNavItem & { id: Page })[] = [
 ]
 type Scope = { projectId: string | null; timetableId: string | null; raw: string }
 const blank = (): SubjectDraftV9 => ({ name: '', shortName: '', color: '#A66D52', applicableSchoolLevels: ['senior-high'] })
+const subjectCatalog = [...DEFAULT_SUBJECT_CATALOG, ...OPTIONAL_SUBJECT_CATALOG] as readonly SubjectCatalogEntry[]
 const uid = () => crypto.randomUUID()
 function download(raw: string, filename: string) {
   const url = URL.createObjectURL(new Blob([raw], { type: 'application/json' }))
@@ -61,6 +67,11 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
   const [message, setMessage] = useState('')
   const [managementOpen, setManagementOpen] = useState<'settings' | 'classes' | null>(null)
   const [subjectManagerOpen, setSubjectManagerOpen] = useState(false)
+  const [subjectQuery, setSubjectQuery] = useState('')
+  const [subjectUnitId, setSubjectUnitId] = useState('')
+  const [catalogAddingKey, setCatalogAddingKey] = useState<string | null>(null)
+  const catalogWriteRef = useRef(false)
+  const catalogListRef = useRef<HTMLDivElement>(null)
   const [projectManagerOpen, setProjectManagerOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const resume = async () => {
@@ -79,6 +90,19 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
   const timetable = tables.find((item) => item.id === timetableId)
   const subjects = data?.subjects.filter((item) => item.projectId === projectId && item.timetableId === timetableId) ?? []
   const units = data?.teachingUnits.filter((item) => item.projectId === projectId) ?? []
+  const subjectUnit = units.find((item) => item.id === subjectUnitId) ?? units[0]
+  const projectClasses = data?.classes.filter((item) => item.projectId === projectId) ?? []
+  const subjectNeedle = normalizeSubjectText(subjectQuery)
+  const visibleSubjects = subjects.filter((item) => [item.name, item.shortName]
+    .some((value) => normalizeSubjectText(value).includes(subjectNeedle)))
+  const catalogReport = subjectUnit
+    ? analyzeSubjectCatalog(subjects, subjectUnit.schoolLevel, subjectCatalog) : null
+  const visibleCatalogItems = subjectUnit
+    ? searchSubjectCatalog(subjectCatalog, subjectUnit.schoolLevel, subjectQuery) : []
+  const revealCatalogResults = () => requestAnimationFrame(() => {
+    catalogListRef.current?.querySelector<HTMLElement>('.subject-catalog-card')
+      ?.scrollIntoView?.({ block: 'nearest' })
+  })
   const dirty = Boolean(draftScope || editing || editingTableId || subjectDraft.name || subjectDraft.shortName
     || tableDraft.name || tableDraft.teacherName || projectDraft.name || copyDraft.name)
   const writable = host.writable && host.status === 'active' && !host.pending && !busy
@@ -113,6 +137,8 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
   const chooseTable = (id: string) => {
     if (managementOpen || projectManagerOpen || !confirmDiscard()) return
     setSubjectManagerOpen(false)
+    setSubjectQuery('')
+    setSubjectUnitId('')
     resetDrafts(); setSelection({ projectId, timetableId: id }); setMessage('')
   }
   const run = async (label: string, produce: (current: AppDataV9) => AppDataV9,
@@ -139,7 +165,15 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
       setMessage(`${label}，資料已保存。`)
       return true
     } catch (cause) {
-      setMessage(`未確認儲存：${cause instanceof Error ? cause.message : 'unknown'}。草稿保留，可匯出本頁資料。`)
+      const reason = cause instanceof TeacherSubjectV9Error ? ({
+        'duplicate-subject': '目前教師課表已有相同科目名稱或簡稱。',
+        'subject-referenced': '科目仍有任教配置、課程、異動或進度引用，無法刪除。',
+        'invalid-draft': '科目名稱、簡稱、顏色或學制不符合資料規則。',
+        'unsafe-update': '資料安全檢查未通過，請確認科目及其引用。',
+        'invalid-timetable': '目前教師課表不屬於可編輯的專案。',
+      } as Record<string, string>)[cause.code] ?? cause.message
+        : cause instanceof Error ? cause.message : '未知錯誤'
+      setMessage(`未確認儲存：${reason}。草稿保留，可匯出本頁資料。`)
       return false
     } finally { setBusy(false) }
   }
@@ -150,8 +184,23 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
       applicableSchoolLevels: [...subject.applicableSchoolLevels] })
     setDraftScope(scope())
   }
+  const closeSubjectEdit = () => {
+    const original = subjects.find((item) => item.id === editing)
+    const changed = original && (subjectDraft.name !== original.name || subjectDraft.shortName !== original.shortName
+      || subjectDraft.color !== original.color
+      || JSON.stringify(subjectDraft.applicableSchoolLevels) !== JSON.stringify(original.applicableSchoolLevels))
+    if (changed && !window.confirm('尚有未儲存草稿，確定捨棄？')) return
+    setEditing(null); setSubjectDraft(blank()); setDraftScope(null)
+  }
   const saveSubject = () => {
     if (!projectId || !timetableId) return
+    if (!subjectDraft.name.trim() || !subjectDraft.shortName.trim()) {
+      setMessage('請填寫科目名稱與簡稱。'); return
+    }
+    const duplicate = subjects.find((item) => item.id !== editing &&
+      (normalizeSubjectText(item.name) === normalizeSubjectText(subjectDraft.name)
+        || normalizeSubjectText(item.shortName) === normalizeSubjectText(subjectDraft.shortName)))
+    if (duplicate) { setMessage(`「${duplicate.name}」已使用相同名稱或簡稱。`); return }
     const subjectId = editing ?? uid()
     void run(editing ? '已更新科目' : '已新增科目', (current) => editing
       ? renameTeacherSubjectV9(current, projectId, timetableId, subjectId, subjectDraft)
@@ -166,6 +215,38 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
     void run('已建立任教配置', (current) => configureTeacherSubjectV9(current, projectId,
       timetableId, targetUnitId, subject.id, uid(), extension), undefined, null)
   }
+  const addCatalogSubject = async (entry: SubjectCatalogEntry) => {
+    if (catalogWriteRef.current || !projectId || !timetableId || !subjectUnit) return
+    if (!entry.applicableSchoolLevels.includes(subjectUnit.schoolLevel)) {
+      setMessage('此預設科目不適用目前任教單位的學制。')
+      return
+    }
+    const analysis = catalogReport?.items.find((item) => item.catalogKey === entry.catalogKey)
+    if (!analysis || analysis.status !== 'safe-to-add') {
+      setMessage(analysis?.reason ?? '此預設科目目前無法安全加入。')
+      return
+    }
+    const subjectId = uid()
+    const relationId = uid()
+    const expected = scope()
+    catalogWriteRef.current = true
+    setCatalogAddingKey(entry.catalogKey)
+    try {
+      await run(`已加入預設科目「${entry.name}」`, (current) => {
+        const created = createTeacherSubjectV9(current, projectId, timetableId, {
+          name: entry.name,
+          shortName: entry.shortName,
+          color: entry.color,
+          applicableSchoolLevels: [subjectUnit.schoolLevel],
+        }, subjectId)
+        return configureTeacherSubjectV9(created, projectId, timetableId,
+          subjectUnit.id, subjectId, relationId)
+      }, undefined, expected)
+    } finally {
+      catalogWriteRef.current = false
+      setCatalogAddingKey(null)
+    }
+  }
   const deleteSubject = (subject: SubjectV9) => {
     if (!projectId || !timetableId || !window.confirm(`永久刪除 ${subject.name}？有任教配置或課程引用時會阻擋。`)) return
     void run('已刪除科目', (current) => deleteTeacherSubjectV9(current, projectId, timetableId, subject.id), undefined, null)
@@ -173,6 +254,8 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
   const selectProject = (id: string) => {
     if (managementOpen || projectManagerOpen || !confirmDiscard()) return
     setSubjectManagerOpen(false)
+    setSubjectQuery('')
+    setSubjectUnitId('')
     resetDrafts()
     void run('已切換專案', (current) => switchActiveProjectV9(current, id),
       () => { setSelection({ projectId: id, timetableId: null }); setMessage('') }, null)
@@ -221,7 +304,7 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
               if (!ok) setMessage('外部版本或原始來源未通過驗證；仍維持唯讀，請先匯出資料。')
             })}>檢查並採用外部版本</button>
             <p>資料救援與匯出請至「設定」查看。</p></div></section>}
-        {message && <p role="status">{message}</p>}
+        {message && !subjectManagerOpen && <p role="status">{message}</p>}
         {page === 'settings' && <section className="panel v8-preview-panel preview-recovery-panel">
           <details className="v8-preview-advanced"><summary>進階資料管理與救援匯出</summary>
             <p>只有在備份、資料衝突或轉換恢復時才需要使用。匯出不會更動原始資料。</p>
@@ -351,27 +434,78 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
               ? updateTeacherTimetableV9(current, projectId!, existing.id, tableDraft)
               : createTeacherTimetableV9(current, projectId!, tableDraft, uid()), resetDrafts)
           }}>儲存教師課表</button></div></section>}
-        {data && page === 'subjects' && <section className="panel v8-preview-panel preview-management-page"><h2>科目與班級</h2>
-          <p>這裡是教學進度工作區的預留入口；進度功能尚未接線。管理目前教師的科目或專案班級請開啟對應彈窗。</p>
-          <div className="v8-preview-actions"><button className="primary-button" disabled={!timetable}
-            onClick={() => setSubjectManagerOpen(true)}>管理科目</button>
-            <button disabled={!projectId} onClick={() => setManagementOpen('classes')}>管理班級</button></div></section>}
+        {data && page === 'subjects' && <section className="panel v8-preview-panel preview-management-page v9-resource-workspace">
+          <div className="preview-section-heading"><div><h2>教學工作區</h2><p>{project?.name ?? '尚未選取專案'}・{timetable ? `${timetable.teacherName}／${timetable.name}` : '尚未選取教師課表'}</p></div>
+            <div className="v8-preview-actions"><button className="primary-button" disabled={!timetable}
+              onClick={() => setSubjectManagerOpen(true)}>管理科目</button>
+              <button disabled={!projectId} onClick={() => setManagementOpen('classes')}>管理班級</button></div></div>
+          <div className="v9-resource-stats"><div><span>目前教師科目</span><strong>{subjects.length}</strong></div><div><span>專案班級</span><strong>{projectClasses.length}</strong></div><div><span>任教單位</span><strong>{units.length}</strong></div></div>
+          {!timetable && <p className="settings-empty">目前專案尚無教師課表。請先建立教師課表，再管理專屬科目；班級仍可按任教單位管理。</p>}
+          {!units.length && <p className="settings-empty">尚無任教單位。請先至設定建立學校與任教單位。</p>}
+          {units.map((unit) => { const classItems = projectClasses.filter((item) => item.teachingUnitId === unit.id)
+            const configuredIds = new Set(data.teachingUnitSubjects.filter((item) => item.projectId === projectId && item.teachingUnitId === unit.id).map((item) => item.subjectId))
+            const configured = subjects.filter((item) => configuredIds.has(item.id))
+            return <section className="v9-resource-unit" key={unit.id}><h3>{unit.name}</h3>
+              <p>{data.schools.find((item) => item.id === unit.schoolId)?.name ?? '學校'}・{unit.schoolLevel === 'junior-high' ? '國中部' : unit.schoolLevel === 'senior-high' ? '高中部' : '其他學制'}</p>
+              <div><strong>班級</strong><span>{classItems.length ? classItems.map((item) => item.name).join('、') : '尚無班級'}</span></div>
+              <div><strong>目前教師科目</strong><span>{configured.length ? configured.map((item) => item.name).join('、') : '尚未配置科目'}</span></div>
+            </section> })}
+        </section>}
         {data && page === 'subjects' && subjectManagerOpen && <Modal title="教師科目管理"
           subtitle={`目前專案：${project?.name ?? '無'}・目前教師：${timetable?.teacherName ?? '無'}`}
-          onClose={() => { if (confirmDiscard()) { resetDrafts(); setSubjectManagerOpen(false) } }}>
-          <section className="project-settings preview-management-page preview-subject-manager"><h2>目前教師：{timetable?.teacherName ?? '尚未選取'}</h2>
+          onClose={() => { if (confirmDiscard()) { resetDrafts(); setSubjectQuery(''); setSubjectUnitId(''); setSubjectManagerOpen(false) } }}>
+          <section className="project-settings preview-management-page preview-subject-manager">
+          {message && !editing && <p role="status" className={message.includes('未確認') || message.includes('請填寫') || message.includes('已使用') ? 'form-error' : undefined}>{message}</p>}
           {!timetable && <p>請先在「教師課表」新增或選取教師課表。空白教師課表沒有科目。</p>}
           {timetable && <><p>科目只屬於這位教師。需要切換教師時，請使用左側「目前教師課表」。</p>
-            <ul className="v8-preview-list">{subjects.map((subject) => <li key={subject.id} className="v8-preview-list-row project-history-row preview-subject-row"><div><strong>{subject.name}</strong><span>簡稱：{subject.shortName}</span></div>
+            <label className="v9-subject-search">搜尋科目<input aria-label="搜尋科目" value={subjectQuery} onChange={(event) => {
+              setSubjectQuery(event.target.value); revealCatalogResults()
+            }} placeholder="名稱、簡稱或別名" /></label>
+            {subjects.length > 0 && <><h3>已建立的科目</h3>
+            <ul className="v8-preview-list">{visibleSubjects.map((subject) => <li key={subject.id} className="v8-preview-list-row project-history-row preview-subject-row"><div><strong>{subject.name}</strong><span>簡稱：{subject.shortName}</span></div>
               <div className="v8-preview-actions">
-              <button disabled={!writable} onClick={() => beginSubjectEdit(subject)}>編輯</button>
+              <button disabled={!writable} onClick={(event) => { event.currentTarget.focus(); beginSubjectEdit(subject) }}>編輯</button>
               <button disabled={!writable} onClick={() => deleteSubject(subject)}>刪除</button>
               {units.map((unit) => { const configured = data.teachingUnitSubjects.some((item) =>
                 item.subjectId === subject.id && item.teachingUnitId === unit.id)
                 return <button key={unit.id} disabled={!writable || configured} title={configured ? '此教師已完成任教配置' : `將此科目配置給${unit.name}；如需擴充適用學制，會再次確認`} onClick={() => configure(subject, unit.id)}>
-                  {unit.name}：{configured ? '已配置' : '配置'}</button> })}</div></li>)}</ul>
+                  {unit.name}：{configured ? '已配置' : '配置'}</button> })}</div></li>)}</ul></>}
             {!subjects.length && <p>此教師尚無科目；不繼承其他教師的科目。</p>}
-            <h3>{editing ? '編輯科目' : '新增科目'}</h3>
+            {subjects.length > 0 && !visibleSubjects.length && <p>找不到符合條件的科目。</p>}
+            <section className="subject-catalog-picker" aria-label="既有科目目錄">
+              <div className="preview-section-heading"><div><h3>從既有科目目錄加入</h3>
+                <p>目錄只提供範本；點擊「＋」後才會建立此教師的獨立科目，並配置到所選任教單位。</p></div></div>
+              <label className="v9-unit-filter">任教單位<select aria-label="目錄任教單位"
+                value={subjectUnit?.id ?? ''} onChange={(event) => {
+                  setSubjectUnitId(event.target.value); revealCatalogResults()
+                }}>
+                {!units.length && <option value="">請先建立任教單位</option>}
+                {units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}・{unit.schoolLevel === 'junior-high' ? '國中部' : unit.schoolLevel === 'senior-high' ? '高中部' : '其他學制'}</option>)}
+              </select></label>
+              {!subjectUnit && <p className="settings-empty">請先建立並選擇任教單位，才能依學制查看科目目錄。</p>}
+              {subjectUnit && <p className="v9-catalog-result-count" aria-live="polite">
+                {subjectUnit.schoolLevel === 'junior-high' ? '國中部' : subjectUnit.schoolLevel === 'senior-high' ? '高中部' : '其他學制'}：顯示 {visibleCatalogItems.length} 個目錄科目
+              </p>}
+              {subjectUnit && <div className="subject-catalog-cards" ref={catalogListRef}>{visibleCatalogItems.map((entry) => {
+                const analysis = catalogReport?.items.find((item) => item.catalogKey === entry.catalogKey)
+                const added = analysis?.status === 'exists-applicable'
+                const safe = analysis?.status === 'safe-to-add'
+                const optional = OPTIONAL_SUBJECT_CATALOG.some((item) => item.catalogKey === entry.catalogKey)
+                return <article className={`subject-catalog-card ${analysis?.status ?? ''}`} key={entry.catalogKey}>
+                  <i style={{ background: entry.color }} aria-hidden="true" />
+                  <span><strong>{entry.name}</strong><small>{entry.shortName}・{optional ? '選用科目' : '預設科目'}</small></span>
+                  {safe ? <button type="button" aria-label={`加入預設科目 ${entry.name}`}
+                    disabled={!writable || catalogAddingKey !== null}
+                    title={`加入並配置到${subjectUnit.name}`}
+                    onClick={() => void addCatalogSubject(entry)}>
+                    {catalogAddingKey === entry.catalogKey ? '…' : '＋'}
+                  </button> : <em aria-label={`目錄科目 ${entry.name} 狀態`} title={analysis?.reason}>{added ? '已加入' : '需確認'}</em>}
+                </article>
+              })}</div>}
+              {subjectUnit && !visibleCatalogItems.length && <p className="settings-empty">此學制沒有符合搜尋條件的目錄科目。</p>}
+            </section>
+            <h3>自訂新增科目</h3>
+            {!editing && <>
             <div className="form-grid preview-inline-form">
             <label>科目名稱<input aria-label="科目名稱" placeholder="科目名稱" value={subjectDraft.name}
               onChange={(event) => { if (!draftScope) setDraftScope(scope()); setSubjectDraft({ ...subjectDraft, name: event.target.value }) }} /></label>
@@ -380,17 +514,18 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
             <label>適用學制<select aria-label="科目初始學制" value={subjectDraft.applicableSchoolLevels[0]}
               onChange={(event) => { if (!draftScope) setDraftScope(scope()); setSubjectDraft({ ...subjectDraft, applicableSchoolLevels: [event.target.value as 'senior-high'] }) }}>
               <option value="senior-high">高中部</option><option value="junior-high">國中部</option><option value="other">其他</option></select></label>
-            </div><div className="form-actions"><button onClick={() => { if (confirmDiscard()) resetDrafts() }}>取消</button>
+            </div><div className="form-actions"><button onClick={() => { if (confirmDiscard()) resetDrafts() }}>清除草稿</button>
               <button disabled={!writable} className="primary-button" onClick={saveSubject}>儲存科目</button></div></>}
           <div className="v8-preview-subsection"><div className="preview-section-heading"><div><h3>班級</h3>
             <p>班級歸屬任教單位，可供同專案的不同教師合法引用。</p></div>
-            <button disabled={!writable || !projectId} onClick={() => { if (confirmDiscard()) { resetDrafts(); setSubjectManagerOpen(false); setManagementOpen('classes') } }}>管理班級</button></div>
+            <button disabled={!writable || !projectId} onClick={() => { if (confirmDiscard()) { resetDrafts(); setSubjectQuery(''); setSubjectUnitId(''); setSubjectManagerOpen(false); setManagementOpen('classes') } }}>管理班級</button></div>
             {units.map((unit) => <div key={unit.id}><strong>{unit.name}</strong><ul>
               {data.classes.filter((item) => item.projectId === projectId && item.teachingUnitId === unit.id)
                 .map((item) => <li key={item.id}>{item.name}</li>)}
               {!data.classes.some((item) => item.projectId === projectId && item.teachingUnitId === unit.id) && <li>尚無班級</li>}
             </ul></div>)}
-          </div>
+          </div></>}
+          <div className="form-actions"><button className="primary-button" onClick={() => { if (confirmDiscard()) { resetDrafts(); setSubjectQuery(''); setSubjectUnitId(''); setSubjectManagerOpen(false) } }}>完成</button></div>
         </section></Modal>}
         {data && page === 'settings' && <section className="panel v8-preview-panel preview-management-page"><div className="preview-section-heading"><h2>學校與任教單位</h2>
           <button disabled={!writable || !projectId} onClick={() => setManagementOpen('settings')}>管理教學設定</button></div>
@@ -401,9 +536,15 @@ export function TeacherSubjectWorkspaceV9({ onReturn, onRecovered, sidebarCollap
           <p>科目可按教師分別配置到多個任教單位；新增與編輯請使用上方管理彈窗。</p></div>
         </section>}
       </div></main>
-    {data && projectId && managementOpen && <AcademicClassManagerV9 data={data} projectId={projectId}
+    {data && projectId && managementOpen && <AcademicClassManagerV9 key={`${projectId}:${managementOpen}`} data={data} projectId={projectId}
       section={managementOpen} writable={writable} onClose={() => setManagementOpen(null)}
       onCommit={(label, produce, expectedRaw) => run(label, produce, undefined,
         { projectId, timetableId, raw: expectedRaw })} />}
+    {data && subjectManagerOpen && editing && <Modal title="編輯科目" onClose={closeSubjectEdit}>
+      <div className="form-grid">{message && <p role="status" className="form-error full">{message}</p>}<label>科目名稱<input aria-label="科目名稱" value={subjectDraft.name} onChange={(event) => setSubjectDraft({ ...subjectDraft, name: event.target.value })} /></label>
+        <label>科目簡稱<input aria-label="科目簡稱" value={subjectDraft.shortName} onChange={(event) => setSubjectDraft({ ...subjectDraft, shortName: event.target.value })} /></label>
+        <label>適用學制<select aria-label="科目初始學制" value={subjectDraft.applicableSchoolLevels[0]} onChange={(event) => setSubjectDraft({ ...subjectDraft, applicableSchoolLevels: [event.target.value as 'senior-high'] })}><option value="senior-high">高中部</option><option value="junior-high">國中部</option><option value="other">其他</option></select></label>
+        <div className="form-actions full"><button onClick={closeSubjectEdit}>取消</button><button className="primary-button" disabled={!writable} onClick={saveSubject}>儲存科目</button></div></div>
+    </Modal>}
   </>
 }

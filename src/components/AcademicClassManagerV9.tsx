@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import type { AppDataV9 } from '../types/v9'
 import type { SchoolLevel } from '../types'
 import { gradesForLevel } from '../lib/classes'
@@ -40,12 +40,19 @@ export function AcademicClassManagerV9({ data, projectId, section, writable, onC
   const [schoolDraft, setSchoolDraft] = useState<SchoolV8Draft>(blankSchool)
   const [unitDraft, setUnitDraft] = useState<TeachingUnitV8Draft>(() => blankUnit(data, projectId))
   const [classDraft, setClassDraft] = useState<ClassV8Draft>(() => blankClass(units[0]?.id))
+  const [selectedUnitId, setSelectedUnitId] = useState(units[0]?.id ?? '')
   const [formRaw, setFormRaw] = useState('')
+  const [refreshAfterSave, setRefreshAfterSave] = useState(false)
   const [initialDraft, setInitialDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const activeDraft = mode === 'school' ? schoolDraft : mode === 'unit' ? unitDraft : classDraft
   const dirty = !!mode && JSON.stringify(activeDraft) !== initialDraft
+  useEffect(() => {
+    if (refreshAfterSave && JSON.stringify(data) !== formRaw) {
+      setFormRaw(JSON.stringify(data)); setRefreshAfterSave(false)
+    }
+  }, [data, formRaw, refreshAfterSave])
   const discard = () => !dirty || window.confirm('尚有未儲存草稿，確定捨棄？')
   const close = () => { if (discard()) onClose() }
   const begin = (nextMode: Exclude<Mode, null>, targetId: string | null) => {
@@ -63,15 +70,30 @@ export function AcademicClassManagerV9({ data, projectId, section, writable, onC
     } else {
       const item = classes.find((schoolClass) => schoolClass.id === targetId)
       const draft = item ? { teachingUnitId: item.teachingUnitId, name: item.name,
-        grade: item.grade, classNumber: item.classNumber, room: item.room } : blankClass(units[0]?.id)
+        grade: item.grade, classNumber: item.classNumber, room: item.room } : blankClass(selectedUnitId)
       setClassDraft(draft); setInitialDraft(JSON.stringify(draft))
     }
     setMode(nextMode); setEditingId(targetId); setFormRaw(JSON.stringify(data)); setMessage('')
   }
   const save = async (event: FormEvent) => {
     event.preventDefault()
-    if (!writable || busy || !mode) return
+    if (!writable || busy || refreshAfterSave || !mode) return
+    if (mode === 'class') {
+      const unit = units.find((item) => item.id === classDraft.teachingUnitId)
+      if (!unit) { setMessage('請先選擇目前專案的任教單位。'); return }
+      const structured = gradesForLevel(unit.schoolLevel)
+      if (structured.length && (!structured.includes(classDraft.grade ?? -1)
+        || !Number.isInteger(classDraft.classNumber) || (classDraft.classNumber ?? 0) < 1)) {
+        setMessage('請選擇有效年級與正整數班號。'); return
+      }
+      if (structured.length && classes.some((item) => item.id !== editingId && item.teachingUnitId === unit.id
+        && item.grade === classDraft.grade && item.classNumber === classDraft.classNumber)) {
+        setMessage('此任教單位已有相同年級與班號的班級。'); return
+      }
+      if ((classDraft.room?.length ?? 0) > 15) { setMessage('教室名稱最多 15 字。'); return }
+    }
     if (JSON.stringify(data) !== formRaw) { setMessage('資料已變更；草稿保留，請重新開啟表單確認。'); return }
+    const expectedRaw = formRaw
     setBusy(true); setMessage('')
     const currentMode = mode
     const success = await onCommit('管理資料已保存', (current) => {
@@ -83,9 +105,14 @@ export function AcademicClassManagerV9({ data, projectId, section, writable, onC
         : createTeachingUnitV9(current, projectId, unitDraft, id())
       return editingId ? updateClassV9(current, projectId, editingId, classDraft)
         : createClassV9(current, projectId, classDraft, id())
-    }, formRaw)
+    }, expectedRaw)
     setBusy(false)
-    if (success) { setMode(null); setEditingId(null); setMessage('已確認保存；可繼續新增或編輯。') }
+    if (success) {
+      if (currentMode === 'class' && !editingId) {
+        setClassDraft(blankClass(selectedUnitId)); setInitialDraft(JSON.stringify(blankClass(selectedUnitId)))
+        setRefreshAfterSave(true); setMessage('班級已確認保存；可繼續新增。')
+      } else { setMode(null); setEditingId(null); setMessage('已確認保存；可繼續新增或編輯。') }
+    }
     else setMessage('未確認儲存，草稿已保留；請檢查畫面狀態或匯出資料。')
   }
   const removeClass = async (classId: string) => {
@@ -115,12 +142,22 @@ export function AcademicClassManagerV9({ data, projectId, section, writable, onC
   }
   const selectedUnit = units.find((item) => item.id === classDraft.teachingUnitId)
   const grades = gradesForLevel(selectedUnit?.schoolLevel ?? 'other')
+  const classForm = mode === 'class' ? <form className="form-grid v9-class-form" aria-label="新版管理表單" onSubmit={(event) => void save(event)}>
+    <h3 className="full">{editingId ? '編輯' : '新增'}班級</h3>
+    <label>所屬任教單位<select value={classDraft.teachingUnitId} onChange={(event) => { setClassDraft(blankClass(event.target.value)); if (!editingId) setSelectedUnitId(event.target.value) }}>{units.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+    {grades.length ? <><label>年級<select value={classDraft.grade ?? ''} onChange={(event) => setClassDraft({ ...classDraft, grade: Number(event.target.value) })}><option value="">選擇年級</option>{grades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}</select></label>
+      <label>班號<input type="number" min="1" value={classDraft.classNumber ?? 1} onChange={(event) => setClassDraft({ ...classDraft, classNumber: Number(event.target.value) })} /></label></>
+      : <label>班級名稱<input required value={classDraft.name ?? ''} onChange={(event) => setClassDraft({ ...classDraft, name: event.target.value, grade: undefined, classNumber: undefined })} /></label>}
+    <label>教室<input value={classDraft.room ?? ''} onChange={(event) => setClassDraft({ ...classDraft, room: event.target.value })} /></label>
+    <div className="form-actions full"><button type="button" onClick={() => { if (discard()) setMode(null) }}>取消</button>
+      <button className="primary-button" type="submit" disabled={!writable || busy || refreshAfterSave}>儲存班級</button></div>
+  </form> : null
   return <Modal title={section === 'settings' ? '學校與任教單位管理' : '班級管理'}
     subtitle={`目前專案：${data.projects.find((item) => item.id === projectId)?.name ?? '無'}`} onClose={close}>
     <div className="project-settings preview-academic-settings">
       {!writable && <p role="alert" className="form-error">目前為唯讀或資料衝突狀態，所有管理寫入均已停止；可從進階資料管理匯出。</p>}
       {message && <p role="status" className={message.includes('未確認') || message.includes('不可') ? 'form-error' : undefined}>{message}</p>}
-      {mode === null && (section === 'settings' ? <>
+      {(mode === null || section === 'classes') && (section === 'settings' ? <>
         <section className="preview-management-section"><div className="preview-section-heading"><div><h3>學校</h3><p>學校名稱與識別色。</p></div><button disabled={!writable} onClick={() => begin('school', null)}>新增學校</button></div>
           {schools.map((item) => <div className="project-history-row" key={item.id}><div><strong>{item.name}</strong></div>
             <button disabled={!writable} onClick={() => begin('school', item.id)}>編輯學校</button></div>)}</section>
@@ -128,12 +165,18 @@ export function AcademicClassManagerV9({ data, projectId, section, writable, onC
           {units.map((item) => <div className="project-history-row" key={item.id}><div><strong>{item.name}</strong>
             <span>{item.schoolLevel}・{item.startDate}～{item.endDate}・{item.periods.length} 節</span></div>
             <button disabled={!writable} onClick={() => begin('unit', item.id)}>編輯任教單位</button></div>)}</section>
-      </> : <section className="preview-management-section"><div className="preview-section-heading"><div><h3>班級</h3><p>班級屬於任教單位，可供同專案的不同教師引用。</p></div><button disabled={!writable || !units.length} onClick={() => begin('class', null)}>新增班級</button></div>
-        {units.map((unit) => <div key={unit.id}><h3>{unit.name}</h3>{classes.filter((item) => item.teachingUnitId === unit.id).map((item) => <div className="project-history-row" key={item.id}><div><strong>{item.name}</strong><span>{item.room ? `教室 ${item.room}` : '未設定教室'}</span></div><div className="v8-preview-actions">
+      </> : <section className="preview-management-section"><div className="preview-section-heading"><div><h3>班級</h3><p>班級屬於任教單位，可供同專案的不同教師引用。</p></div></div>
+        <label className="v9-unit-filter">任教單位<select value={selectedUnitId} onChange={(event) => { if (discard()) { setSelectedUnitId(event.target.value); setMode(null); setMessage('') } }}>
+          {units.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        {units.filter((unit) => unit.id === selectedUnitId).map((unit) => <div key={unit.id}><h3>{unit.name}</h3>{classes.filter((item) => item.teachingUnitId === unit.id).map((item) => <div className="project-history-row" key={item.id}><div><strong>{item.name}</strong><span>{item.room ? `教室 ${item.room}` : '未設定教室'}</span></div><div className="v8-preview-actions">
           <button disabled={!writable} onClick={() => begin('class', item.id)}>編輯</button>
           <button disabled={!writable} onClick={() => void removeClass(item.id)}>刪除</button></div></div>)}
-          {!classes.some((item) => item.teachingUnitId === unit.id) && <p className="settings-empty">尚無班級。</p>}</div>)}</section>)}
-      {mode !== null && <form className="form-grid" aria-label="新版管理表單" onSubmit={(event) => void save(event)}>
+          {!classes.some((item) => item.teachingUnitId === unit.id) && <p className="settings-empty">尚無班級。</p>}</div>)}
+        {!units.length && <p className="settings-empty">請先建立任教單位，再新增班級。</p>}
+        {mode === 'class' && !editingId ? classForm : <button disabled={!writable || !units.length} onClick={() => begin('class', null)}>新增班級</button>}
+        <div className="form-actions"><button className="primary-button" onClick={close}>完成</button></div>
+      </section>)}
+      {mode !== null && mode !== 'class' && <form className="form-grid" aria-label="新版管理表單" onSubmit={(event) => void save(event)}>
         <h3 className="full">{editingId ? '編輯' : '新增'}{mode === 'school' ? '學校' : mode === 'unit' ? '任教單位' : '班級'}</h3>
         {mode === 'school' && <><label>學校名稱<input required value={schoolDraft.name} onChange={(event) => setSchoolDraft({ ...schoolDraft, name: event.target.value })} /></label>
           <label>學校顏色<input type="color" value={schoolDraft.color} onChange={(event) => setSchoolDraft({ ...schoolDraft, color: event.target.value })} /></label></>}
@@ -151,14 +194,12 @@ export function AcademicClassManagerV9({ data, projectId, section, writable, onC
             <label>結束時間<input type="time" step="300" value={item.endTime} onChange={(event) => period(index, { endTime: event.target.value })} /></label>
             <button type="button" disabled={unitDraft.periods.length <= 1} onClick={() => setUnitDraft({ ...unitDraft, periods: unitDraft.periods.filter((_, offset) => offset !== index) })}>移除節次</button></div>)}
             <button type="button" onClick={addPeriod}>新增節次</button></fieldset></>}
-        {mode === 'class' && <><label>所屬任教單位<select value={classDraft.teachingUnitId} onChange={(event) => setClassDraft(blankClass(event.target.value))}>{units.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          {grades.length ? <><label>年級<select value={classDraft.grade ?? ''} onChange={(event) => setClassDraft({ ...classDraft, grade: Number(event.target.value) })}><option value="">選擇年級</option>{grades.map((grade) => <option key={grade} value={grade}>{grade}</option>)}</select></label>
-            <label>班號<input type="number" min="1" value={classDraft.classNumber ?? 1} onChange={(event) => setClassDraft({ ...classDraft, classNumber: Number(event.target.value) })} /></label></>
-            : <label>班級名稱<input required value={classDraft.name ?? ''} onChange={(event) => setClassDraft({ ...classDraft, name: event.target.value, grade: undefined, classNumber: undefined })} /></label>}
-          <label>教室<input value={classDraft.room ?? ''} onChange={(event) => setClassDraft({ ...classDraft, room: event.target.value })} /></label></>}
         <div className="form-actions full"><button type="button" onClick={() => { if (discard()) setMode(null) }}>取消</button>
           <button className="primary-button" type="submit" disabled={!writable || busy}>儲存{mode === 'school' ? '學校' : mode === 'unit' ? '任教單位' : '班級'}</button></div>
       </form>}
+      {mode === 'class' && editingId && <Modal title="編輯班級" onClose={() => { if (discard()) setMode(null) }}>
+        {classForm}
+      </Modal>}
     </div>
   </Modal>
 }
