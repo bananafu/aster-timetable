@@ -10,6 +10,8 @@ import { classDisplayName, gradeLabel, gradesForLevel } from '../lib/classes'
 import { normalizeSubjectText } from '../lib/subjectSearch'
 import { SCHOOL_LEVELS, type AppDataV4, type ProjectClass, type SchoolLevel, type Subject, type TeachingUnit } from '../types'
 import type { StorageControls, StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
+import type { FormalClassManagementV9UiPort } from '../hooks/useFormalClassManagementV9Adapter'
+import type { FormalSubjectManagementV9UiPort } from '../hooks/useFormalSubjectManagementV9Adapter'
 import { useResourceManagementSession, type ResourceManagementSession } from '../hooks/useResourceManagementSession'
 import { Modal } from './Modal'
 
@@ -78,7 +80,14 @@ function catalogStatusLabel(item: SubjectCatalogAnalysisItem) {
   return '目錄錯誤'
 }
 
-interface Props {
+interface CommonProps {
+  readOnly?: boolean
+  onOpenSettings?: () => void
+  onClose?: () => void
+  onCreated?: (mode: 'classes' | 'subjects', id: string) => void
+}
+
+interface V7Props extends CommonProps {
   data: AppDataV4
   setData: Dispatch<SetStateAction<AppDataV4>>
   mode: 'classes' | 'subjects'
@@ -86,11 +95,27 @@ interface Props {
   storagePersistence?: StoragePersistence
   storageControls?: StorageControls
   session?: ResourceManagementSession
-  readOnly?: boolean
-  onOpenSettings?: () => void
-  onClose?: () => void
-  onCreated?: (mode: 'classes' | 'subjects', id: string) => void
+  subjectPort?: never
+  classPort?: never
 }
+
+interface V9SubjectProps extends CommonProps {
+  mode: 'subjects'
+  subjectPort: FormalSubjectManagementV9UiPort
+  classPort?: never
+  data?: never
+  setData?: never
+}
+
+interface V9ClassProps extends CommonProps {
+  mode: 'classes'
+  classPort: FormalClassManagementV9UiPort
+  subjectPort?: never
+  data?: never
+  setData?: never
+}
+
+type Props = V7Props | V9SubjectProps | V9ClassProps
 
 function persistedCreationKey(operation: ResourceManagementSession['operation']) {
   return operation?.status === 'persisted' && (operation.type === 'create-class' || operation.type === 'create-subject')
@@ -98,6 +123,12 @@ function persistedCreationKey(operation: ResourceManagementSession['operation'])
 }
 
 export function CourseResourceManagerDialog(props: Props & { onClose: () => void }) {
+  if (props.classPort) return <V9ClassManagerDialog {...props} />
+  if (props.subjectPort) return <V9SubjectManagerDialog {...props} />
+  return <V7CourseResourceManagerDialog {...props} />
+}
+
+function V7CourseResourceManagerDialog(props: V7Props & { onClose: () => void }) {
   const { onCreated } = props
   const localSession = useResourceManagementSession(props.data, props.setData, props.storageStatus, props.storagePersistence)
   const session = props.session ?? localSession
@@ -138,11 +169,17 @@ export function CourseResourceManagerDialog(props: Props & { onClose: () => void
 }
 
 export function CourseResourceManager(props: Props) {
+  if (props.classPort) return <V9ClassManager {...props} />
+  if (props.subjectPort) return <V9SubjectManager {...props} />
+  return <V7CourseResourceManager {...props} />
+}
+
+function V7CourseResourceManager(props: V7Props) {
   const localSession = useResourceManagementSession(props.data, props.setData, props.storageStatus, props.storagePersistence)
   return <ResourceManagerContent {...props} session={props.session ?? localSession} />
 }
 
-function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePersistence, storageControls, readOnly = false, onOpenSettings, session }: Props & { session: ResourceManagementSession }) {
+function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePersistence, storageControls, readOnly = false, onOpenSettings, session }: V7Props & { session: ResourceManagementSession }) {
   const { schoolId, unitId, showClassCreate, projectId } = session.view
   const [editor, setEditor] = useState<EditorSelection>(null)
   const [subjectQuery, setSubjectQuery] = useState('')
@@ -383,6 +420,704 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
     {session.locked && storageStatus === 'saved' && <p role="status">{session.operation?.type === 'remove-subject-level' ? '正在儲存解除適用關係…' : '正在儲存資源變更，尚未確認持久化…'}</p>}
     {session.success && <p role="status">{session.success}</p>}
     {storageControls && storageStatus !== 'saved' && <section aria-label="資源儲存復原"><p>以下復原操作會套用整份 AppData（所有專案、課表與資源），不是只處理目前這筆科目或班級。尚未提交的草稿仍會保留。</p><button type="button" onClick={() => { if (window.confirm('保留本頁整份 AppData 並寫入此裝置？此操作可能取代其他分頁版本；請先核對資料。')) storageControls.keepLocal() }}>保留本頁完整資料並重試儲存</button>{storageStatus === 'conflict' && storageControls.conflictSource === 'current' && <button type="button" onClick={() => { if (window.confirm('採用其他分頁的整份 AppData？本頁已提交但未寫入的變更將被取代；未提交草稿仍保留。')) session.adoptExternal(storageControls.acceptExternal) }}>採用其他分頁版本</button>}{storageControls.conflictSource === 'legacy' && <p>舊版分頁變更無法自動合併；請先關閉舊分頁並核對備份，再決定是否保留本頁 v7。</p>}</section>}
+  </section>
+}
+
+interface V9SubjectUiSession {
+  drafts: Record<string, SubjectDraft>
+  locked: boolean
+  error: string
+  success: string
+  draft: (key: string, initial: SubjectDraft) => SubjectDraft
+  edit: (key: string, initial: SubjectDraft, value: SubjectDraft) => void
+  clear: (key: string) => void
+  fail: (message: string) => void
+  requestTransition: (action: () => void, keys?: string[]) => boolean
+}
+
+function useV9SubjectUiSession(port: FormalSubjectManagementV9UiPort): V9SubjectUiSession {
+  const [drafts, setDrafts] = useState<Record<string, SubjectDraft>>({})
+  const [localError, setLocalError] = useState('')
+  const draftsRef = useRef(drafts)
+  draftsRef.current = drafts
+  const changeDrafts = (next: Record<string, SubjectDraft>) => {
+    draftsRef.current = next
+    setDrafts(next)
+  }
+  return {
+    drafts, locked: port.pending, error: localError || port.error, success: port.success,
+    draft: (key, initial) => drafts[key] ?? initial,
+    edit: (key, initial, value) => {
+      setLocalError('')
+      port.clearFeedback()
+      const next = { ...draftsRef.current }
+      if (JSON.stringify(initial) === JSON.stringify(value)) delete next[key]
+      else next[key] = value
+      changeDrafts(next)
+    },
+    clear: (key) => {
+      const next = { ...draftsRef.current }
+      delete next[key]
+      changeDrafts(next)
+      setLocalError('')
+    },
+    fail: (message) => { port.clearFeedback(); setLocalError(message) },
+    requestTransition: (action, keys = Object.keys(draftsRef.current)) => {
+      if (port.pending) {
+        setLocalError('已提交的操作尚未確認持久化，不能捨棄或離開。')
+        return false
+      }
+      const affected = keys.filter((key) => draftsRef.current[key])
+      if (affected.length && !window.confirm('尚有未儲存的科目草稿，確定捨棄受影響的草稿？')) return false
+      const next = { ...draftsRef.current }
+      affected.forEach((key) => { delete next[key] })
+      changeDrafts(next)
+      setLocalError('')
+      port.clearFeedback()
+      action()
+      return true
+    },
+  }
+}
+
+function V9SubjectManagerDialog(props: V9SubjectProps & { onClose: () => void }) {
+  const ui = useV9SubjectUiSession(props.subjectPort)
+  const trigger = useRef<HTMLElement | null>(null)
+  const content = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    trigger.current = document.activeElement as HTMLElement | null
+    content.current?.closest('[role="dialog"]')?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus()
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const focusable = [...(content.current?.closest('[role="dialog"]')
+        ?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') ?? [])]
+      if (!focusable.length) return
+      if (event.shiftKey && document.activeElement === focusable[0]) {
+        event.preventDefault(); focusable.at(-1)?.focus()
+      } else if (!event.shiftKey && document.activeElement === focusable.at(-1)) {
+        event.preventDefault(); focusable[0].focus()
+      }
+    }
+    document.addEventListener('keydown', trap)
+    return () => {
+      document.removeEventListener('keydown', trap)
+      if (trigger.current?.isConnected) trigger.current.focus()
+      else document.querySelector<HTMLButtonElement>('[data-course-add]')?.focus()
+    }
+  }, [])
+  return <Modal title="管理科目" subtitle="科目屬於目前教師課表，任教單位配置彼此獨立。"
+    onClose={() => ui.requestTransition(props.onClose)}>
+    <div className="resource-manager-dialog">
+      <div ref={content} className="resource-manager-scroll">
+        <V9SubjectManagerContent {...props} ui={ui} />
+      </div>
+      <div className="resource-manager-complete">
+        <p>「新增科目」會儲存目前這一筆；「建立」會完成管理並返回原流程。</p>
+        <button type="button" className="primary-button" disabled={ui.locked}
+          onClick={() => ui.requestTransition(props.onClose)}>建立</button>
+      </div>
+    </div>
+  </Modal>
+}
+
+function V9SubjectManager(props: V9SubjectProps) {
+  const ui = useV9SubjectUiSession(props.subjectPort)
+  return <V9SubjectManagerContent {...props} ui={ui} />
+}
+
+function v9CatalogStatusLabel(status: string) {
+  if (status === 'alias-match-review') return '既有科目'
+  if (status === 'short-name-conflict') return '簡稱衝突'
+  if (status === 'same-name-review') return '同名資料'
+  if (status === 'catalog-key-id-conflict') return 'ID 衝突'
+  return '目錄錯誤'
+}
+
+function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSettings, onCreated,
+  ui }: V9SubjectProps & { ui: V9SubjectUiSession }) {
+  const [editor, setEditor] = useState<EditorSelection>(null)
+  const [subjectQuery, setSubjectQuery] = useState('')
+  const [subjectActionId, setSubjectActionId] = useState<string | null>(null)
+  const managerContent = useRef<HTMLElement>(null)
+  const editorTrigger = useRef<HTMLElement | null>(null)
+  const previousEditor = useRef<EditorSelection>(null)
+  const view = port.view
+  const unit = view?.teachingUnit ?? null
+  const units = port.teachingUnits
+  const schools = port.schools
+  const fallbackSchoolId = unit?.schoolId ?? schools.find((school) =>
+    units.some((candidate) => candidate.schoolId === school.id))?.id ?? ''
+  const [selectedSchoolId, setSelectedSchoolId] = useState(fallbackSchoolId)
+  const schoolUnits = units.filter((candidate) => candidate.schoolId === selectedSchoolId)
+  const duplicate = schoolUnits.some((candidate) => schoolUnits.some((other) =>
+    candidate.id !== other.id && candidate.schoolLevel === other.schoolLevel))
+  const editable = !readOnly && port.writable && !port.pending && Boolean(view?.project && view.timetable)
+  const unavailableReason = readOnly ? '目前為唯讀狀態，不能修改科目。'
+    : view?.actions.createAndConfigureFromCatalog.reason ?? view?.actions.createCustom.reason ?? null
+  const scopeKey = `${port.selection.projectId ?? ''}:${port.selection.timetableId ?? ''}:${port.selection.teachingUnitId ?? ''}`
+  const subjectCreateKey = `subject-create:${scopeKey}`
+  const emptyDraft = emptySubjectDraft(unit ?? undefined)
+  const newSubject = ui.draft(subjectCreateKey, emptyDraft)
+  const allSubjects = view?.subjects ?? []
+  const configuredIds = new Set(view?.currentTeachingUnitConfigurations.map((item) => item.subjectId) ?? [])
+  const subjectsInScope = unit ? allSubjects.filter((subject) =>
+    subject.applicableSchoolLevels.includes(unit.schoolLevel)) : []
+  const needle = normalizeSubjectText(subjectQuery)
+  const visibleSubjects = subjectsInScope.filter((subject) => !needle
+    || normalizeSubjectText(subject.name).includes(needle)
+    || normalizeSubjectText(subject.shortName).includes(needle))
+  const visibleCatalogItems = (view?.catalog ?? []).filter(({ entry }) => !needle
+    || [entry.name, entry.shortName, ...entry.aliases, ...entry.zhuyinAliases]
+      .some((value) => normalizeSubjectText(value).includes(needle)))
+  const selectedSubject = editor?.kind === 'subject'
+    ? allSubjects.find((subject) => subject.id === editor.id) : undefined
+  const selectedSubjectKey = selectedSubject ? `subject:${scopeKey}:${selectedSubject.id}` : ''
+  const selectedInitial = selectedSubject ? subjectDraft(selectedSubject) : null
+  const selectedDraft = selectedSubject && selectedInitial
+    ? ui.draft(selectedSubjectKey, selectedInitial) : null
+  const dirtyCount = Object.keys(ui.drafts).filter((key) => key.includes(`:${scopeKey}`)).length
+
+  useEffect(() => {
+    setEditor(null)
+    setSubjectQuery('')
+    setSubjectActionId(null)
+  }, [scopeKey])
+  useEffect(() => {
+    if (unit?.schoolId) setSelectedSchoolId(unit.schoolId)
+    else if (!schools.some((school) => school.id === selectedSchoolId)) {
+      setSelectedSchoolId(fallbackSchoolId)
+    }
+  }, [fallbackSchoolId, schools, selectedSchoolId, unit?.schoolId])
+  useEffect(() => {
+    if (editor && previousEditor.current !== editor) {
+      managerContent.current?.querySelector<HTMLButtonElement>('.resource-editor-heading > button')?.focus()
+    } else if (!editor && previousEditor.current) {
+      const fallback = managerContent.current?.querySelector<HTMLElement>(
+        '.resource-browser button:not(:disabled), .resource-browser input:not(:disabled)')
+      ;(editorTrigger.current?.isConnected ? editorTrigger.current : fallback)?.focus()
+    }
+    previousEditor.current = editor
+  }, [editor])
+
+  const openEditor = (next: Exclude<EditorSelection, null>) => {
+    editorTrigger.current = document.activeElement as HTMLElement | null
+    setEditor(next)
+  }
+  const changeUnit = (nextUnitId: string) => {
+    const currentKeys = Object.keys(ui.drafts).filter((key) => key.includes(`:${scopeKey}`))
+    ui.requestTransition(() => port.selectTeachingUnit(nextUnitId || null), currentKeys)
+  }
+  const finish = async (operation: () => Promise<{ subjectId?: string }>, draftKey?: string,
+    created = false) => {
+    try {
+      const result = await operation()
+      if (draftKey) ui.clear(draftKey)
+      if (created && result.subjectId) onCreated?.('subjects', result.subjectId)
+      return result
+    } catch {
+      return null
+    }
+  }
+  const createCustom = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!editable || !view) return
+    setSubjectActionId('subject-create')
+    await finish(() => port.actions.createCustom({ ...newSubject,
+      applicableSchoolLevels: [...newSubject.applicableSchoolLevels] }), subjectCreateKey, true)
+  }
+  const addCatalog = async (catalogKey: string) => {
+    setSubjectActionId(`catalog:${catalogKey}`)
+    await finish(() => port.actions.createAndConfigureFromCatalog(catalogKey), undefined, true)
+  }
+  const configureCatalog = async (subjectId: string, catalogKey: string,
+    confirmLevelExtension: boolean) => {
+    const item = view?.catalog.find((candidate) => candidate.entry.catalogKey === catalogKey)
+    if (!item || !unit) return
+    if (confirmLevelExtension && !window.confirm(
+      `將既有科目「${item.entry.name}」擴充為適用${levelLabel[unit.schoolLevel]}，並配置到目前任教單位？\n科目 ID、名稱、簡稱與顏色都會保留。`)) return
+    setSubjectActionId(`catalog:${catalogKey}`)
+    await finish(() => port.actions.configure(subjectId, confirmLevelExtension))
+  }
+  const unconfigure = async (subject: Subject) => {
+    if (!unit || !configuredIds.has(subject.id)) return
+    setSubjectActionId(subject.id)
+    if (!window.confirm(`解除「${subject.name}」在目前任教單位的配置？\n科目本身仍會保留；若課程、異動或教學進度仍有引用，系統會阻止操作。`)) return
+    await finish(() => port.actions.unconfigure(subject.id))
+  }
+  const saveSubject = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!selectedSubject || !selectedDraft || !selectedInitial || !editable
+      || !ui.drafts[selectedSubjectKey]) return
+    setSubjectActionId(selectedSubject.id)
+    const impact = port.actions.impact(selectedSubject.id)
+    if (!window.confirm(`儲存目前教師科目「${selectedSubject.name}」的變更？這會影響 ${impact.configurations.length} 筆任教單位配置及 ${impact.references.length} 筆課程、異動或進度引用。`)) return
+    await finish(() => port.actions.update(selectedSubject.id, { ...selectedDraft,
+      applicableSchoolLevels: [...selectedDraft.applicableSchoolLevels] }), selectedSubjectKey)
+  }
+  const deleteSubject = async (subject: Subject) => {
+    setSubjectActionId(subject.id)
+    if (!window.confirm(`確定永久刪除目前教師科目「${subject.name}」？\n仍有任教單位配置、課程、歷史版本、異動、單日課程或教學進度引用時，系統會阻止刪除。`)) return
+    const result = await finish(() => port.actions.delete(subject.id), selectedSubjectKey)
+    if (result) setEditor(null)
+  }
+  const returnToList = () => {
+    if (ui.locked) { ui.fail('這筆變更尚未完成儲存，請先完成儲存或處理復原。'); return }
+    setEditor(null)
+  }
+  const openSettings = onOpenSettings ? () => ui.requestTransition(onOpenSettings) : undefined
+
+  return <section ref={managerContent} className="academic-settings resource-manager"
+    data-resource-state={ui.locked ? 'pending' : Object.keys(ui.drafts).length ? 'dirty' : 'clean'}>
+    <div className="academic-context-selectors">
+      <label>學校<select aria-label="學校" value={selectedSchoolId} onChange={(event) => {
+        setSelectedSchoolId(event.target.value)
+        const nextUnits = units.filter((candidate) => candidate.schoolId === event.target.value)
+        const ambiguous = nextUnits.some((candidate) => nextUnits.some((other) =>
+          candidate.id !== other.id && candidate.schoolLevel === other.schoolLevel))
+        changeUnit(ambiguous ? '' : nextUnits[0]?.id ?? '')
+      }} disabled={!schools.length || ui.locked}>{schools.map((school) =>
+          <option key={school.id} value={school.id}>{school.name}</option>)}</select></label>
+      <label>學制<select aria-label="目前學制" value={unit?.id ?? ''}
+        onChange={(event) => changeUnit(event.target.value)} disabled={!schoolUnits.length || ui.locked}>
+        {duplicate && <option value="">請選擇要管理的學制設定</option>}
+        {schoolUnits.map((candidate) => <option key={candidate.id} value={candidate.id}>
+          {unitLabel(candidate, units)}</option>)}
+      </select></label>
+    </div>
+    {(!schools.length || !units.length) && <div className="settings-empty">
+      目前專案尚無學校或學制。請先前往專案設定建立學校與學制。
+      {openSettings && <button type="button" onClick={openSettings}>前往專案設定</button>}
+    </div>}
+
+    {unit && !editor && <section className="resource-browser subject-picker" aria-label="科目清單">
+      <ResourceBrowserHeading title="我的科目"
+        description={`目前${levelLabel[unit.schoolLevel]}可使用的教師科目。點標籤可編輯；× 只解除目前任教單位配置，科目本身仍保留。`}
+        dirtyCount={dirtyCount} action={null} />
+      <label className="subject-picker-search">搜尋科目<input type="search" aria-label="搜尋科目"
+        value={subjectQuery} onChange={(event) => setSubjectQuery(event.target.value)}
+        placeholder="搜尋已選與預設科目" /></label>
+      <div className="subject-chip-list" aria-label="我的科目標籤">
+        {visibleSubjects.map((subject) => {
+          const key = `subject:${scopeKey}:${subject.id}`
+          const preview = ui.draft(key, subjectDraft(subject))
+          const configured = configuredIds.has(subject.id)
+          const removeAction = configured ? `解除科目「${subject.name}」的目前任教單位配置`
+            : `科目「${subject.name}」尚未配置到目前任教單位`
+          return <div key={subject.id} style={{ display: 'grid', gap: 4 }}>
+            <div className="subject-chip">
+              <button type="button" className="subject-chip-edit" aria-label={`編輯科目 ${subject.name}`}
+                onClick={() => openEditor({ kind: 'subject', id: subject.id })}>
+                <i style={{ background: preview.color }} aria-hidden="true" /><span>{preview.name}</span>
+                {ui.drafts[key] && <em>未儲存</em>}
+              </button>
+              <button type="button" className="subject-chip-remove" aria-label={removeAction}
+                title={removeAction} disabled={!configured || !editable || ui.locked}
+                onClick={() => void unconfigure(subject)}>×</button>
+            </div>
+            {subjectActionId === subject.id && ui.error && <p className="form-error" role="alert">{ui.error}</p>}
+          </div>
+        })}
+        {!visibleSubjects.length && <p className="resource-list-empty">{subjectsInScope.length
+          ? '我的科目中沒有符合搜尋條件的項目。'
+          : '目前教師尚無適用此學制的科目，請從下方預設目錄加入。'}</p>}
+      </div>
+      <section className="subject-catalog-picker" aria-label="加入預設科目">
+        <div><h3>加入預設科目</h3><p>目錄依目前學制篩選；新增與配置均須通過既有衝突檢查。</p></div>
+        <div className="subject-catalog-cards">
+          {visibleCatalogItems.map((item) => {
+            const actionKey = `catalog:${item.entry.catalogKey}`
+            const inlineError = subjectActionId === actionKey ? ui.error : ''
+            return <div key={item.entry.catalogKey} className={`subject-catalog-card ${item.analysisStatus}`}
+              title={item.reason}><i style={{ background: item.entry.color }} aria-hidden="true" />
+              <span><strong>{item.entry.name}</strong><small>{item.entry.shortName}</small>
+                {(inlineError || !['safe-to-create-and-configure', 'configured', 'available-to-configure'].includes(item.status))
+                  && <small role={inlineError ? 'alert' : undefined}>{inlineError || item.reason}</small>}</span>
+              {item.status === 'safe-to-create-and-configure'
+                ? <button type="button" aria-label={`加入預設科目 ${item.entry.name}`}
+                    title={`加入 ${item.entry.name}`} disabled={!editable || ui.locked}
+                    onClick={() => void addCatalog(item.entry.catalogKey)}>＋</button>
+                : item.status === 'configured' ? <em>已加入</em>
+                  : item.status === 'available-to-configure' && item.existingSubjectId
+                    ? <button type="button" aria-label={`將既有科目 ${item.entry.name} 配置到此任教單位`}
+                        title={item.reason} disabled={!editable || ui.locked}
+                        onClick={() => void configureCatalog(item.existingSubjectId!, item.entry.catalogKey, false)}
+                        style={{ width: 'auto', height: 'auto', padding: '5px 8px', borderRadius: 'var(--radius-sm)', fontSize: 10, whiteSpace: 'nowrap' }}>配置到此任教單位</button>
+                    : item.status === 'requires-level-confirmation' && item.existingSubjectId
+                      ? <button type="button" aria-label={`將既有科目 ${item.entry.name} 加入此學制並配置`}
+                          title={item.reason} disabled={!editable || ui.locked}
+                          onClick={() => void configureCatalog(item.existingSubjectId!, item.entry.catalogKey, true)}
+                          style={{ width: 'auto', height: 'auto', padding: '5px 8px', borderRadius: 'var(--radius-sm)', fontSize: 10, whiteSpace: 'nowrap' }}>加入此學制</button>
+                      : <em title={item.reason}>{v9CatalogStatusLabel(item.status)}</em>}
+            </div>
+          })}
+          {!visibleCatalogItems.length && <p className="resource-list-empty">{unit.schoolLevel === 'other'
+            ? '現有預設目錄沒有「其他」學制項目，可在下方新增自訂科目。'
+            : '預設目錄中沒有符合搜尋條件的科目。'}</p>}
+        </div>
+      </section>
+      <div className="subject-custom-action"><span>找不到需要的科目？</span>
+        <button type="button" className="resource-add-button" aria-label="＋ 新增科目"
+          disabled={!editable} onClick={() => openEditor({ kind: 'subject-create' })}>
+          ＋ 新增自訂科目{ui.drafts[subjectCreateKey] ? '（未儲存）' : ''}</button></div>
+    </section>}
+
+    {unit && editor?.kind === 'subject-create' && <section className="resource-editor-shell">
+      <EditorHeading title="新增科目" dirty={Boolean(ui.drafts[subjectCreateKey])} locked={ui.locked}
+        onBack={returnToList} backLabel="返回科目清單" />
+      <form className="resource-editor subject-management-row" aria-label="新增科目表單"
+        onSubmit={(event) => void createCustom(event)}>
+        <SubjectFields draft={newSubject} prefix="新科目" disabled={!editable}
+          onChange={(value) => ui.edit(subjectCreateKey, emptyDraft, value)} />
+        {subjectActionId === 'subject-create' && ui.error
+          && <p className="form-error" role="alert">{ui.error}</p>}
+        <div className="subject-management-actions"><button type="submit" className="primary-button"
+          disabled={!editable}>{ui.locked ? '儲存中…' : '新增科目'}</button>
+          {ui.drafts[subjectCreateKey] && <button type="button"
+            onClick={() => ui.requestTransition(() => setEditor(null), [subjectCreateKey])}>捨棄草稿</button>}
+        </div>
+      </form>
+    </section>}
+
+    {unit && selectedSubject && selectedDraft && selectedInitial && <section className="resource-editor-shell">
+      <EditorHeading title={`編輯科目｜${selectedSubject.name}`}
+        dirty={Boolean(ui.drafts[selectedSubjectKey])} locked={ui.locked}
+        onBack={returnToList} backLabel="返回科目清單" />
+      <form className="resource-editor subject-management-row" aria-label={`管理科目 ${selectedSubject.name}`}
+        onSubmit={(event) => void saveSubject(event)}>
+        <SubjectFields draft={selectedDraft} prefix={selectedSubject.name} disabled={!editable}
+          onChange={(value) => ui.edit(selectedSubjectKey, selectedInitial, value)} />
+        {subjectActionId === selectedSubject.id && ui.error
+          && <p className="form-error" role="alert">{ui.error}</p>}
+        <div className="subject-management-actions">
+          {configuredIds.has(selectedSubject.id) && <button type="button" disabled={!editable}
+            onClick={() => void unconfigure(selectedSubject)}>解除目前任教單位配置</button>}
+          <button type="submit" className="primary-button"
+            disabled={!editable || !ui.drafts[selectedSubjectKey]}>儲存科目</button>
+          <button type="button" className="danger-outline" disabled={!editable}
+            onClick={() => void deleteSubject(selectedSubject)}>刪除科目</button>
+          {ui.drafts[selectedSubjectKey] && <button type="button"
+            onClick={() => ui.requestTransition(() => {}, [selectedSubjectKey])}>捨棄草稿</button>}
+        </div>
+      </form>
+    </section>}
+    {!unit && units.length > 0 && <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p>}
+    {!editable && unavailableReason && !ui.error && <p role="status">{unavailableReason}</p>}
+    {ui.error && !subjectActionId && <p className="form-error" role="alert">{ui.error}</p>}
+    {ui.locked && <p role="status">正在儲存科目變更，尚未確認 Host receipt…</p>}
+    {ui.success && <p role="status">{ui.success}</p>}
+  </section>
+}
+
+interface V9ClassUiSession {
+  drafts: Record<string, ClassDraft>
+  locked: boolean
+  error: string
+  success: string
+  draft: (key: string, initial: ClassDraft) => ClassDraft
+  edit: (key: string, initial: ClassDraft, value: ClassDraft) => void
+  clear: (key: string) => void
+  fail: (message: string) => void
+  requestTransition: (action: () => void, keys?: string[]) => boolean
+}
+
+function useV9ClassUiSession(port: FormalClassManagementV9UiPort): V9ClassUiSession {
+  const [drafts, setDrafts] = useState<Record<string, ClassDraft>>({})
+  const [localError, setLocalError] = useState('')
+  const draftsRef = useRef(drafts)
+  draftsRef.current = drafts
+  const changeDrafts = (next: Record<string, ClassDraft>) => {
+    draftsRef.current = next
+    setDrafts(next)
+  }
+  return {
+    drafts, locked: port.pending, error: localError || port.error, success: port.success,
+    draft: (key, initial) => drafts[key] ?? initial,
+    edit: (key, initial, value) => {
+      setLocalError('')
+      port.clearFeedback()
+      const next = { ...draftsRef.current }
+      if (JSON.stringify(initial) === JSON.stringify(value)) delete next[key]
+      else next[key] = value
+      changeDrafts(next)
+    },
+    clear: (key) => {
+      const next = { ...draftsRef.current }
+      delete next[key]
+      changeDrafts(next)
+      setLocalError('')
+    },
+    fail: (message) => { port.clearFeedback(); setLocalError(message) },
+    requestTransition: (action, keys = Object.keys(draftsRef.current)) => {
+      if (port.pending) {
+        setLocalError('已提交的操作尚未確認持久化，不能捨棄或離開。')
+        return false
+      }
+      const affected = keys.filter((key) => draftsRef.current[key])
+      if (affected.length && !window.confirm('尚有未儲存的班級草稿，確定捨棄受影響的草稿？')) return false
+      const next = { ...draftsRef.current }
+      affected.forEach((key) => { delete next[key] })
+      changeDrafts(next)
+      setLocalError('')
+      port.clearFeedback()
+      action()
+      return true
+    },
+  }
+}
+
+function V9ClassManagerDialog(props: V9ClassProps & { onClose: () => void }) {
+  const ui = useV9ClassUiSession(props.classPort)
+  const trigger = useRef<HTMLElement | null>(null)
+  const content = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    trigger.current = document.activeElement as HTMLElement | null
+    content.current?.closest('[role="dialog"]')?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus()
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const focusable = [...(content.current?.closest('[role="dialog"]')
+        ?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') ?? [])]
+      if (!focusable.length) return
+      if (event.shiftKey && document.activeElement === focusable[0]) {
+        event.preventDefault(); focusable.at(-1)?.focus()
+      } else if (!event.shiftKey && document.activeElement === focusable.at(-1)) {
+        event.preventDefault(); focusable[0].focus()
+      }
+    }
+    document.addEventListener('keydown', trap)
+    return () => {
+      document.removeEventListener('keydown', trap)
+      if (trigger.current?.isConnected) trigger.current.focus()
+      else document.querySelector<HTMLButtonElement>('[data-course-add]')?.focus()
+    }
+  }, [])
+  return <Modal title="管理班級" subtitle="班級屬於所選專案與學制，不屬於教師課表。"
+    onClose={() => ui.requestTransition(props.onClose)}>
+    <div className="resource-manager-dialog">
+      <div ref={content} className="resource-manager-scroll">
+        <V9ClassManagerContent {...props} ui={ui} />
+      </div>
+      <div className="resource-manager-complete">
+        <p>「新增班級」會儲存目前這一筆；「建立」會完成管理並返回原流程。</p>
+        <button type="button" className="primary-button" disabled={ui.locked}
+          onClick={() => ui.requestTransition(props.onClose)}>建立</button>
+      </div>
+    </div>
+  </Modal>
+}
+
+function V9ClassManager(props: V9ClassProps) {
+  const ui = useV9ClassUiSession(props.classPort)
+  return <V9ClassManagerContent {...props} ui={ui} />
+}
+
+function V9ClassManagerContent({ classPort: port, readOnly = false, onOpenSettings, onCreated,
+  ui }: V9ClassProps & { ui: V9ClassUiSession }) {
+  const [editorId, setEditorId] = useState<string | null>(null)
+  const [showCreate, setShowCreate] = useState(false)
+  const [classActionId, setClassActionId] = useState<string | null>(null)
+  const managerContent = useRef<HTMLElement>(null)
+  const editorTrigger = useRef<HTMLElement | null>(null)
+  const previousEditorId = useRef<string | null>(null)
+  const view = port.view
+  const unit = view?.teachingUnit ?? null
+  const units = port.teachingUnits
+  const schools = port.schools
+  const fallbackSchoolId = unit?.schoolId ?? schools.find((school) =>
+    units.some((candidate) => candidate.schoolId === school.id))?.id ?? ''
+  const [selectedSchoolId, setSelectedSchoolId] = useState(fallbackSchoolId)
+  const schoolUnits = units.filter((candidate) => candidate.schoolId === selectedSchoolId)
+  const duplicate = schoolUnits.some((candidate) => schoolUnits.some((other) =>
+    candidate.id !== other.id && candidate.schoolLevel === other.schoolLevel))
+  const editable = !readOnly && port.writable && !port.pending && Boolean(view?.project && unit)
+  const unavailableReason = readOnly ? '目前為唯讀狀態，不能修改班級。'
+    : view?.actions.create.reason ?? null
+  const scopeKey = `${port.selection.projectId ?? ''}:${port.selection.teachingUnitId ?? ''}`
+  const createKey = `class-create:${scopeKey}`
+  const emptyDraft = emptyClassDraft(unit ?? undefined)
+  const newClass = ui.draft(createKey, emptyDraft)
+  const classes = port.classes
+  const selectedClass = editorId ? classes.find((item) => item.id === editorId) : undefined
+  const selectedKey = selectedClass ? `class:${scopeKey}:${selectedClass.id}` : ''
+  const selectedInitial = selectedClass ? classDraft(selectedClass) : null
+  const selectedDraft = selectedInitial ? ui.draft(selectedKey, selectedInitial) : null
+  const dirtyCount = Object.keys(ui.drafts).filter((key) => key.includes(`:${scopeKey}`)).length
+
+  useEffect(() => {
+    setEditorId(null)
+    setShowCreate(false)
+    setClassActionId(null)
+  }, [scopeKey])
+  useEffect(() => {
+    if (unit?.schoolId) setSelectedSchoolId(unit.schoolId)
+    else if (!schools.some((school) => school.id === selectedSchoolId)) {
+      setSelectedSchoolId(fallbackSchoolId)
+    }
+  }, [fallbackSchoolId, schools, selectedSchoolId, unit?.schoolId])
+  useEffect(() => {
+    if (editorId && previousEditorId.current !== editorId) {
+      managerContent.current?.querySelector<HTMLButtonElement>('.resource-editor-heading > button')?.focus()
+    } else if (!editorId && previousEditorId.current) {
+      const fallback = managerContent.current?.querySelector<HTMLElement>(
+        '.resource-browser button:not(:disabled), .resource-browser input:not(:disabled)')
+      ;(editorTrigger.current?.isConnected ? editorTrigger.current : fallback)?.focus()
+    }
+    previousEditorId.current = editorId
+  }, [editorId])
+
+  const changeUnit = (nextUnitId: string) => {
+    const keys = Object.keys(ui.drafts).filter((key) => key.includes(`:${scopeKey}`))
+    ui.requestTransition(() => port.selectTeachingUnit(nextUnitId || null), keys)
+  }
+  const finish = async (operation: () => Promise<{ classId?: string }>, draftKey?: string,
+    created = false) => {
+    try {
+      const result = await operation()
+      if (draftKey) ui.clear(draftKey)
+      if (created && result.classId) onCreated?.('classes', result.classId)
+      return result
+    } catch {
+      return null
+    }
+  }
+  const create = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!editable || !unit) return
+    const roomError = classRoomError(newClass.room)
+    if (roomError) { ui.fail(roomError); return }
+    setClassActionId('class-create')
+    await finish(() => port.actions.create({ ...newClass, teachingUnitId: unit.id }), createKey, true)
+  }
+  const update = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!editable || !selectedClass || !selectedDraft || !ui.drafts[selectedKey]) return
+    const roomError = classRoomError(selectedDraft.room)
+    if (roomError) { ui.fail(roomError); return }
+    setClassActionId(selectedClass.id)
+    await finish(() => port.actions.update(selectedClass.id, selectedDraft), selectedKey)
+  }
+  const remove = async (schoolClass: ProjectClass) => {
+    setClassActionId(schoolClass.id)
+    const impact = port.actions.impact(schoolClass.id)
+    if (!window.confirm(`確定刪除「${classDisplayName(schoolClass)}」？如果仍有固定課程、異動、單日課程或教學進度使用這個班級，系統會阻止刪除。\n目前引用共 ${impact.recurringLessons + impact.overrides + impact.oneOffLessons + impact.teachingProgress} 筆。`)) return
+    const result = await finish(() => port.actions.delete(schoolClass.id),
+      `class:${scopeKey}:${schoolClass.id}`)
+    if (result) setEditorId(null)
+  }
+  const openEditor = (classId: string) => {
+    editorTrigger.current = document.activeElement as HTMLElement | null
+    setEditorId(classId)
+  }
+  const returnToList = () => {
+    if (ui.locked) { ui.fail('這筆變更尚未完成儲存，請先完成儲存或處理復原。'); return }
+    setEditorId(null)
+  }
+  const openSettings = onOpenSettings ? () => ui.requestTransition(onOpenSettings) : undefined
+
+  return <section ref={managerContent} className="academic-settings resource-manager"
+    data-resource-state={ui.locked ? 'pending' : Object.keys(ui.drafts).length ? 'dirty' : 'clean'}>
+    <div className="academic-context-selectors">
+      <label>學校<select aria-label="學校" value={selectedSchoolId} onChange={(event) => {
+        setSelectedSchoolId(event.target.value)
+        const nextUnits = units.filter((candidate) => candidate.schoolId === event.target.value)
+        const ambiguous = nextUnits.some((candidate) => nextUnits.some((other) =>
+          candidate.id !== other.id && candidate.schoolLevel === other.schoolLevel))
+        changeUnit(ambiguous ? '' : nextUnits[0]?.id ?? '')
+      }} disabled={!schools.length || ui.locked}>{schools.map((school) =>
+          <option key={school.id} value={school.id}>{school.name}</option>)}</select></label>
+      <label>學制<select aria-label="目前學制" value={unit?.id ?? ''}
+        onChange={(event) => changeUnit(event.target.value)} disabled={!schoolUnits.length || ui.locked}>
+        {duplicate && <option value="">請選擇要管理的學制設定</option>}
+        {schoolUnits.map((candidate) => <option key={candidate.id} value={candidate.id}>
+          {unitLabel(candidate, units)}</option>)}
+      </select></label>
+    </div>
+    {(!schools.length || !units.length) && <div className="settings-empty">
+      目前專案尚無學校或學制。請先前往專案設定建立學校與學制。
+      {openSettings && <button type="button" onClick={openSettings}>前往專案設定</button>}
+    </div>}
+
+    {unit && !editorId && <section className="resource-browser" aria-label="班級清單">
+      <ResourceBrowserHeading title="班級"
+        description="班級屬於目前專案與學制，不受教師課表篩選影響。"
+        dirtyCount={dirtyCount}
+        action={<button type="button" className="resource-add-button class-create-trigger"
+          aria-expanded={showCreate} aria-controls="inline-class-create" disabled={!editable}
+          onClick={() => setShowCreate(true)}>＋ 新增班級{ui.drafts[createKey] ? '（未儲存）' : ''}</button>} />
+      <div className="resource-list">
+        {classes.map((item) => {
+          const key = `class:${scopeKey}:${item.id}`
+          const preview = ui.draft(key, classDraft(item))
+          return <div key={item.id}>
+            <button type="button" className="resource-list-item class-resource-item"
+              aria-label={`編輯班級 ${classDisplayName(item)}`} onClick={() => openEditor(item.id)}>
+              <span><strong>{classDisplayName({ ...item, ...preview })}</strong>
+                <small>{preview.room || '未設定教室'}</small></span>
+              {ui.drafts[key] && <em>未儲存</em>}
+            </button>
+            {classActionId === item.id && ui.error
+              && <p className="form-error" role="alert">{ui.error}</p>}
+          </div>
+        })}
+        {!classes.length && <p className="resource-list-empty">目前學制尚無班級。</p>}
+      </div>
+      {showCreate && <section id="inline-class-create" className="inline-class-create"
+        aria-label="建立新班級"><header><div><h4>新增班級</h4>
+          <p>選擇年級與班號後會自動產生班級名稱。</p></div>
+          {ui.drafts[createKey] && <span className="resource-dirty-badge">未儲存</span>}</header>
+        <form className="resource-editor class-editor-row class-create" aria-label="新增班級表單"
+          onSubmit={(event) => void create(event)}>
+          <ClassIdentityFields draft={newClass} unit={unit}
+            onChange={(value) => ui.edit(createKey, emptyDraft, value)} prefix="新班級" disabled={!editable} />
+          <ClassRoomField id="new-class-room-help" prefix="新班級" room={newClass.room ?? ''}
+            disabled={!editable} onChange={(room) => ui.edit(createKey, emptyDraft, { ...newClass, room })} />
+          <span className="class-code-preview">顯示：{classDisplayName({ name: newClass.name ?? '',
+            grade: newClass.grade, classNumber: newClass.classNumber })}</span>
+          {classActionId === 'class-create' && ui.error
+            && <p className="form-error" role="alert">{ui.error}</p>}
+          <div className="class-create-actions"><button type="submit"
+            className="primary-button class-create-submit" disabled={!editable}>
+            {ui.locked ? '儲存中…' : '新增班級'}</button>
+            <button type="button" disabled={ui.locked} onClick={() => setShowCreate(false)}>收起</button>
+            {ui.drafts[createKey] && <button type="button" disabled={ui.locked}
+              onClick={() => ui.requestTransition(() => setShowCreate(false), [createKey])}>捨棄草稿</button>}
+          </div>
+        </form>
+      </section>}
+    </section>}
+
+    {unit && selectedClass && selectedDraft && selectedInitial && <section className="resource-editor-shell">
+      <EditorHeading title={`編輯班級｜${classDisplayName(selectedClass)}`}
+        dirty={Boolean(ui.drafts[selectedKey])} locked={ui.locked}
+        onBack={returnToList} backLabel="返回班級清單" />
+      <form className="resource-editor class-editor-row" aria-label={`管理班級 ${selectedClass.name}`}
+        onSubmit={(event) => void update(event)}>
+        <ClassIdentityFields draft={selectedDraft} unit={unit}
+          onChange={(value) => ui.edit(selectedKey, selectedInitial, value)} prefix="班級"
+          legacyName={selectedClass.grade === undefined || selectedClass.classNumber === undefined}
+          disabled={!editable} />
+        <ClassRoomField id={`class-room-help-${selectedClass.id}`} prefix="班級"
+          room={selectedDraft.room ?? ''} disabled={!editable}
+          onChange={(room) => ui.edit(selectedKey, selectedInitial, { ...selectedDraft, room })} />
+        <span className="class-code-preview">顯示：{classDisplayName({
+          name: selectedDraft.name ?? selectedClass.name, grade: selectedDraft.grade,
+          classNumber: selectedDraft.classNumber })}</span>
+        {classActionId === selectedClass.id && ui.error
+          && <p className="form-error" role="alert">{ui.error}</p>}
+        <div className="resource-editor-actions">
+          <button type="submit" className="primary-button"
+            disabled={!editable || !ui.drafts[selectedKey]}>儲存班級</button>
+          <button type="button" className="danger-outline" disabled={!editable}
+            onClick={() => void remove(selectedClass)}>刪除班級</button>
+          {ui.drafts[selectedKey] && <button type="button"
+            onClick={() => ui.requestTransition(() => {}, [selectedKey])}>捨棄草稿</button>}
+        </div>
+      </form>
+    </section>}
+    {!unit && units.length > 0 && <p className="settings-empty">請選擇學制，才能管理班級。</p>}
+    {!editable && unavailableReason && !ui.error && <p role="status">{unavailableReason}</p>}
+    {ui.error && !classActionId && <p className="form-error" role="alert">{ui.error}</p>}
+    {ui.locked && <p role="status">正在儲存班級變更，尚未確認 Host receipt…</p>}
+    {ui.success && <p role="status">{ui.success}</p>}
   </section>
 }
 
