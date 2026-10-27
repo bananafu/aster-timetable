@@ -447,7 +447,7 @@ describe('resource session with real v7 storage', () => {
     expect(memory().subjects.filter((item) => item.name === '化學')).toHaveLength(1)
     expect(screen.getByRole('button', { name: '編輯科目 化學' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '加入預設科目 化學' })).toBeNull()
-    expect(screen.getByText('已選')).toBeTruthy()
+    expect(screen.getByText('已加入')).toBeTruthy()
     expect(sessionState()).toMatchObject({ state: 'pending', operation: 'create-subject', pending: true })
     flush()
     expect(stored().subjects.filter((item) => item.name === '化學')).toHaveLength(1)
@@ -478,6 +478,150 @@ describe('resource session with real v7 storage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保留本頁完整資料並重試儲存' }))
     expect(stored().subjects.filter((item) => item.id === id)).toHaveLength(1)
     expect(sessionState().state).toBe('persisted')
+  })
+
+  it.each(['自然科學探究與實作', '藝術生活'])('%s 可逐筆加入、永久刪除並以新 ID 重新加入', (name) => {
+    const data = storageFixture()
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    data.subjects = []
+    data.recurringLessons = []
+    data.overrides = []
+    data.oneOffLessons = []
+    startStorage('subjects', data)
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: name } })
+
+    fireEvent.click(screen.getByRole('button', { name: `加入預設科目 ${name}` }))
+    const firstId = memory().subjects.find((subject) => subject.name === name)!.id
+    expect(screen.queryByText(`已儲存：已加入預設科目「${name}」。`)).toBeNull()
+    flush()
+    expect(stored().subjects.find((subject) => subject.id === firstId)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: `永久刪除科目「${name}」` }))
+    expect(screen.queryByText(`已儲存：已永久刪除科目「${name}」。`)).toBeNull()
+    expect(stored().subjects.some((subject) => subject.id === firstId)).toBe(true)
+    flush()
+    expect(stored().subjects.some((subject) => subject.id === firstId)).toBe(false)
+    expect(screen.getByRole('button', { name: `加入預設科目 ${name}` })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: `加入預設科目 ${name}` }))
+    const secondId = memory().subjects.find((subject) => subject.name === name)!.id
+    expect(secondId).not.toBe(firstId)
+    flush()
+    expect(stored().subjects.filter((subject) => subject.name === name).map((subject) => subject.id)).toEqual([secondId])
+  })
+
+  it('高中加入數學後，國中以同一 Subject ID 安全擴充適用學制', () => {
+    const data = storageFixture()
+    const senior = data.teachingUnits[0]
+    senior.schoolLevel = 'senior-high'
+    const junior = { ...structuredClone(senior), id: 'junior-unit', name: '國中部', schoolLevel: 'junior-high' as const }
+    data.teachingUnits.push(junior)
+    data.subjects = []
+    data.recurringLessons = []
+    data.overrides = []
+    data.oneOffLessons = []
+    startStorage('subjects', data)
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '數學' } })
+    fireEvent.click(screen.getByRole('button', { name: '加入預設科目 數學' }))
+    flush()
+    const before = structuredClone(stored().subjects.find((subject) => subject.name === '數學')!)
+
+    fireEvent.change(screen.getByLabelText('目前學制'), { target: { value: junior.id } })
+    expect(screen.getByText(/既有科目「數學」尚未加入目前學制/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '將既有科目 數學 加入此學制' }))
+    expect(screen.queryByText('已儲存：已將「數學」加入國中部適用。')).toBeNull()
+    flush()
+
+    const after = stored().subjects.find((subject) => subject.id === before.id)!
+    expect(after).toMatchObject({ id: before.id, name: before.name, shortName: before.shortName, color: before.color })
+    expect(after.applicableSchoolLevels).toEqual(expect.arrayContaining(['senior-high', 'junior-high']))
+    expect(stored().subjects.filter((subject) => subject.name === '數學')).toHaveLength(1)
+    expect(screen.getByText('已加入')).toBeTruthy()
+  })
+
+  it('alias 與簡稱衝突顯示既有科目與具體原因，不再顯示籠統需確認', () => {
+    const data = storageFixture()
+    data.teachingUnits[0].schoolLevel = 'junior-high'
+    data.subjects = [
+      { id: 'legacy-chinese', name: '國文', shortName: '文', color: '#123456', applicableSchoolLevels: ['junior-high'] },
+      { id: 'logic', name: '邏輯訓練', shortName: '數', color: '#654321', applicableSchoolLevels: ['junior-high'] },
+    ]
+    data.recurringLessons = []
+    data.overrides = []
+    data.oneOffLessons = []
+    startStorage('subjects', data)
+
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '國語文' } })
+    expect(screen.getByText(/符合既有科目「國文」/)).toBeTruthy()
+    expect(screen.getByText('既有科目')).toBeTruthy()
+    expect(screen.queryByText('需確認')).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '數學' } })
+    expect(screen.getByText(/簡稱「數」已由「邏輯訓練」使用/)).toBeTruthy()
+    expect(screen.getByText('簡稱衝突')).toBeTruthy()
+    expect(screen.queryByText('需確認')).toBeNull()
+  })
+
+  it('被目前課程、歷史版本及封存 Project 引用時，在科目旁顯示具體阻擋項目', () => {
+    const data = migrateV6ToV7(migrateV5ToV6(fixture()))
+    const subject = data.subjects[0]
+    const sourceProject = data.projects[0]
+    const sourceSchool = data.schools[0]
+    const sourceUnit = data.teachingUnits[0]
+    const sourceClass = data.classes.find((item) => item.teachingUnitId === sourceUnit.id)!
+    const sourceTimetable = data.timetables.find((item) => item.projectId === sourceProject.id)!
+    const sourceLesson = data.recurringLessons.find((item) => item.subjectId === subject.id)!
+    subject.applicableSchoolLevels = [sourceUnit.schoolLevel]
+    data.recurringLessons = [
+      { ...sourceLesson, id: 'history-reference', seriesId: 'versioned-series', effectiveStart: sourceUnit.startDate, effectiveEnd: sourceUnit.startDate },
+      { ...sourceLesson, id: 'current-reference', seriesId: 'versioned-series', effectiveStart: '2026-09-01' },
+    ]
+    const archivedProject = { ...sourceProject, id: 'archived-project', name: '封存學期', archivedAt: '2026-10-01T00:00:00.000Z' }
+    const archivedSchool = { ...sourceSchool, id: 'archived-school', projectId: archivedProject.id }
+    const archivedUnit = { ...structuredClone(sourceUnit), id: 'archived-unit', projectId: archivedProject.id, schoolId: archivedSchool.id }
+    const archivedClass = { ...sourceClass, id: 'archived-class', projectId: archivedProject.id, teachingUnitId: archivedUnit.id }
+    const archivedTimetable = { ...sourceTimetable, id: 'archived-timetable', projectId: archivedProject.id }
+    data.projects.push(archivedProject)
+    data.schools.push(archivedSchool)
+    data.teachingUnits.push(archivedUnit)
+    data.classes.push(archivedClass)
+    data.timetables.push(archivedTimetable)
+    data.recurringLessons.push({ ...sourceLesson, id: 'archived-reference', seriesId: 'archived-series', projectId: archivedProject.id, timetableId: archivedTimetable.id, teachingUnitId: archivedUnit.id, classId: archivedClass.id })
+    data.overrides = []
+    data.oneOffLessons = []
+    const { raw } = startStorage('subjects', data)
+
+    fireEvent.click(screen.getByRole('button', { name: `永久刪除科目「${subject.name}」` }))
+    const alert = screen.getByRole('alert').textContent ?? ''
+    expect(alert).toContain('固定課程「current-reference」')
+    expect(alert).toContain('歷史版本 固定課程「history-reference」')
+    expect(alert).toContain('封存專案 固定課程「archived-reference」')
+    expect(alert).toContain('封存學期')
+    expect(window.confirm).not.toHaveBeenCalled()
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+  })
+
+  it('預設科目刪除寫入失敗時不顯示成功，並保留可重試的原操作', () => {
+    const data = storageFixture()
+    data.teachingUnits[0].schoolLevel = 'senior-high'
+    data.subjects = [{ id: 'arts-life', name: '藝術生活', shortName: '藝生', color: '#8B758F', applicableSchoolLevels: ['senior-high'] }]
+    data.recurringLessons = []
+    data.overrides = []
+    data.oneOffLessons = []
+    const { raw } = startStorage('subjects', data)
+    const setItem = Storage.prototype.setItem
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === APP_DATA_V7_KEY) throw new DOMException('full', 'QuotaExceededError')
+      return setItem.call(this, key, value)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '永久刪除科目「藝術生活」' }))
+    expect(screen.queryByText('已儲存：已永久刪除科目「藝術生活」。')).toBeNull()
+    flush()
+    expect(sessionState()).toMatchObject({ state: 'blocked', operation: 'delete-subject' })
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
+    expect(screen.queryByText('已儲存：已永久刪除科目「藝術生活」。')).toBeNull()
+    write.mockRestore()
   })
 
   it('預設科目提交後遇到外部替換會標示未確認並阻止再次新增', () => {

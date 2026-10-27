@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
 import { addClass, removeClass, updateClass, type ClassDraft } from '../data/academicSettingsV4'
 import { DEFAULT_SUBJECT_CATALOG, OPTIONAL_SUBJECT_CATALOG, type SubjectCatalogEntry } from '../data/defaultSubjects'
-import { analyzeSubjectCatalog } from '../data/subjectCatalogAnalysis'
+import { analyzeSubjectCatalog, type SubjectCatalogAnalysisItem } from '../data/subjectCatalogAnalysis'
 import { createProjectSubject, deleteProjectSubject, getProjectSubjectImpact, removeProjectSubjectSchoolLevel, updateProjectSubject } from '../data/subjectManagementAdapter'
 import { findProjectSubject, selectProjectSubjects } from '../data/subjectSelectorsV8'
 import type { SubjectDraft } from '../data/subjectsV5'
+import type { SubjectReference } from '../data/subjectReferences'
 import { classDisplayName, gradeLabel, gradesForLevel } from '../lib/classes'
 import { normalizeSubjectText } from '../lib/subjectSearch'
 import { SCHOOL_LEVELS, type AppDataV4, type ProjectClass, type SchoolLevel, type Subject, type TeachingUnit } from '../types'
@@ -28,6 +29,54 @@ const classDraft = (item: ProjectClass): ClassDraft => ({ name: item.name, grade
 
 type EditorSelection = { kind: 'subject' | 'class'; id: string } | { kind: 'subject-create' } | null
 const subjectCatalog = [...DEFAULT_SUBJECT_CATALOG, ...OPTIONAL_SUBJECT_CATALOG] as readonly SubjectCatalogEntry[]
+
+const referenceKindLabel: Record<SubjectReference['kind'], string> = {
+  lesson: '固定課程',
+  override: '課程異動',
+  'one-off': '單日課程',
+}
+
+function subjectReferenceLabel(data: AppDataV4, reference: SubjectReference) {
+  const project = reference.projectId ? data.projects.find((item) => item.id === reference.projectId) : undefined
+  const unit = reference.teachingUnitId ? data.teachingUnits.find((item) => item.id === reference.teachingUnitId) : undefined
+  const flags = [reference.historical ? '歷史版本' : '', reference.archived ? '封存專案' : ''].filter(Boolean)
+  const scope = [project?.name ?? (reference.projectId ? `專案 ${reference.projectId}` : '無法判斷專案'), unit?.name ?? (reference.teachingUnitId ? `任教單位 ${reference.teachingUnitId}` : '無法判斷學制')]
+  return `${flags.length ? `${flags.join('、')} ` : ''}${referenceKindLabel[reference.kind]}「${reference.id}」（${scope.join('／')}）`
+}
+
+function subjectOperationError(data: AppDataV4, cause: unknown, fallback: string) {
+  if (!(cause instanceof Error)) return fallback
+  const references = (cause as Error & { details?: { blockedReferences?: SubjectReference[] } }).details?.blockedReferences
+  if (!references?.length) return cause.message
+  const shown = references.slice(0, 3).map((reference) => subjectReferenceLabel(data, reference))
+  const remainder = references.length - shown.length
+  return `${cause.message} 阻擋項目：${shown.join('；')}${remainder > 0 ? `；另有 ${remainder} 筆引用` : ''}。請先在原課程或異動中改用其他科目。`
+}
+
+function catalogConflictMessage(data: AppDataV4, item: SubjectCatalogAnalysisItem) {
+  const existing = item.existingSubjectIds.map((id) => data.subjects.find((subject) => subject.id === id)).filter((subject): subject is Subject => Boolean(subject))
+  if (item.status === 'exists-missing-level') return existing[0]
+    ? `既有科目「${existing[0].name}」尚未加入目前學制；會保留原 ID、名稱、簡稱與顏色。`
+    : item.reason
+  if (item.status === 'alias-match-review') return existing.length
+    ? `符合既有科目${existing.map((subject) => `「${subject.name}」`).join('、')}；請先檢視，系統不會自動合併。`
+    : item.reason
+  if (item.status === 'short-name-conflict') return existing.length
+    ? `簡稱「${existing[0].shortName}」已由${existing.map((subject) => `「${subject.name}」`).join('、')}使用。`
+    : item.reason
+  if (item.status === 'same-name-review') return existing.length
+    ? `找到 ${existing.length} 筆同名科目：${existing.map((subject) => `「${subject.name}」`).join('、')}；不得自動選擇。`
+    : item.reason
+  return item.reason
+}
+
+function catalogStatusLabel(item: SubjectCatalogAnalysisItem) {
+  if (item.status === 'alias-match-review') return '既有科目'
+  if (item.status === 'short-name-conflict') return '簡稱衝突'
+  if (item.status === 'same-name-review') return '同名資料'
+  if (item.status === 'catalog-key-id-conflict') return 'ID 衝突'
+  return '目錄錯誤'
+}
 
 interface Props {
   data: AppDataV4
@@ -97,6 +146,7 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
   const { schoolId, unitId, showClassCreate, projectId } = session.view
   const [editor, setEditor] = useState<EditorSelection>(null)
   const [subjectQuery, setSubjectQuery] = useState('')
+  const [subjectActionId, setSubjectActionId] = useState<string | null>(null)
   const managerContent = useRef<HTMLElement>(null)
   const editorTrigger = useRef<HTMLElement | null>(null)
   const previousEditor = useRef<EditorSelection>(null)
@@ -199,16 +249,33 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
     session.submit({ type: 'create-subject', targetId: id, projectId, teachingUnitId: unit.id, draftKeys: [key], success: `已儲存：已加入預設科目「${entry.name}」。` },
       (current) => createProjectSubject(current, projectId, draft, id))
   }
+  const addCatalogSubjectLevel = (entry: SubjectCatalogEntry, subjectId: string) => {
+    if (!editable || !unit || !projectId) return
+    const subject = findProjectSubject(data, projectId, subjectId)
+    if (!subject) { session.fail('找不到要擴充學制的既有科目。'); return }
+    const levels = subject.applicableSchoolLevels ?? [...SCHOOL_LEVELS]
+    if (levels.includes(unit.schoolLevel)) return
+    const draft: SubjectDraft = { name: subject.name, shortName: subject.shortName, color: subject.color, applicableSchoolLevels: [...levels, unit.schoolLevel] }
+    setSubjectActionId(subject.id)
+    try {
+      updateProjectSubject(data, projectId, subject.id, draft, true)
+      if (!window.confirm(`將既有科目「${subject.name}」加入${levelLabel[unit.schoolLevel]}適用？\n科目 ID、名稱、簡稱與顏色都會保留。`)) return
+      session.requestTransition(() => session.submit({ type: 'update-subject', targetId: subject.id, projectId, teachingUnitId: unit.id, source: subject, draftKeys: [], success: `已儲存：已將「${entry.name}」加入${levelLabel[unit.schoolLevel]}適用。` },
+        (current) => updateProjectSubject(current, projectId, subject.id, draft, true)), [`subject:${subject.id}`])
+    } catch (cause) { session.fail(subjectOperationError(data, cause, '目前無法將這個科目加入目前學制。')) }
+  }
   const removeSubjectLevel = (subject: Subject, level: SchoolLevel) => {
     if (!editable || !storagePersistence || !projectId) return
+    setSubjectActionId(subject.id)
     try {
       removeProjectSubjectSchoolLevel(data, projectId, subject.id, level, true)
       if (!window.confirm(`解除「${subject.name}」的${levelLabel[level]}適用關係？\n此操作會讓所有${levelLabel[level]}課程無法再選用這個科目，但會保留科目本身及其他學制。\n若目前仍有課程使用，系統會阻止這項變更。`)) return
       session.submit({ type: 'remove-subject-level', targetId: subject.id, projectId, source: subject, draftKeys: [], success: `已儲存：已解除「${subject.name}」的${levelLabel[level]}適用關係；科目與其他學制均已保留。` }, (current) => removeProjectSubjectSchoolLevel(current, projectId, subject.id, level, true))
-    } catch (cause) { session.fail(cause instanceof Error ? cause.message : '目前無法取消這個學制，請確認是否仍有課程使用此科目。') }
+    } catch (cause) { session.fail(subjectOperationError(data, cause, '目前無法取消這個學制，請確認是否仍有課程使用此科目。')) }
   }
   const removeSelectedSubject = (subject: Subject) => {
     if (!editable || !storagePersistence || !unit || !projectId) return
+    setSubjectActionId(subject.id)
     const levels = subject.applicableSchoolLevels ?? [...SCHOOL_LEVELS]
     try {
       if (levels.length > 1) {
@@ -222,7 +289,7 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
         session.requestTransition(() => session.submit({ type: 'delete-subject', targetId: subject.id, projectId, source: subject, draftKeys: [], success: `已儲存：已永久刪除科目「${subject.name}」。` },
           (current) => deleteProjectSubject(current, projectId, subject.id, true)), [`subject:${subject.id}`])
       }
-    } catch (cause) { session.fail(cause instanceof Error ? cause.message : '目前無法安全移除這個科目。') }
+    } catch (cause) { session.fail(subjectOperationError(data, cause, '目前無法安全移除這個科目。')) }
   }
   const openSettings = onOpenSettings ? () => session.requestTransition(onOpenSettings) : undefined
   const returnToList = () => {
@@ -254,13 +321,18 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
       <ResourceBrowserHeading title="我的科目" description={`目前${levelLabel[unit.schoolLevel]}可使用的科目。點標籤可編輯；× 會取消${data.schemaVersion === 8 ? '目前專案' : '所有專案'}的目前學制適用，若是唯一適用學制則會明確詢問是否永久刪除。`} dirtyCount={dirtyCount} action={null} />
       <label className="subject-picker-search">搜尋科目<input type="search" aria-label="搜尋科目" value={subjectQuery} onChange={(event) => setSubjectQuery(event.target.value)} placeholder="搜尋已選與預設科目" /></label>
       <div className="subject-chip-list" aria-label="我的科目標籤">
-        {visibleSubjects.map((subject) => <SubjectChip key={subject.id} subject={subject} session={session} projectScoped={data.schemaVersion === 8} disabled={!editable || !storagePersistence} onSelect={() => openEditor({ kind: 'subject', id: subject.id })} onRemove={() => removeSelectedSubject(subject)} />)}
+        {visibleSubjects.map((subject) => <div key={subject.id} style={{ display: 'grid', gap: 4 }}><SubjectChip subject={subject} session={session} projectScoped={data.schemaVersion === 8} disabled={!editable || !storagePersistence} onSelect={() => openEditor({ kind: 'subject', id: subject.id })} onRemove={() => removeSelectedSubject(subject)} />{subjectActionId === subject.id && session.error && <p className="form-error" role="alert">{session.error}</p>}</div>)}
         {!visibleSubjects.length && <p className="resource-list-empty">{subjectsInScope.length ? '我的科目中沒有符合搜尋條件的項目。' : '目前學制尚未選用科目，請從下方預設目錄加入。'}</p>}
       </div>
       <section className="subject-catalog-picker" aria-label="加入預設科目">
         <div><h3>加入預設科目</h3><p>目錄依目前學制篩選；＋ 只會建立通過既有衝突檢查的科目。</p></div>
         <div className="subject-catalog-cards">
-          {visibleCatalogItems.map(({ item, entry }) => <div key={item.catalogKey} className={`subject-catalog-card ${item.status}`}><i style={{ background: entry.color }} aria-hidden="true" /><span><strong>{entry.name}</strong><small>{entry.shortName}</small></span>{item.status === 'safe-to-add' ? <button type="button" aria-label={`加入預設科目 ${entry.name}`} title={`加入 ${entry.name}`} disabled={!editable || session.locked} onClick={() => addCatalogSubject(entry)}>＋</button> : item.status === 'exists-applicable' ? <em>已選</em> : <em title={item.reason}>需確認</em>}</div>)}
+          {visibleCatalogItems.map(({ item, entry }) => {
+            const message = catalogConflictMessage(data, item)
+            const existingSubjectId = item.existingSubjectIds[0]
+            const inlineError = existingSubjectId && subjectActionId === existingSubjectId ? session.error : ''
+            return <div key={item.catalogKey} className={`subject-catalog-card ${item.status}`} title={message}><i style={{ background: entry.color }} aria-hidden="true" /><span><strong>{entry.name}</strong><small>{entry.shortName}</small>{!['safe-to-add', 'exists-applicable'].includes(item.status) && <small role={inlineError ? 'alert' : undefined}>{inlineError || message}</small>}</span>{item.status === 'safe-to-add' ? <button type="button" aria-label={`加入預設科目 ${entry.name}`} title={`加入 ${entry.name}`} disabled={!editable || session.locked} onClick={() => addCatalogSubject(entry)}>＋</button> : item.status === 'exists-applicable' ? <em>已加入</em> : item.status === 'exists-missing-level' && existingSubjectId ? <button type="button" aria-label={`將既有科目 ${entry.name} 加入此學制`} title={message} disabled={!editable || session.locked} onClick={() => addCatalogSubjectLevel(entry, existingSubjectId)} style={{ width: 'auto', height: 'auto', padding: '5px 8px', borderRadius: 'var(--radius-sm)', fontSize: 10, whiteSpace: 'nowrap' }}>加入此學制</button> : <em title={message}>{catalogStatusLabel(item)}</em>}</div>
+          })}
           {!visibleCatalogItems.length && <p className="resource-list-empty">{unit.schoolLevel === 'other' ? '現有預設目錄沒有「其他」學制項目，可在下方新增自訂科目。' : '預設目錄中沒有符合搜尋條件的科目。'}</p>}
         </div>
       </section>
@@ -307,7 +379,7 @@ function ResourceManagerContent({ data, mode, storageStatus = 'saved', storagePe
       return <div key={key}>{editableKind && entry.source ? <button type="button" onClick={() => openEditor({ kind: editableKind, id: entry.source!.id })}>檢視「{entry.source.name}」草稿</button> : <><span aria-label="保留的新增草稿">{entry.kind === 'subject-create' ? String((entry.value as SubjectDraft).name) : String((entry.value as ClassDraft).name ?? '')}</span><button type="button" onClick={() => session.requestTransition(() => {}, [key])}>捨棄此筆新增草稿</button></>}</div>
     })}</section>}
     {session.unconfirmedCreations.length > 0 && <section aria-label="未確認的新增操作"><p>請先核對原新增 ID。結束這次未確認新增只會清除該筆輸入，保留目前文件中的資源；不會認定本地儲存成功。</p>{session.unconfirmedCreations.map((entry) => <div key={entry.key}><p>{entry.message}</p><button type="button" onClick={() => session.requestTransition(() => { if (entry.kind === 'class-create' && entry.key === classCreateKey) session.setView({ showClassCreate: false }); if (entry.key === subjectCreateKey || entry.key === classCreateKey) setEditor(null) }, [entry.key])}>結束這次未確認新增並清除輸入</button></div>)}</section>}
-    {session.error && <p className="form-error" role="alert">{session.error}</p>}
+    {session.error && !(mode === 'subjects' && !editor && subjectActionId && (visibleSubjects.some((subject) => subject.id === subjectActionId) || visibleCatalogItems.some(({ item }) => item.existingSubjectIds.includes(subjectActionId)))) && <p className="form-error" role="alert">{session.error}</p>}
     {session.locked && storageStatus === 'saved' && <p role="status">{session.operation?.type === 'remove-subject-level' ? '正在儲存解除適用關係…' : '正在儲存資源變更，尚未確認持久化…'}</p>}
     {session.success && <p role="status">{session.success}</p>}
     {storageControls && storageStatus !== 'saved' && <section aria-label="資源儲存復原"><p>以下復原操作會套用整份 AppData（所有專案、課表與資源），不是只處理目前這筆科目或班級。尚未提交的草稿仍會保留。</p><button type="button" onClick={() => { if (window.confirm('保留本頁整份 AppData 並寫入此裝置？此操作可能取代其他分頁版本；請先核對資料。')) storageControls.keepLocal() }}>保留本頁完整資料並重試儲存</button>{storageStatus === 'conflict' && storageControls.conflictSource === 'current' && <button type="button" onClick={() => { if (window.confirm('採用其他分頁的整份 AppData？本頁已提交但未寫入的變更將被取代；未提交草稿仍保留。')) session.adoptExternal(storageControls.acceptExternal) }}>採用其他分頁版本</button>}{storageControls.conflictSource === 'legacy' && <p>舊版分頁變更無法自動合併；請先關閉舊分頁並核對備份，再決定是否保留本頁 v7。</p>}</section>}
