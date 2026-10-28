@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { archiveProjectV9, createClassV9 } from './data/managementV9'
+import { archiveProjectV9, createClassV9, createEmptyProjectV9, createSchoolV9 } from './data/managementV9'
 import { createEmptyAppDataV8 } from './data/storageV8'
 import { configureTeacherSubjectV9, createBlankProjectV9, createTeacherSubjectV9,
   createTeacherTimetableV9, createTeachingUnitV9, TeacherSubjectV9Error,
@@ -92,6 +92,29 @@ function addSubject(data: AppDataV9, projectId: string, timetableId: string,
 }
 
 describe('formal V9 Subject controller and presenter', () => {
+  it('keeps teacher Subject ownership isolated in a null-term Project through one Host write', async () => {
+    const source = scopeFixture()
+    let data = createEmptyProjectV9(source.data, { name: '未設定' }, 'blank')
+    data = createSchoolV9(data, 'blank', { name: '乙校', color: '#123456' }, 'blank-school')
+    data = createTeachingUnitV9(data, 'blank', { schoolId: 'blank-school', name: '高中部',
+      schoolLevel: 'senior-high', startDate: '2027-08-01', endDate: '2028-01-31',
+      periods: source.seniorA.periods,
+      weekCycle: { enabled: true, anchorDate: '2027-08-01', anchorPattern: 'A' } }, 'blank-unit')
+    data = createTeacherTimetableV9(data, 'blank', { name: '甲課表', teacherName: '甲' }, 'blank-teacher-a')
+    data = createTeacherTimetableV9(data, 'blank', { name: '乙課表', teacherName: '乙' }, 'blank-teacher-b')
+    data = addSubject(data, 'blank', 'blank-teacher-b', 'blank-subject-b')
+    const host = hostFixture(data)
+    const selection = { projectId: 'blank', timetableId: 'blank-teacher-a', teachingUnitId: 'blank-unit' }
+    const result = await createFormalSubjectManagementV9Controller(host.host, () => 'blank-subject-a', selection)
+      .actions.createCustom({ ...math, applicableSchoolLevels: [...math.applicableSchoolLevels] })
+    expect(result.document.projects.find((item) => item.id === 'blank')?.term).toBeNull()
+    expect(presentFormalSubjectManagementV9(result.document, selection).subjects.map((item) => item.id))
+      .toEqual(['blank-subject-a'])
+    expect(result.document.subjects.find((item) => item.id === 'blank-subject-b')?.timetableId)
+      .toBe('blank-teacher-b')
+    expect(host.update).toHaveBeenCalledTimes(1)
+  })
+
   it('isolates Subjects with the same name between teachers', () => {
     const fixture = scopeFixture()
     let data = addSubject(fixture.data, fixture.projectA, 'teacher-a', 'math-a')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AppDataV8 } from '../../types'
+import type { AppDataV8, TimetableProject } from '../../types'
 import type { AppDataV9 } from '../../types/v9'
 import { createEmptyAppDataV8, loadAppDataV8Only, APP_DATA_V8_KEY } from '../storageV8'
 import { createBlankProject } from '../projectRuntimeV8'
@@ -8,7 +8,8 @@ import { createSubject, configureSubjectForTeachingUnit } from '../subjectsV8'
 import { createClassV8 } from '../classesV8'
 import { createRecurringLessonV8 } from '../recurringLessonsV8'
 import { isCompatibleAppDataV8 } from './v8'
-import { isCompatibleAppDataV9 } from './v9'
+import { createClassV9, createEmptyProjectV9, createSchoolV9, createTeachingUnitV9 } from '../managementV9'
+import { asV8ValidationProjection, isCompatibleAppDataV9 } from './v9'
 
 function fixture(): AppDataV9 {
   let id = 0
@@ -27,7 +28,9 @@ function fixture(): AppDataV9 {
 function withReferences(data: AppDataV9): AppDataV9 {
   const unit = data.teachingUnits[0]
   const projectId = data.activeProjectId!
-  const v8 = { ...data, schemaVersion: 8, subjects: data.subjects.map((subject) => {
+  const v8 = { ...data, schemaVersion: 8,
+    projects: data.projects.filter((item): item is TimetableProject => item.term !== null),
+    subjects: data.subjects.map((subject) => {
     const { id, name, shortName, color, applicableSchoolLevels, origin } = subject
     return { id, name, shortName, color, applicableSchoolLevels, origin, projectId: subject.projectId }
   }) } satisfies AppDataV8
@@ -48,6 +51,24 @@ function withReferences(data: AppDataV9): AppDataV9 {
 }
 
 describe('V9 Timetable-owned Subject contract', () => {
+  it('validates null-term structural resources natively while excluding them from V8 projection', () => {
+    const source = fixture()
+    const unit = source.teachingUnits[0]
+    let data = createEmptyProjectV9(source, { name: '未設定' }, 'blank')
+    data = createSchoolV9(data, 'blank', { name: '乙校', color: '#123456' }, 'blank-school')
+    data = createTeachingUnitV9(data, 'blank', { schoolId: 'blank-school', name: '高中部',
+      schoolLevel: 'senior-high', startDate: '2027-08-01', endDate: '2028-01-31', periods: unit.periods,
+      weekCycle: { enabled: true, anchorDate: '2027-08-01', anchorPattern: 'A' } }, 'blank-unit')
+    data = createClassV9(data, 'blank', { teachingUnitId: 'blank-unit', grade: 1, classNumber: 1 }, 'blank-class')
+    expect(isCompatibleAppDataV9(data)).toBe(true)
+    const projected = asV8ValidationProjection(data)
+    expect(projected.schools.some((item) => item.projectId === 'blank')).toBe(false)
+    expect(projected.teachingUnits.some((item) => item.projectId === 'blank')).toBe(false)
+    expect(projected.classes.some((item) => item.projectId === 'blank')).toBe(false)
+    expect(isCompatibleAppDataV9({ ...data, teachingUnits: data.teachingUnits.map((item) =>
+      item.id === 'blank-unit' ? { ...item, endDate: '2027-02-30' } : item) })).toBe(false)
+  })
+
   it('accepts empty V9, but neither V8 validator nor V8 loader accepts it', () => {
     const empty = { ...createEmptyAppDataV8(), schemaVersion: 9 } as AppDataV9
     expect(isCompatibleAppDataV9(empty)).toBe(true)

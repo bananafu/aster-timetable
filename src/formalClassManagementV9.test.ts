@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { archiveProjectV9, createClassV9 } from './data/managementV9'
+import { archiveProjectV9, createClassV9, createEmptyProjectV9, createSchoolV9 } from './data/managementV9'
 import { createEmptyAppDataV8 } from './data/storageV8'
 import { configureTeacherSubjectV9, createBlankProjectV9, createTeacherSubjectV9,
   createTeacherTimetableV9, createTeachingUnitV9 } from './data/teacherSubjectsV9'
@@ -116,6 +116,25 @@ function referencedFixture(kind: 'recurringLessons' | 'overrides' | 'oneOffLesso
 }
 
 describe('formal V9 Class controller and presenter', () => {
+  it('uses the verified Host path for Class management in a null-term Project', async () => {
+    const source = fixture()
+    let data = createEmptyProjectV9(source.data, { name: '未設定' }, 'blank')
+    data = createSchoolV9(data, 'blank', { name: '乙校', color: '#123456' }, 'blank-school')
+    data = createTeachingUnitV9(data, 'blank', { schoolId: 'blank-school', name: '高中部',
+      schoolLevel: 'senior-high', startDate: '2027-08-01', endDate: '2028-01-31',
+      periods: source.seniorA.periods,
+      weekCycle: { enabled: true, anchorDate: '2027-08-01', anchorPattern: 'A' } }, 'blank-unit')
+    const host = hostFixture(data)
+    const selection = { projectId: 'blank', teachingUnitId: 'blank-unit' }
+    const created = await createFormalClassManagementV9Controller(host.host, () => 'blank-class', selection)
+      .actions.create(classDraft('blank-unit'))
+    expect(created.document.projects.find((item) => item.id === 'blank')?.term).toBeNull()
+    expect(created.document.classes).toContainEqual(expect.objectContaining({
+      id: 'blank-class', projectId: 'blank', teachingUnitId: 'blank-unit',
+    }))
+    expect(host.update).toHaveBeenCalledTimes(1)
+  })
+
   it('scopes classes to the selected Project and TeachingUnit', () => {
     const source = fixture()
     let data = createClassV9(source.data, source.projectA, classDraft(source.seniorA.id), 'senior-class')

@@ -121,7 +121,7 @@ export function presentFormalClassManagementV9(document: AppDataV9,
   const write = availability(!writeReason, writeReason)
   return {
     selection: selected,
-    project: project ? { ...project, term: { ...project.term } } : null,
+    project: project ? { ...project, term: project.term === null ? null : { ...project.term } } : null,
     teachingUnit: teachingUnit ? cloneUnit(teachingUnit) : null,
     schools, teachingUnits, classes, impacts,
     actions: {

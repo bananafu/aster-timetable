@@ -560,7 +560,7 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
   const newSubject = ui.draft(subjectCreateKey, emptyDraft)
   const allSubjects = view?.subjects ?? []
   const configuredIds = new Set(view?.currentTeachingUnitConfigurations.map((item) => item.subjectId) ?? [])
-  const subjectsInScope = unit ? allSubjects.filter((subject) =>
+  const subjectsInScope = unit ? (view?.configuredSubjects ?? []).filter((subject) =>
     subject.applicableSchoolLevels.includes(unit.schoolLevel)) : []
   const needle = normalizeSubjectText(subjectQuery)
   const visibleSubjects = subjectsInScope.filter((subject) => !needle
@@ -641,7 +641,6 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
   const unconfigure = async (subject: Subject) => {
     if (!unit || !configuredIds.has(subject.id)) return
     setSubjectActionId(subject.id)
-    if (!window.confirm(`解除「${subject.name}」在目前任教單位的配置？\n科目本身仍會保留；若課程、異動或教學進度仍有引用，系統會阻止操作。`)) return
     await finish(() => port.actions.unconfigure(subject.id))
   }
   const saveSubject = async (event: FormEvent) => {
@@ -738,10 +737,9 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
                     onClick={() => void addCatalog(item.entry.catalogKey)}>＋</button>
                 : item.status === 'configured' ? <em>已加入</em>
                   : item.status === 'available-to-configure' && item.existingSubjectId
-                    ? <button type="button" aria-label={`將既有科目 ${item.entry.name} 配置到此任教單位`}
-                        title={item.reason} disabled={!editable || ui.locked}
-                        onClick={() => void configureCatalog(item.existingSubjectId!, item.entry.catalogKey, false)}
-                        style={{ width: 'auto', height: 'auto', padding: '5px 8px', borderRadius: 'var(--radius-sm)', fontSize: 10, whiteSpace: 'nowrap' }}>配置到此任教單位</button>
+                    ? <button type="button" aria-label={`加入預設科目 ${item.entry.name}`}
+                        title={`加入 ${item.entry.name}`} disabled={!editable || ui.locked}
+                        onClick={() => void configureCatalog(item.existingSubjectId!, item.entry.catalogKey, false)}>＋</button>
                     : item.status === 'requires-level-confirmation' && item.existingSubjectId
                       ? <button type="button" aria-label={`將既有科目 ${item.entry.name} 加入此學制並配置`}
                           title={item.reason} disabled={!editable || ui.locked}

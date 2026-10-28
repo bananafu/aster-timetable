@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ConfigureProjectTermV9Input, EmptyProjectV9Input } from '../data/managementV9'
 import type { CopyProjectV8Input } from '../data/projectRuntimeV8'
 import type { TimetableV8Details } from '../data/timetablesV8'
 import { createFormalProjectTimetableV9Controller, reconcileFormalProjectTimetableV9Selection,
   type FormalProjectTimetableV9Selection, type FormalTimetableCopyInput } from '../formalProjectTimetableV9'
-import { toFormalV9HostPort } from '../formalRuntime'
+import { toFormalV9HostPort, type FormalV9HostPort } from '../formalRuntime'
 import { useAppDataV9 } from './useAppDataV9'
 
 type FormalV9Controller = ReturnType<typeof createFormalProjectTimetableV9Controller>
@@ -26,8 +27,9 @@ export function createFormalProjectTimetableV9Actions(controller: FormalV9Contro
     selectProject: (projectId: string) => select(controller.selectProject(projectId)),
     selectTimetable: (timetableId: string) => select(controller.selectTimetable(controller.selection, timetableId)),
     project: {
-      // A name-only Project cannot be mapped while V9 still requires a complete term descriptor.
-      createEmptyFromName: null,
+      createEmptyFromName: (input: EmptyProjectV9Input) => confirmed(controller.createProject(input)),
+      configureTerm: (input: ConfigureProjectTermV9Input) =>
+        confirmed(controller.configureSelectedProjectTerm(input)),
       rename: null,
       viewArchived: null,
       copy: (input: CopyProjectV8Input) => confirmed(controller.copyProject(input)),
@@ -56,15 +58,28 @@ export function useFormalProjectTimetableV9Adapter() {
   const [selection, setSelection] = useState<FormalProjectTimetableV9Selection>({
     projectId: null, timetableId: null,
   })
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  const snapshotRef = useRef(toFormalV9HostPort(host))
+  snapshotRef.current = toFormalV9HostPort(host)
   useEffect(() => {
     const document = host.data
     if (!document) return
     setSelection((current) => reconcileFormalProjectTimetableV9Selection(document, current))
   }, [host.data])
-  const port = useMemo(() => toFormalV9HostPort(host), [host])
+  const port = useMemo(() => ({
+    get document() { return snapshotRef.current.document },
+    get status() { return snapshotRef.current.status },
+    get writable() { return snapshotRef.current.writable },
+    get pending() { return snapshotRef.current.pending },
+    get receipt() { return snapshotRef.current.receipt },
+    get revision() { return snapshotRef.current.revision },
+    get errorCode() { return snapshotRef.current.errorCode },
+    update: (produce: Parameters<FormalV9HostPort['update']>[0]) => snapshotRef.current.update(produce),
+  }), [])
   const controller = useMemo(() => host.data ? createFormalProjectTimetableV9Controller(
-    port, uid, selection,
-  ) : null, [host.data, port, selection])
+    port, uid, selection, () => selectionRef.current,
+  ) : null, [host, port, selection])
   const select = useCallback<Select>((next) => setSelection(next), [])
   const actions = useMemo(() => controller
     ? createFormalProjectTimetableV9Actions(controller, select) : null, [controller, select])

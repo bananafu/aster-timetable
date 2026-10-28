@@ -233,7 +233,7 @@ export function presentFormalSubjectManagementV9(document: AppDataV9,
     ? '請先選擇有效的 Project。' : !timetable
       ? '請先選擇屬於目前 Project 的教師 Timetable。' : null)
   return {
-    selection: selected, project: project ? { ...project, term: { ...project.term } } : null,
+    selection: selected, project: project ? { ...project, term: project.term === null ? null : { ...project.term } } : null,
     timetable: timetable ? { ...timetable } : null, teachingUnit: teachingUnit ? cloneUnit(teachingUnit) : null,
     teachingUnits, subjects, configuredSubjects, unconfiguredSubjects, teacherConfigurations,
     currentTeachingUnitConfigurations, impacts, catalog,

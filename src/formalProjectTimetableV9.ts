@@ -1,7 +1,7 @@
-import type { NewProjectInput } from './data/projectRuntime'
 import type { CopyProjectV8Input } from './data/projectRuntimeV8'
-import { archiveProjectV9, copyProjectV9, createEmptyProjectV9, deleteEmptyProjectV9,
-  getProjectV9Impact, reactivateProjectV9 } from './data/managementV9'
+import { archiveProjectV9, configureProjectTermV9, copyProjectV9, createEmptyProjectV9,
+  deleteEmptyProjectV9, getProjectV9Impact, reactivateProjectV9,
+  type ConfigureProjectTermV9Input, type EmptyProjectV9Input } from './data/managementV9'
 import { createTeacherTimetableV9, deleteTeacherTimetableV9, duplicateTeacherTimetableV9,
   getTeacherTimetableV9Impact, updateTeacherTimetableV9 } from './data/teacherSubjectsV9'
 import type { TimetableV8Details } from './data/timetablesV8'
@@ -78,7 +78,7 @@ export function selectFormalTimetableV9(document: AppDataV9,
 
 export function listFormalProjectsV9(document: AppDataV9) {
   validateDocument(document)
-  return document.projects.map((item) => ({ ...item, term: { ...item.term } }))
+  return document.projects.map((item) => ({ ...item, term: item.term === null ? null : { ...item.term } }))
 }
 
 export function listFormalTimetablesV9(document: AppDataV9, projectId: string) {
@@ -97,12 +97,19 @@ export const FORMAL_PROJECT_V9_CAPABILITIES = {
  * Callers own local Project/Timetable selection and replace it with result.selection after success.
  */
 export function createFormalProjectTimetableV9Controller(host: FormalV9HostPort,
-  createId: () => string, requestedSelection: Partial<FormalProjectTimetableV9Selection> = {}) {
+  createId: () => string, requestedSelection: Partial<FormalProjectTimetableV9Selection> = {},
+  readSelection?: () => FormalProjectTimetableV9Selection) {
   let submitting = false
   const initial = validateDocument(host.document)
   const initialRaw = JSON.stringify(initial)
   const initialRevision = host.revision
   const initialSelection = reconcileFormalProjectTimetableV9Selection(initial, requestedSelection)
+  const assertSelection = () => {
+    const live = readSelection ? reconcileFormalProjectTimetableV9Selection(initial, readSelection()) : initialSelection
+    if (live.projectId !== initialSelection.projectId || live.timetableId !== initialSelection.timetableId) {
+      fail('scope-mismatch', 'Project or Timetable selection changed before confirmation.')
+    }
+  }
 
   const requireProject = (document: AppDataV9, projectId: string, editable = false) => {
     const project = document.projects.find((item) => item.id === projectId)
@@ -121,16 +128,20 @@ export function createFormalProjectTimetableV9Controller(host: FormalV9HostPort,
     choose: (next: AppDataV9) => FormalProjectTimetableV9Selection): Promise<FormalProjectTimetableV9Result> => {
     if (submitting || host.pending) fail('duplicate-submit', 'A V9 write is already in progress.')
     if (host.status !== 'active' || !host.writable) fail('not-writable', 'V9 Host is read-only.')
+    assertSelection()
+    if (host.revision !== initialRevision) fail('stale-document', 'V9 revision changed before submission.')
     let nextDocument: AppDataV9 | null = null
     submitting = true
     try {
       const receipt = await host.update((current) => {
+        assertSelection()
         if (JSON.stringify(current) !== initialRaw) fail('stale-document', 'V9 document changed before submission.')
         const next = produce(current)
         if (!isCompatibleAppDataV9(next)) fail('invalid-result', 'V9 operation produced an invalid document.')
         nextDocument = next
         return next
       })
+      assertSelection()
       const confirmed = nextDocument as AppDataV9 | null
       if (!confirmed || receipt.raw !== JSON.stringify(confirmed)
         || receipt.revision !== initialRevision + 1 || !receipt.attemptId) {
@@ -155,9 +166,17 @@ export function createFormalProjectTimetableV9Controller(host: FormalV9HostPort,
     getProjectImpact: (projectId: string) => getProjectV9Impact(initial, projectId),
     getTimetableImpact: (projectId: string, timetableId: string) =>
       getTeacherTimetableV9Impact(initial, projectId, timetableId),
-    createProject: (input: NewProjectInput) => commit((current) =>
+    createProject: (input: EmptyProjectV9Input) => commit((current) =>
       createEmptyProjectV9(current, input, createId()),
     (next) => reconcileFormalProjectTimetableV9Selection(next, { projectId: next.activeProjectId })),
+    configureSelectedProjectTerm: (input: ConfigureProjectTermV9Input) => {
+      const projectId = initialSelection.projectId
+      if (!projectId) fail('scope-mismatch', 'Select a Project before configuring its term.')
+      const project = requireProject(initial, projectId!, true)
+      if (project.term !== null) fail('scope-mismatch', 'Project term is already configured.')
+      return commit((current) => configureProjectTermV9(current, projectId!, input),
+        (next) => reconcileFormalProjectTimetableV9Selection(next, initialSelection))
+    },
     copyProject: (input: CopyProjectV8Input) => {
       requireProject(initial, input.sourceProjectId)
       return commit((current) => copyProjectV9(current, input, createId),

@@ -4,14 +4,16 @@ import { GraduationCap, Menu, X, type LucideIcon } from 'lucide-react'
 export type PreviewNavItem = { id: string; label: string; icon: LucideIcon }
 
 /** The same mobile destinations accompany both Sidebar variants. */
-export function MobileBottomNavigation({ items, activePage, onNavigate, onMore }: {
+export function MobileBottomNavigation({ items, activePage, onNavigate, onMore, disabledReason }: {
   items: PreviewNavItem[]
   activePage: string
   onNavigate: (id: string) => void
   onMore: () => void
+  disabledReason?: string
 }) {
   return <nav className="mobile-bottom-nav" aria-label="手機底部導覽">
     {items.map(({ id, label, icon: Icon }) => <button key={id} type="button"
+      disabled={Boolean(disabledReason)} title={disabledReason}
       aria-label={`手機導覽：${label}`} aria-current={activePage === id ? 'page' : undefined}
       data-label={label} onClick={() => onNavigate(id)}>
       <Icon size={20} strokeWidth={1.8} aria-hidden="true" />

@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react'
-import { APP_DATA_V9_KEY, V9_BACKUP_PREFIX, loadAppDataV9, type V9LoadStatus } from './data/storageV9'
+import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_BACKUP_PREFIX, checkV9WriteEvidence,
+  loadAppDataV9, type V9LoadStatus } from './data/storageV9'
 import { useAppDataV4 } from './hooks/useAppDataV4'
 import type { StorageControls, StoragePersistence, StorageStatus } from './hooks/useLocalStorage'
 import type { V9Host } from './hooks/useAppDataV9'
@@ -7,24 +8,54 @@ import type { AppDataV4 } from './types'
 
 export type FormalRuntimeDecision =
   | { runtime: 'v7'; v9Status: 'absent' }
-  | { runtime: 'blocked-v9'; v9Status: Exclude<V9LoadStatus, 'absent'> | 'unknown-evidence' }
+  | { runtime: 'v9'; v9Status: 'active' }
+  | { runtime: 'blocked-v9'; v9Status: Exclude<V9LoadStatus, 'absent'>
+    | 'unknown-evidence' | 'invalid-evidence' }
 
 type RuntimeStorage = Pick<Storage, 'getItem' | 'key' | 'length'>
 
+function hasUnknownV9Evidence(storage: RuntimeStorage, allowed: ReadonlySet<string>): boolean {
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index)
+    if (key && (key.startsWith(APP_DATA_V9_KEY) || key.startsWith(V9_BACKUP_PREFIX))
+      && !allowed.has(key)) return true
+  }
+  return false
+}
+
+/** Structural recheck used after mount; cryptographic evidence remains owned by the V9 Host. */
+export function hasActiveFormalV9Structure(storage: RuntimeStorage): boolean {
+  try {
+    const loaded = loadAppDataV9(storage)
+    if (loaded.status !== 'active' || !loaded.document || !loaded.metadata
+      || !loaded.rawDocument || !loaded.rawMetadata
+      || storage.getItem(loaded.metadata.backupKey) === null) return false
+    return !hasUnknownV9Evidence(storage,
+      new Set([APP_DATA_V9_KEY, V9_ACTIVATION_KEY, loaded.metadata.backupKey]))
+  } catch { return false }
+}
+
 /**
- * Read-only production gate. Only the proven absence of every known V9 artifact
- * may mount the V7 Host. Active V9 is intentionally blocked until the formal
- * V9 controller reaches product parity in a later stage.
+ * Read-only production gate. V7 mounts only when every V9 artifact is absent.
+ * V9 mounts only after its active document, activation, backup, source evidence,
+ * and digests have all been verified. Every ambiguous state stays blocked.
  */
-export function inspectFormalRuntime(storage: RuntimeStorage): FormalRuntimeDecision {
+export async function inspectFormalRuntime(storage: RuntimeStorage): Promise<FormalRuntimeDecision> {
   const loaded = loadAppDataV9(storage)
+  if (loaded.status === 'active') {
+    if (!hasActiveFormalV9Structure(storage)) {
+      return { runtime: 'blocked-v9', v9Status: 'invalid-evidence' }
+    }
+    if (!loaded.rawDocument || !loaded.rawMetadata
+      || !(await checkV9WriteEvidence(storage, loaded.rawDocument, loaded.rawMetadata))) {
+      return { runtime: 'blocked-v9', v9Status: 'invalid-evidence' }
+    }
+    return { runtime: 'v9', v9Status: 'active' }
+  }
   if (loaded.status !== 'absent') return { runtime: 'blocked-v9', v9Status: loaded.status }
   try {
-    for (let index = 0; index < storage.length; index += 1) {
-      const key = storage.key(index)
-      if (key?.startsWith(APP_DATA_V9_KEY) || key?.startsWith(V9_BACKUP_PREFIX)) {
-        return { runtime: 'blocked-v9', v9Status: 'unknown-evidence' }
-      }
+    if (hasUnknownV9Evidence(storage, new Set())) {
+      return { runtime: 'blocked-v9', v9Status: 'unknown-evidence' }
     }
   } catch {
     return { runtime: 'blocked-v9', v9Status: 'read-error' }

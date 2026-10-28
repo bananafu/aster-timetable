@@ -14,10 +14,12 @@ const projectInput = (name = '新專案') => ({ name, teacherName: '不應自動
 
 function hostFixture(initial: AppDataV9, options: {
   writable?: boolean
+  pending?: boolean
   status?: FormalV9HostPort['status']
   reject?: Error
   currentForUpdate?: AppDataV9
   receiptRevisionOffset?: number
+  receiptRawMismatch?: boolean
   hold?: boolean
 } = {}) {
   let document = initial
@@ -27,9 +29,9 @@ function hostFixture(initial: AppDataV9, options: {
     if (options.reject) throw options.reject
     const next = produce(options.currentForUpdate ?? document)
     if (options.hold) await new Promise<void>((resolve) => { release = resolve })
-    const receipt = { raw: JSON.stringify(next),
+    const receipt = { raw: options.receiptRawMismatch ? '{}' : JSON.stringify(next),
       revision: revision + 1 + (options.receiptRevisionOffset ?? 0), attemptId: 'stage-1a' }
-    if (!options.receiptRevisionOffset) {
+    if (!options.receiptRevisionOffset && !options.receiptRawMismatch) {
       document = next
       revision += 1
     }
@@ -37,7 +39,7 @@ function hostFixture(initial: AppDataV9, options: {
   })
   const host = {
     get document() { return document }, status: options.status ?? 'active',
-    writable: options.writable ?? true, pending: false, receipt: null,
+    writable: options.writable ?? true, pending: options.pending ?? false, receipt: null,
     get revision() { return revision }, errorCode: null, update,
   } satisfies FormalV9HostPort
   return { host, update, document: () => document, revision: () => revision,
@@ -66,9 +68,10 @@ describe('formal V9 Project and Timetable controller', () => {
   it('creates an ordinary Project with no implicit school, unit, timetable, Subject or content', async () => {
     const fixture = hostFixture(empty())
     const result = await createFormalProjectTimetableV9Controller(fixture.host, () => 'new-project')
-      .createProject(projectInput())
+      .createProject({ name: '新專案' })
     expect(result.document.activeProjectId).toBe('new-project')
     expect(result.document.projects).toHaveLength(1)
+    expect(result.document.projects[0].term).toBeNull()
     for (const key of ['schools', 'teachingUnits', 'timetables', 'subjects', 'teachingUnitSubjects',
       'classes', 'recurringLessons', 'oneOffLessons', 'events', 'overrides', 'teachingProgress'] as const) {
       expect(result.document[key], key).toEqual([])
@@ -76,6 +79,50 @@ describe('formal V9 Project and Timetable controller', () => {
     expect(result.receipt).toMatchObject({ revision: 1, attemptId: 'stage-1a' })
     expect(result.selection).toEqual({ projectId: 'new-project', timetableId: null })
     expect(fixture.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('configures only the selected null-term Project after a matching Host receipt', async () => {
+    let data = createEmptyProjectV9(empty(), { name: '未設定' }, 'blank', '2026-10-28T00:00:00.000Z')
+    data = createTeacherTimetableV9(data, 'blank', { name: '甲課表', teacherName: '甲' }, 'table-a')
+    const fixture = hostFixture(data)
+    const selected = vi.fn()
+    const controller = createFormalProjectTimetableV9Controller(fixture.host, idFactory('unused'),
+      { projectId: 'blank', timetableId: 'table-a' })
+    const actions = createFormalProjectTimetableV9Actions(controller, selected)
+    expect(actions.project.configureTerm).toBeTypeOf('function')
+    const result = await actions.project.configureTerm({ academicYear: 116, semester: 'second' })
+    expect(result.document.projects[0].term)
+      .toEqual({ academicYear: 116, semester: 'second', customLabel: undefined })
+    expect(result.document.timetables).toEqual(data.timetables)
+    expect(result.selection).toEqual({ projectId: 'blank', timetableId: 'table-a' })
+    expect(result.receipt).toMatchObject({ revision: 1, attemptId: 'stage-1a' })
+    expect(selected).toHaveBeenCalledExactlyOnceWith({ projectId: 'blank', timetableId: 'table-a' })
+    expect(fixture.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed when configuring term through pending, readonly, stale or mismatched Host state', async () => {
+    const data = createEmptyProjectV9(empty(), { name: '未設定' }, 'blank')
+    const selection = { projectId: 'blank', timetableId: null }
+    const pending = hostFixture(data, { pending: true })
+    await expect(createFormalProjectTimetableV9Controller(pending.host, idFactory('unused'), selection)
+      .configureSelectedProjectTerm({ academicYear: 116, semester: 'first' }))
+      .rejects.toMatchObject({ code: 'duplicate-submit' })
+    const readonly = hostFixture(data, { writable: false })
+    await expect(createFormalProjectTimetableV9Controller(readonly.host, idFactory('unused'), selection)
+      .configureSelectedProjectTerm({ academicYear: 116, semester: 'first' }))
+      .rejects.toMatchObject({ code: 'not-writable' })
+    const external = createEmptyProjectV9(data, { name: '外部' }, 'external')
+    const stale = hostFixture(data, { currentForUpdate: external })
+    await expect(createFormalProjectTimetableV9Controller(stale.host, idFactory('unused'), selection)
+      .configureSelectedProjectTerm({ academicYear: 116, semester: 'first' }))
+      .rejects.toMatchObject({ code: 'stale-document' })
+    const mismatch = hostFixture(data, { receiptRawMismatch: true })
+    await expect(createFormalProjectTimetableV9Controller(mismatch.host, idFactory('unused'), selection)
+      .configureSelectedProjectTerm({ academicYear: 116, semester: 'first' }))
+      .rejects.toMatchObject({ code: 'receipt-mismatch' })
+    for (const item of [pending, readonly, stale, mismatch]) {
+      expect(item.document().projects.find((project) => project.id === 'blank')?.term).toBeNull()
+    }
   })
 
   it('keeps ordinary creation distinct from the explicit new-term copy operation', async () => {
@@ -234,7 +281,7 @@ describe('formal V9 Project and Timetable controller', () => {
 
     actions.selectProject('project-a')
     expect(fixture.update).not.toHaveBeenCalled()
-    expect(actions.project.createEmptyFromName).toBeNull()
+    expect(actions.project.createEmptyFromName).toBeTypeOf('function')
     expect(actions.project.rename).toBeNull()
 
     const result = await actions.timetable.create('project-a', { name: '教師課表', teacherName: '教師' })
@@ -255,5 +302,64 @@ describe('formal V9 Project and Timetable controller', () => {
       .rejects.toThrow('host-rejected')
     expect(selected).not.toHaveBeenCalled()
     expect(fixture.document().timetables).toEqual([])
+  })
+
+  it('creates from the name callback only after a matching receipt and rejects pending or duplicate submissions', async () => {
+    const held = hostFixture(empty(), { hold: true })
+    const selected = vi.fn()
+    const actions = createFormalProjectTimetableV9Actions(
+      createFormalProjectTimetableV9Controller(held.host, () => 'name-only'), selected)
+    const first = actions.project.createEmptyFromName({ name: ' 名稱專案 ' })
+    expect(selected).not.toHaveBeenCalled()
+    await expect(actions.project.createEmptyFromName({ name: '重複' }))
+      .rejects.toMatchObject({ code: 'duplicate-submit' })
+    held.release()
+    await expect(first).resolves.toMatchObject({ document: { projects: [{ name: '名稱專案', term: null }] } })
+    expect(held.document().projects).toHaveLength(1)
+    expect(selected).toHaveBeenCalledExactlyOnceWith({ projectId: 'name-only', timetableId: null })
+    const pending = hostFixture(empty(), { pending: true })
+    await expect(createFormalProjectTimetableV9Controller(pending.host, () => 'pending')
+      .createProject({ name: '名稱' })).rejects.toMatchObject({ code: 'duplicate-submit' })
+    expect(pending.update).not.toHaveBeenCalled()
+  })
+
+  it('does not select a new Project on receipt mismatch or live selection change', async () => {
+    const bad = hostFixture(empty(), { receiptRevisionOffset: 2 })
+    const selected = vi.fn()
+    const actions = createFormalProjectTimetableV9Actions(
+      createFormalProjectTimetableV9Controller(bad.host, () => 'bad'), selected)
+    await expect(actions.project.createEmptyFromName({ name: '名稱' }))
+      .rejects.toMatchObject({ code: 'receipt-mismatch' })
+    expect(selected).not.toHaveBeenCalled()
+    const source = twoProjectFixture()
+    const host = hostFixture(source.data)
+    let selection = { projectId: source.projectA, timetableId: source.timetableA }
+    const controller = createFormalProjectTimetableV9Controller(host.host, () => 'stale-scope', selection, () => selection)
+    selection = { projectId: source.projectB, timetableId: source.timetableB }
+    await expect(controller.createProject({ name: '舊操作' })).rejects.toMatchObject({ code: 'scope-mismatch' })
+    expect(host.update).not.toHaveBeenCalled()
+  })
+
+  it('rejects a mismatched receipt raw and does not replace a selection changed during persistence', async () => {
+    const mismatch = hostFixture(empty(), { receiptRawMismatch: true })
+    const selected = vi.fn()
+    const bad = createFormalProjectTimetableV9Actions(
+      createFormalProjectTimetableV9Controller(mismatch.host, () => 'bad'), selected)
+    await expect(bad.project.createEmptyFromName({ name: '名稱' })).rejects.toMatchObject({ code: 'receipt-mismatch' })
+    expect(selected).not.toHaveBeenCalled()
+    expect(mismatch.document().projects).toEqual([])
+
+    const source = twoProjectFixture()
+    const held = hostFixture(source.data, { hold: true })
+    let selection = { projectId: source.projectA, timetableId: source.timetableA }
+    const actions = createFormalProjectTimetableV9Actions(createFormalProjectTimetableV9Controller(
+      held.host, () => 'persisted', selection, () => selection), selected)
+    const pending = actions.project.createEmptyFromName({ name: '等待確認' })
+    selection = { projectId: source.projectB, timetableId: source.timetableB }
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'scope-mismatch' })
+    held.release()
+    await rejected
+    expect(selected).not.toHaveBeenCalled()
+    expect(selection.projectId).toBe(source.projectB)
   })
 })

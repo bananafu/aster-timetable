@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppDataV9 } from '../types/v9'
-import { archiveProjectV9, createClassV9 } from './managementV9'
+import { archiveProjectV9, createClassV9, createEmptyProjectV9, createSchoolV9 } from './managementV9'
 import { createEmptyAppDataV8 } from './storageV8'
 import { createBlankProjectV9, createTeacherTimetableV9, createTeacherSubjectV9,
   configureTeacherSubjectV9, deleteTeacherSubjectV9, deleteTeacherTimetableV9,
@@ -84,6 +84,32 @@ function withReference(kind: 'lesson' | 'historical' | 'change' | 'one-off' | 'p
 }
 
 describe('V8 Preview teacher-owned Subject operations on internal V9 contract', () => {
+  it('creates and configures teacher-isolated Subjects before Project term configuration', () => {
+    const source = fixture()
+    const sourceUnit = source.data.teachingUnits[0]
+    let data = createEmptyProjectV9(source.data, { name: '未設定' }, 'blank')
+    data = createSchoolV9(data, 'blank', { name: '乙校', color: '#123456' }, 'blank-school')
+    data = createTeachingUnitV9(data, 'blank', { schoolId: 'blank-school', name: '高中部',
+      schoolLevel: 'senior-high', startDate: '2027-08-01', endDate: '2028-01-31',
+      periods: sourceUnit.periods,
+      weekCycle: { enabled: true, anchorDate: '2027-08-01', anchorPattern: 'A' } }, 'blank-unit')
+    data = createTeacherTimetableV9(data, 'blank', { name: '甲課表', teacherName: '甲' }, 'blank-teacher-a')
+    data = createTeacherTimetableV9(data, 'blank', { name: '乙課表', teacherName: '乙' }, 'blank-teacher-b')
+    data = createTeacherSubjectV9(data, 'blank', 'blank-teacher-a', math, 'blank-subject-a')
+    data = createTeacherSubjectV9(data, 'blank', 'blank-teacher-b', math, 'blank-subject-b')
+    data = configureTeacherSubjectV9(data, 'blank', 'blank-teacher-a', 'blank-unit',
+      'blank-subject-a', 'blank-relation-a')
+    expect(data.projects.find((item) => item.id === 'blank')?.term).toBeNull()
+    expect(data.subjects.filter((item) => item.projectId === 'blank').map((item) => item.timetableId))
+      .toEqual(['blank-teacher-a', 'blank-teacher-b'])
+    expect(data.teachingUnitSubjects).toContainEqual(expect.objectContaining({
+      id: 'blank-relation-a', projectId: 'blank', teachingUnitId: 'blank-unit', subjectId: 'blank-subject-a',
+    }))
+    expect(isCompatibleAppDataV9(data)).toBe(true)
+    expect(() => configureTeacherSubjectV9(data, 'blank', 'blank-teacher-b', 'blank-unit',
+      'blank-subject-a', 'cross-teacher')).toThrow()
+  })
+
   it('keeps two teachers independent, permits duplicate names and cross-unit configuration', () => {
     const initial = fixture()
     let { data } = initial

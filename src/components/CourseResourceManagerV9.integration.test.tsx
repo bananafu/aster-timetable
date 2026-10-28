@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createClassV9 } from '../data/managementV9'
@@ -118,6 +118,10 @@ describe('CourseResourceManager V9 action port', () => {
     let data = addSubject(source.data, source.projectA, 'teacher-a', 'math-a')
     data = addSubject(data, source.projectA, 'teacher-b', 'math-b')
     data = addSubject(data, source.projectB, 'teacher-c', 'math-c')
+    data = configureTeacherSubjectV9(data, source.projectA, 'teacher-a', source.seniorA.id,
+      'math-a', 'relation-a')
+    data = configureTeacherSubjectV9(data, source.projectA, 'teacher-b', source.seniorA.id,
+      'math-b', 'relation-b')
     const host = hostFixture(data)
     render(<Harness host={host.host} initialSelection={source.selection} />)
     expect(screen.getByRole('button', { name: '編輯科目 數學' })).toBeTruthy()
@@ -126,22 +130,42 @@ describe('CourseResourceManager V9 action port', () => {
     await waitFor(() => expect(latestPort?.view?.subjects.map((item) => item.id)).toEqual(['math-b']))
   })
 
-  it('科目標籤 × 只解除配置，最後配置解除後仍保留 Subject', async () => {
+  it('科目標籤 × 只解除目前任教單位配置，並以 ＋ 重新配置既有 Subject', async () => {
     const source = fixture()
-    let data = addSubject(source.data, source.projectA, 'teacher-a', 'math-a')
+    let data = addSubject(source.data, source.projectA, 'teacher-a', 'chinese-a', '國語文')
     data = configureTeacherSubjectV9(data, source.projectA, 'teacher-a', source.seniorA.id,
-      'math-a', 'relation-a')
+      'chinese-a', 'relation-senior')
+    data = configureTeacherSubjectV9(data, source.projectA, 'teacher-a', source.juniorA.id,
+      'chinese-a', 'relation-junior')
     const host = hostFixture(data)
     render(<Harness host={host.host} initialSelection={source.selection} />)
+    expect(screen.getByRole('button', { name: '編輯科目 國語文' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', {
-      name: '解除科目「數學」的目前任教單位配置',
+      name: '解除科目「國語文」的目前任教單位配置',
     }))
-    await waitFor(() => expect(host.document().teachingUnitSubjects).toHaveLength(0))
-    expect(host.document().subjects).toContainEqual(expect.objectContaining({ id: 'math-a' }))
-    expect(screen.getByRole('button', { name: '編輯科目 數學' })).toBeTruthy()
-    expect((screen.getByRole('button', {
-      name: '科目「數學」尚未配置到目前任教單位',
-    }) as HTMLButtonElement).disabled).toBe(true)
+    await waitFor(() => expect(screen.queryByRole('button', { name: '編輯科目 國語文' })).toBeNull())
+    expect(host.document().subjects.filter((item) => item.name === '國語文'))
+      .toEqual([expect.objectContaining({ id: 'chinese-a' })])
+    expect(host.document().teachingUnitSubjects).toContainEqual(expect.objectContaining({
+      id: 'relation-junior', teachingUnitId: source.juniorA.id, subjectId: 'chinese-a',
+    }))
+    expect(host.document().teachingUnitSubjects.some((item) =>
+      item.teachingUnitId === source.seniorA.id && item.subjectId === 'chinese-a')).toBe(false)
+    expect(window.confirm).not.toHaveBeenCalled()
+
+    const add = screen.getByRole('button', { name: '加入預設科目 國語文' })
+    expect(add.textContent).toBe('＋')
+    fireEvent.click(add)
+    await waitFor(() => expect(screen.getByRole('button', { name: '編輯科目 國語文' })).toBeTruthy())
+    expect(host.document().subjects.filter((item) => item.name === '國語文'))
+      .toEqual([expect.objectContaining({ id: 'chinese-a' })])
+    expect(host.document().teachingUnitSubjects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'relation-junior', teachingUnitId: source.juniorA.id,
+        subjectId: 'chinese-a' }),
+      expect.objectContaining({ teachingUnitId: source.seniorA.id, subjectId: 'chinese-a' }),
+    ]))
+    expect(host.document().teachingUnitSubjects).toHaveLength(2)
+    expect(window.confirm).not.toHaveBeenCalled()
   })
 
   it('自訂新增只建立 Subject、保留 Modal 並重設表單供連續新增', async () => {
@@ -181,9 +205,9 @@ describe('CourseResourceManager V9 action port', () => {
     const host = hostFixture(data)
     render(<Harness host={host.host} initialSelection={source.selection} />)
     fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '數學' } })
-    fireEvent.click(screen.getByRole('button', {
-      name: '將既有科目 數學 配置到此任教單位',
-    }))
+    const configure = screen.getByRole('button', { name: '加入預設科目 數學' })
+    expect(configure.textContent).toBe('＋')
+    fireEvent.click(configure)
     await waitFor(() => expect(host.document().teachingUnitSubjects).toHaveLength(1))
 
     cleanup()
@@ -221,19 +245,38 @@ describe('CourseResourceManager V9 action port', () => {
     expect(host.document().teachingUnitSubjects).toContainEqual(expect.objectContaining({ id: 'relation-a' }))
   })
 
-  it('無配置無引用時可由既有編輯表單永久刪除，並以新 ID 重建同名科目', async () => {
+  it.each([
+    ['Host reject', { reject: new Error('storage rejected') }],
+    ['receipt mismatch', { receiptMismatch: true }],
+  ])('%s 時解除配置不會讓標籤假消失', async (_name, options) => {
+    const source = fixture()
+    let data = addSubject(source.data, source.projectA, 'teacher-a', 'math-a')
+    data = configureTeacherSubjectV9(data, source.projectA, 'teacher-a', source.seniorA.id,
+      'math-a', 'relation-a')
+    const host = hostFixture(data, options)
+    render(<Harness host={host.host} initialSelection={source.selection} />)
+    fireEvent.click(screen.getByRole('button', {
+      name: '解除科目「數學」的目前任教單位配置',
+    }))
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0))
+    expect(screen.getByRole('button', { name: '編輯科目 數學' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '加入預設科目 數學' })).toBeNull()
+    expect(host.document().teachingUnitSubjects).toContainEqual(expect.objectContaining({
+      id: 'relation-a', teachingUnitId: source.seniorA.id, subjectId: 'math-a',
+    }))
+    expect(screen.queryByText(/^已儲存：/)).toBeNull()
+  })
+
+  it('未配置 Subject 保留原 ID 並只在預設目錄提供重新配置 ＋', () => {
     const source = fixture()
     const data = addSubject(source.data, source.projectA, 'teacher-a', 'old-math')
     const host = hostFixture(data)
     render(<Harness host={host.host} initialSelection={source.selection} />)
-    fireEvent.click(screen.getByRole('button', { name: '編輯科目 數學' }))
-    fireEvent.click(within(screen.getByRole('form', { name: '管理科目 數學' }))
-      .getByRole('button', { name: '刪除科目' }))
-    await waitFor(() => expect(host.document().subjects.some((item) => item.id === 'old-math')).toBe(false))
-    fireEvent.change(screen.getByLabelText('搜尋科目'), { target: { value: '數學' } })
-    fireEvent.click(screen.getByRole('button', { name: '加入預設科目 數學' }))
-    await waitFor(() => expect(host.document().subjects.some((item) => item.name === '數學')).toBe(true))
-    expect(host.document().subjects.find((item) => item.name === '數學')?.id).not.toBe('old-math')
+    expect(screen.queryByRole('button', { name: '編輯科目 數學' })).toBeNull()
+    expect(screen.getByRole('button', { name: '加入預設科目 數學' }).textContent).toBe('＋')
+    expect(host.document().subjects.filter((item) => item.name === '數學'))
+      .toEqual([expect.objectContaining({ id: 'old-math' })])
+    expect(host.update).not.toHaveBeenCalled()
   })
 
   it.each([

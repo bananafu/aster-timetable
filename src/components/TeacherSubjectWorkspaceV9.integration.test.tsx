@@ -602,7 +602,7 @@ describe('V8 Preview teacher-owned Subject library', () => {
     expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(sourceRaw)
   })
 
-  it('archives, reactivates and deletes only a confirmed empty Project without changing its populated neighbour', async () => {
+  it('archives and reactivates a Project but refuses deletion while structural resources remain', async () => {
     const { sourceRaw, projectId } = await activated()
     render(<V8PreviewApp onReturn={vi.fn()} />)
     await waitFor(() => expect((screen.getByRole('button', { name: '切換專案' }) as HTMLButtonElement).disabled).toBe(false))
@@ -623,11 +623,12 @@ describe('V8 Preview teacher-owned Subject library', () => {
     fireEvent.change(screen.getByLabelText('選擇刪除專案'), { target: { value: blankId } })
     expect((screen.getByRole('button', { name: '永久刪除空白專案' }) as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: '永久刪除空白專案' }))
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).projects).toHaveLength(1))
+    await screen.findByText(/不能級聯刪除/)
     const after = JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!)
+    expect(after.projects).toHaveLength(2)
     expect(after.projects[0].id).toBe(projectId)
     expect(after.timetables[0].id).toBe('teacher-a')
-    expect(after.schools.every((item: { projectId: string }) => item.projectId === projectId)).toBe(true)
+    expect(after.schools.some((item: { projectId: string }) => item.projectId === blankId)).toBe(true)
     expect(localStorage.getItem(APP_DATA_V8_KEY)).toBe(sourceRaw)
   })
 })

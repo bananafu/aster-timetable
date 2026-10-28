@@ -1,12 +1,17 @@
+import type { AcademicTermDescriptor } from '../types'
 import type { AppDataV9 } from '../types/v9'
+import { formatClassCode, isGradeValidForLevel } from '../lib/classes'
 import type { ClassV8Draft } from './classesV8'
-import type { NewProjectInput } from './projectRuntime'
 import type { CopyProjectV8Input } from './projectRuntimeV8'
 import type { SchoolV8Draft, TeachingUnitV8Draft } from './academicSettingsV8'
 import { createSchoolV8, createTeachingUnitV8, updateSchoolV8, updateTeachingUnitV8 } from './academicSettingsV8'
 import { createClassV8, deleteClassV8, getClassV8Impact, updateClassV8 } from './classesV8'
 import { copyProject, deleteProject, getProjectDeletionImpact } from './projectRuntimeV8'
 import { asV8ValidationProjection, isCompatibleAppDataV9, isSafeAppDataV9Update } from './validators/v9'
+import { requireProjectTermV9, retainUnsetProjectResourcesV9 } from './projectContractV9'
+
+export interface EmptyProjectV9Input { name: string }
+export type ConfigureProjectTermV9Input = AcademicTermDescriptor
 
 const valid = (data: AppDataV9) => {
   if (!isCompatibleAppDataV9(data)) throw new Error('教師科目庫文件未通過驗證。')
@@ -15,73 +20,166 @@ const safe = (current: AppDataV9, next: AppDataV9): AppDataV9 => {
   if (!isSafeAppDataV9Update(current, next)) throw new Error('管理操作未通過新版資料安全檢查。')
   return next
 }
+const isUnsetProject = (data: AppDataV9, projectId: string) =>
+  data.projects.some((item) => item.id === projectId && item.term === null)
+const editableProject = (data: AppDataV9, projectId: string) => {
+  const project = data.projects.find((item) => item.id === projectId)
+  if (!project || project.archivedAt) throw new Error('專案不存在或為唯讀。')
+  return project
+}
+const idAvailable = (data: AppDataV9, id: string) => {
+  const entities = [data.projects, data.schools, data.teachingUnits, data.timetables, data.subjects,
+    data.teachingUnitSubjects, data.classes, data.recurringLessons, data.oneOffLessons,
+    data.overrides, data.events, data.teachingProgress, data.migrationWarnings]
+  return !!id && id === id.trim() && !entities.some((rows) => rows.some((item) => item.id === id))
+    && !data.recurringLessons.some((item) => item.seriesId === id)
+}
+const classFields = (data: AppDataV9, projectId: string, draft: ClassV8Draft, exceptId?: string) => {
+  const unit = data.teachingUnits.find((item) => item.id === draft.teachingUnitId && item.projectId === projectId)
+  if (!unit) throw new Error('TeachingUnit does not belong to Project.')
+  const structured = draft.grade !== undefined || draft.classNumber !== undefined
+  if (structured && (draft.grade === undefined || draft.classNumber === undefined
+    || !isGradeValidForLevel(unit.schoolLevel, draft.grade) || !Number.isInteger(draft.classNumber)
+    || draft.classNumber <= 0)) throw new Error('Grade and class number are invalid.')
+  if (!structured && !draft.name?.trim()) throw new Error('Class name is required.')
+  if (structured && data.classes.some((item) => item.id !== exceptId && item.teachingUnitId === unit.id
+    && item.grade === draft.grade && item.classNumber === draft.classNumber)) {
+    throw new Error('Grade and class number already exist.')
+  }
+  if (draft.room && draft.room.length > 15) throw new Error('Room must be at most 15 characters.')
+  return { teachingUnitId: unit.id,
+    name: structured ? formatClassCode(draft.grade!, draft.classNumber!) : draft.name!.trim(),
+    grade: draft.grade, classNumber: draft.classNumber, room: draft.room?.trim() || undefined }
+}
 
 /** Formal-product creation starts with only the Project record; setup remains an explicit later action. */
-export function createEmptyProjectV9(data: AppDataV9, input: NewProjectInput,
+export function createEmptyProjectV9(data: AppDataV9, input: EmptyProjectV9Input,
   id: string, now = new Date().toISOString()): AppDataV9 {
   valid(data)
   const name = input.name?.trim()
-  const customLabel = input.semester === 'custom' ? input.customLabel?.trim() : undefined
-  const validDate = (value: string) => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
-    const parsed = new Date(`${value}T00:00:00Z`)
-    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
-  }
   const occupied = new Set([
     ...data.projects, ...data.schools, ...data.teachingUnits, ...data.timetables, ...data.subjects,
     ...data.teachingUnitSubjects, ...data.classes, ...data.recurringLessons, ...data.oneOffLessons,
     ...data.overrides, ...data.events, ...data.teachingProgress, ...data.migrationWarnings,
   ].flatMap((item) => 'seriesId' in item ? [item.id, item.seriesId] : [item.id]))
-  if (!name || !Number.isInteger(input.academicYear) || input.academicYear <= 0
-    || !['first', 'second', 'summer', 'custom'].includes(input.semester)
-    || (input.semester === 'custom' && !customLabel)
-    || !validDate(input.startDate) || !validDate(input.endDate) || input.startDate > input.endDate
-    || !id?.trim() || id !== id.trim() || occupied.has(id)
+  if (!name || !id?.trim() || id !== id.trim() || occupied.has(id)
     || Number.isNaN(Date.parse(now))) {
     throw new Error('空白專案資料或新 ID 不合法。')
   }
   return safe(data, { ...data, activeProjectId: id,
     projects: [...data.projects, { id, name,
-      term: { academicYear: input.academicYear, semester: input.semester,
-        customLabel }, createdAt: now, updatedAt: now }] })
+      term: null, createdAt: now, updatedAt: now }] })
 }
 
 /** Reuses the established V8 resource rules; only the selected entity collection is copied back. */
 export function createSchoolV9(data: AppDataV9, projectId: string, draft: SchoolV8Draft, id: string): AppDataV9 {
   valid(data)
-  return safe(data, { ...data, schools: createSchoolV8(asV8ValidationProjection(data), projectId, draft, id).schools })
+  if (isUnsetProject(data, projectId)) {
+    editableProject(data, projectId)
+    if (!idAvailable(data, id) || !draft.name.trim() || !/^#[0-9a-f]{6}$/i.test(draft.color)) {
+      throw new Error('學校名稱、顏色或 ID 不合法。')
+    }
+    return safe(data, { ...data, schools: [...data.schools,
+      { id, projectId, name: draft.name.trim(), color: draft.color.trim() }] })
+  }
+  const next = createSchoolV8(asV8ValidationProjection(data), projectId, draft, id)
+  return safe(data, { ...data, schools: retainUnsetProjectResourcesV9(data, next).schools })
 }
 export function updateSchoolV9(data: AppDataV9, projectId: string, id: string, draft: SchoolV8Draft): AppDataV9 {
   valid(data)
-  return safe(data, { ...data, schools: updateSchoolV8(asV8ValidationProjection(data), projectId, id, draft).schools })
+  if (isUnsetProject(data, projectId)) {
+    editableProject(data, projectId)
+    if (!draft.name.trim() || !/^#[0-9a-f]{6}$/i.test(draft.color)) throw new Error('學校名稱或顏色不合法。')
+    if (!data.schools.some((item) => item.id === id && item.projectId === projectId)) throw new Error('School is outside Project.')
+    return safe(data, { ...data, schools: data.schools.map((item) => item.id === id
+      ? { ...item, name: draft.name.trim(), color: draft.color.trim() } : item) })
+  }
+  const next = updateSchoolV8(asV8ValidationProjection(data), projectId, id, draft)
+  return safe(data, { ...data, schools: retainUnsetProjectResourcesV9(data, next).schools })
 }
 export function createTeachingUnitV9(data: AppDataV9, projectId: string, draft: TeachingUnitV8Draft, id: string): AppDataV9 {
   valid(data)
-  return safe(data, { ...data, teachingUnits: createTeachingUnitV8(asV8ValidationProjection(data), projectId, draft, id).teachingUnits })
+  if (isUnsetProject(data, projectId)) {
+    editableProject(data, projectId)
+    if (!idAvailable(data, id)) throw new Error('TeachingUnit ID is invalid or already used.')
+    return safe(data, { ...data, teachingUnits: [...data.teachingUnits, { id, projectId,
+      timezone: 'Asia/Taipei', ...draft, name: draft.name.trim(),
+      periods: draft.periods.map((item) => ({ ...item, label: item.label.trim() })),
+      weekCycle: { ...draft.weekCycle } }] })
+  }
+  const next = createTeachingUnitV8(asV8ValidationProjection(data), projectId, draft, id)
+  return safe(data, { ...data, teachingUnits: retainUnsetProjectResourcesV9(data, next).teachingUnits })
 }
 export function updateTeachingUnitV9(data: AppDataV9, projectId: string, id: string, draft: TeachingUnitV8Draft): AppDataV9 {
   valid(data)
-  return safe(data, { ...data, teachingUnits: updateTeachingUnitV8(asV8ValidationProjection(data), projectId, id, draft).teachingUnits })
+  if (isUnsetProject(data, projectId)) {
+    editableProject(data, projectId)
+    if (!data.teachingUnits.some((item) => item.id === id && item.projectId === projectId)) {
+      throw new Error('TeachingUnit is outside Project.')
+    }
+    return safe(data, { ...data, teachingUnits: data.teachingUnits.map((item) => item.id === id
+      ? { ...item, ...draft, name: draft.name.trim(),
+        periods: draft.periods.map((period) => ({ ...period, label: period.label.trim() })),
+        weekCycle: { ...draft.weekCycle } } : item) })
+  }
+  const next = updateTeachingUnitV8(asV8ValidationProjection(data), projectId, id, draft)
+  return safe(data, { ...data, teachingUnits: retainUnsetProjectResourcesV9(data, next).teachingUnits })
 }
 export function createClassV9(data: AppDataV9, projectId: string, draft: ClassV8Draft, id: string): AppDataV9 {
   valid(data)
-  return safe(data, { ...data, classes: createClassV8(asV8ValidationProjection(data), projectId, draft, id).classes })
+  if (isUnsetProject(data, projectId)) {
+    editableProject(data, projectId)
+    if (!idAvailable(data, id)) throw new Error('Class ID is invalid or already used.')
+    return safe(data, { ...data, classes: [...data.classes,
+      { id, projectId, ...classFields(data, projectId, draft), origin: 'user' }] })
+  }
+  const next = createClassV8(asV8ValidationProjection(data), projectId, draft, id)
+  return safe(data, { ...data, classes: retainUnsetProjectResourcesV9(data, next).classes })
 }
 export function updateClassV9(data: AppDataV9, projectId: string, classId: string, draft: ClassV8Draft): AppDataV9 {
   valid(data)
-  return safe(data, { ...data, classes: updateClassV8(asV8ValidationProjection(data), projectId, classId, draft).classes })
+  if (isUnsetProject(data, projectId)) {
+    editableProject(data, projectId)
+    if (!data.classes.some((item) => item.id === classId && item.projectId === projectId)) {
+      throw new Error('Class is outside Project.')
+    }
+    const fields = classFields(data, projectId, draft, classId)
+    return safe(data, { ...data, classes: data.classes.map((item) => item.id === classId
+      ? { ...item, ...fields, origin: 'user' } : item) })
+  }
+  const next = updateClassV8(asV8ValidationProjection(data), projectId, classId, draft)
+  return safe(data, { ...data, classes: retainUnsetProjectResourcesV9(data, next).classes })
 }
 export function deleteClassV9(data: AppDataV9, projectId: string, classId: string, confirmed = false): AppDataV9 {
   valid(data)
-  return safe(data, { ...data, classes: deleteClassV8(asV8ValidationProjection(data), projectId, classId, confirmed).classes })
+  if (isUnsetProject(data, projectId)) {
+    editableProject(data, projectId)
+    const impact = getClassV9Impact(data, projectId, classId)
+    if (impact.recurringLessons || impact.oneOffLessons || impact.overrides || impact.teachingProgress) {
+      throw new Error('Class is referenced by Lessons, changes or Progress.')
+    }
+    if (!confirmed) throw new Error('Class deletion requires confirmation.')
+    return safe(data, { ...data, classes: data.classes.filter((item) => item.id !== classId) })
+  }
+  const next = deleteClassV8(asV8ValidationProjection(data), projectId, classId, confirmed)
+  return safe(data, { ...data, classes: retainUnsetProjectResourcesV9(data, next).classes })
 }
 export function getClassV9Impact(data: AppDataV9, projectId: string, classId: string) {
   valid(data)
+  if (isUnsetProject(data, projectId)) {
+    const schoolClass = data.classes.find((item) => item.id === classId && item.projectId === projectId)
+    if (!schoolClass) throw new Error('Class does not belong to Project.')
+    return { schoolClass, recurringLessons: data.recurringLessons.filter((item) => item.classId === classId).length,
+      oneOffLessons: data.oneOffLessons.filter((item) => item.classId === classId).length,
+      overrides: data.overrides.filter((item) => item.replacement?.classId === classId).length,
+      teachingProgress: data.teachingProgress.filter((item) => item.classId === classId).length }
+  }
   return getClassV8Impact(asV8ValidationProjection(data), projectId, classId)
 }
 
 export function copyProjectV9(data: AppDataV9, input: CopyProjectV8Input, createId: () => string): AppDataV9 {
   valid(data)
+  requireProjectTermV9(data, input.sourceProjectId)
   const sourceTables = data.timetables.filter((item) => item.projectId === input.sourceProjectId)
   if (!sourceTables.length) return copyProjectWithoutTimetables(data, input, createId)
   const projected = copyProject(asV8ValidationProjection(data), input, createId)
@@ -94,10 +192,27 @@ export function copyProjectV9(data: AppDataV9, input: CopyProjectV8Input, create
     || sourceSubjects.some((item) => !tableIds.get(item.timetableId))) {
     throw new Error('教師課表與科目的複製對應不完整。')
   }
-  return safe(data, { ...projected, schemaVersion: 9,
+  return safe(data, { ...projected, ...retainUnsetProjectResourcesV9(data, projected), schemaVersion: 9,
     subjects: [...data.subjects, ...sourceSubjects.map((item, index) => ({ ...item,
       id: copiedSubjects[index].id, projectId: newProjectId, timetableId: tableIds.get(item.timetableId)!,
       applicableSchoolLevels: [...item.applicableSchoolLevels] }))] })
+}
+
+/** Configures the selected Project descriptor without deriving or changing any dated resource. */
+export function configureProjectTermV9(data: AppDataV9, projectId: string,
+  term: ConfigureProjectTermV9Input, at = new Date().toISOString()): AppDataV9 {
+  valid(data)
+  const project = editableProject(data, projectId)
+  if (project.term !== null) throw new Error('Project term is already configured.')
+  if (Object.keys(term).some((key) => !['academicYear', 'semester', 'customLabel'].includes(key))
+    || !Number.isInteger(term.academicYear) || term.academicYear <= 0
+    || !['first', 'second', 'summer', 'custom'].includes(term.semester)
+    || (term.semester === 'custom' && !term.customLabel?.trim())
+    || Number.isNaN(Date.parse(at))) throw new Error('Project term is invalid.')
+  const normalized: AcademicTermDescriptor = { academicYear: term.academicYear, semester: term.semester,
+    customLabel: term.semester === 'custom' ? term.customLabel!.trim() : undefined }
+  return safe(data, { ...data, projects: data.projects.map((item) => item.id === projectId
+    ? { ...item, term: normalized, updatedAt: at } : item) })
 }
 
 /** V8 copy policy requires a Timetable; this narrow branch copies a genuinely empty teacher set. */
@@ -168,15 +283,33 @@ export function reactivateProjectV9(data: AppDataV9, projectId: string, at = new
 }
 export function getProjectV9Impact(data: AppDataV9, projectId: string) {
   valid(data)
+  if (isUnsetProject(data, projectId)) {
+    const count = (rows: { projectId: string | null }[]) => rows.filter((item) => item.projectId === projectId).length
+    return { projectId, timetables: count(data.timetables), schools: count(data.schools),
+      teachingUnits: count(data.teachingUnits), subjects: count(data.subjects),
+      teachingUnitSubjects: count(data.teachingUnitSubjects), classes: count(data.classes),
+      recurringLessons: 0, events: 0, overrides: 0, oneOffLessons: 0, teachingProgress: 0 }
+  }
   return getProjectDeletionImpact(asV8ValidationProjection(data), projectId)
 }
 export function deleteEmptyProjectV9(data: AppDataV9, projectId: string, confirmed = false): AppDataV9 {
   valid(data)
   const impact = getProjectV9Impact(data, projectId)
-  if (impact.timetables || impact.subjects || impact.teachingUnitSubjects || impact.classes
+  if (impact.schools || impact.teachingUnits || impact.timetables || impact.subjects
+    || impact.teachingUnitSubjects || impact.classes
     || impact.recurringLessons || impact.oneOffLessons || impact.overrides || impact.events || impact.teachingProgress) {
-    throw new Error('專案仍有教師課表、科目、班級、課程、事件或進度；請先處理依賴資料，不能級聯刪除。')
+    throw new Error('專案仍有學校、任教單位、教師課表、科目、班級、課程、事件或進度；請先處理依賴資料，不能級聯刪除。')
+  }
+  if (!confirmed) throw new Error('Project deletion requires confirmation.')
+  if (data.projects.some((item) => item.id === projectId && item.term === null)) {
+    return safe(data, { ...data, projects: data.projects.filter((item) => item.id !== projectId),
+      schools: data.schools.filter((item) => item.projectId !== projectId),
+      activeProjectId: data.activeProjectId === projectId
+        ? data.projects.find((item) => item.id !== projectId && !item.archivedAt)?.id ?? null : data.activeProjectId })
   }
   const projected = deleteProject(asV8ValidationProjection(data), projectId, confirmed)
-  return safe(data, { ...projected, schemaVersion: 9, subjects: data.subjects })
+  return safe(data, { ...projected, ...retainUnsetProjectResourcesV9(data, projected), schemaVersion: 9,
+    activeProjectId: data.activeProjectId !== projectId ? data.activeProjectId
+      : data.projects.find((item) => item.id !== projectId && !item.archivedAt)?.id ?? null,
+    subjects: data.subjects })
 }

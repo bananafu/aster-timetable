@@ -9,6 +9,7 @@ import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, checkV9WriteEvidence,
 import { checkV8HostWriteEligibility } from '../hooks/useAppDataV8'
 import { createBlankProjectV9 } from './teacherSubjectsV9'
 import type { AppDataV9 } from '../types/v9'
+import { createEmptyProjectV9 } from './managementV9'
 
 const time = '2026-10-23T01:00:00.000Z'
 function memory() {
@@ -37,6 +38,20 @@ async function ready() {
 }
 
 describe('explicit teacher Subject upgrade and V9 storage', () => {
+  it('persists and reloads a name-only Project through the existing V9 persistence receipt', async () => {
+    const { storage, candidate, result, rawV8 } = await ready()
+    if (!result.ok) throw new Error('fixture failed')
+    const next = createEmptyProjectV9(candidate, { name: '名稱專案' }, 'name-only')
+    const receipt = await persistAppDataV9(storage, candidate, next, {
+      raw: result.rawDocument, metadataRaw: storage.getItem(V9_ACTIVATION_KEY)!, revision: 0,
+    })
+    expect(receipt.revision).toBe(1)
+    expect(receipt.raw).toBe(JSON.stringify(next))
+    expect(loadAppDataV9(storage)).toMatchObject({ status: 'active', document: next })
+    expect(loadAppDataV9(storage).document?.projects[0].term).toBeNull()
+    expect(storage.getItem(APP_DATA_V8_KEY)).toBe(rawV8)
+    expect(storage.setItem.mock.calls.filter(([key]) => key === APP_DATA_V9_KEY).at(-1)?.[1]).toBe(receipt.raw)
+  })
   it('backs up exact V8 and activation raw, verifies readback, and never overwrites old keys', async () => {
     const { storage, rawV8, result } = await ready()
     expect(result.ok).toBe(true)

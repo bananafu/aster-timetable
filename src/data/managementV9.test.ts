@@ -5,8 +5,9 @@ import { configureTeacherSubjectV9, createBlankProjectV9, createTeacherSubjectV9
   createTeacherTimetableV9 } from './teacherSubjectsV9'
 import { createRecurringLessonV8 } from './recurringLessonsV8'
 import { archiveProjectV9, copyProjectV9, createClassV9, createSchoolV9,
-  createTeachingUnitV9, deleteClassV9, deleteEmptyProjectV9, getClassV9Impact, getProjectV9Impact,
-  reactivateProjectV9, updateClassV9, updateTeachingUnitV9 } from './managementV9'
+  createEmptyProjectV9, createTeachingUnitV9, deleteClassV9, deleteEmptyProjectV9,
+  getClassV9Impact, getProjectV9Impact,
+  reactivateProjectV9, updateClassV9, updateSchoolV9, updateTeachingUnitV9 } from './managementV9'
 import { asV8ValidationProjection, isCompatibleAppDataV9 } from './validators/v9'
 
 function fixture() {
@@ -22,6 +23,60 @@ function fixture() {
 const math = { name: '數學', shortName: '數', color: '#123456', applicableSchoolLevels: ['senior-high' as const] }
 
 describe('V8 teacher-owned management adapters', () => {
+  it('manages School, TeachingUnit and Class natively before Project term configuration', () => {
+    const source = fixture()
+    const sourceUnit = source.data.teachingUnits[0]
+    let data = createEmptyProjectV9(source.data, { name: '未設定' }, 'blank')
+    data = createSchoolV9(data, 'blank', { name: '乙校', color: '#123456' }, 'blank-school')
+    data = updateSchoolV9(data, 'blank', 'blank-school', { name: '乙校更新', color: '#654321' })
+    data = createTeachingUnitV9(data, 'blank', { schoolId: 'blank-school', name: '高中部',
+      schoolLevel: 'senior-high', startDate: '2027-08-01', endDate: '2028-01-31',
+      periods: sourceUnit.periods, weekCycle: { enabled: true, anchorDate: '2027-08-01', anchorPattern: 'A' } },
+    'blank-unit')
+    data = updateTeachingUnitV9(data, 'blank', 'blank-unit', { schoolId: 'blank-school', name: '高中部更新',
+      schoolLevel: 'senior-high', startDate: '2027-08-01', endDate: '2028-01-31',
+      periods: sourceUnit.periods, weekCycle: { enabled: true, anchorDate: '2027-08-01', anchorPattern: 'B' } })
+    data = createClassV9(data, 'blank', { teachingUnitId: 'blank-unit', grade: 1, classNumber: 1 }, 'blank-class')
+    data = updateClassV9(data, 'blank', 'blank-class',
+      { teachingUnitId: 'blank-unit', grade: 2, classNumber: 3, room: '201' })
+    expect(data.schools.find((item) => item.id === 'blank-school'))
+      .toMatchObject({ projectId: 'blank', name: '乙校更新', color: '#654321' })
+    expect(data.teachingUnits.find((item) => item.id === 'blank-unit'))
+      .toMatchObject({ projectId: 'blank', name: '高中部更新', weekCycle: { anchorPattern: 'B' } })
+    expect(data.classes.find((item) => item.id === 'blank-class'))
+      .toMatchObject({ projectId: 'blank', teachingUnitId: 'blank-unit', name: '203', room: '201' })
+    expect(getClassV9Impact(data, 'blank', 'blank-class')).toMatchObject({ recurringLessons: 0,
+      oneOffLessons: 0, overrides: 0, teachingProgress: 0 })
+    expect(() => createTeachingUnitV9(data, 'blank', { schoolId: 'blank-school', name: '重複高中部',
+      schoolLevel: 'senior-high', startDate: '2027-08-01', endDate: '2028-01-31',
+      periods: sourceUnit.periods, weekCycle: { enabled: true, anchorDate: '2027-08-01', anchorPattern: 'A' } },
+    'duplicate-unit')).toThrow()
+    expect(() => createClassV9(data, 'blank',
+      { teachingUnitId: sourceUnit.id, grade: 1, classNumber: 2 }, 'cross-project-class')).toThrow()
+    expect(() => deleteClassV9(data, 'blank', 'blank-class')).toThrow(/confirmation/)
+    const deleted = deleteClassV9(data, 'blank', 'blank-class', true)
+    expect(deleted.classes.some((item) => item.id === 'blank-class')).toBe(false)
+    expect(isCompatibleAppDataV9(deleted)).toBe(true)
+  })
+
+  it('counts null-term structural dependencies and refuses cascading Project deletion', () => {
+    const source = fixture()
+    const sourceUnit = source.data.teachingUnits[0]
+    let data = createEmptyProjectV9(source.data, { name: '未設定' }, 'blank')
+    data = createSchoolV9(data, 'blank', { name: '乙校', color: '#123456' }, 'blank-school')
+    data = createTeachingUnitV9(data, 'blank', { schoolId: 'blank-school', name: '高中部',
+      schoolLevel: 'senior-high', startDate: '2027-08-01', endDate: '2028-01-31',
+      periods: sourceUnit.periods, weekCycle: { enabled: true, anchorDate: '2027-08-01', anchorPattern: 'A' } },
+    'blank-unit')
+    data = createTeacherTimetableV9(data, 'blank', { name: '乙課表', teacherName: '乙' }, 'blank-table')
+    data = createTeacherSubjectV9(data, 'blank', 'blank-table', math, 'blank-subject')
+    data = configureTeacherSubjectV9(data, 'blank', 'blank-table', 'blank-unit', 'blank-subject', 'blank-relation')
+    data = createClassV9(data, 'blank', { teachingUnitId: 'blank-unit', grade: 1, classNumber: 1 }, 'blank-class')
+    expect(getProjectV9Impact(data, 'blank')).toMatchObject({ teachingUnits: 1, timetables: 1,
+      subjects: 1, teachingUnitSubjects: 1, classes: 1 })
+    expect(() => deleteEmptyProjectV9(data, 'blank', true)).toThrow(/不能級聯刪除/)
+  })
+
   it('reuses school, unit and class rules without changing another Project', () => {
     const f = fixture()
     let data = createSchoolV9(f.data, f.projectId, { name: '第二學校', color: '#123456' }, f.id())
@@ -193,8 +248,7 @@ describe('V8 teacher-owned management adapters', () => {
     expect(reactivateProjectV9(archived, f.projectId).activeProjectId).toBe(f.projectId)
     expect(getProjectV9Impact(f.data, f.projectId).timetables).toBe(2)
     expect(() => deleteEmptyProjectV9(f.data, f.projectId, true)).toThrow(/不能級聯刪除/)
-    const empty = createBlankProjectV9(f.data, { name: '空白', academicYear: 116, semester: 'second',
-      startDate: '2027-02-01', endDate: '2027-07-31' }, f.id)
+    const empty = createEmptyProjectV9(f.data, { name: '空白' }, f.id())
     const emptyId = empty.activeProjectId!
     expect(() => deleteEmptyProjectV9(empty, emptyId)).toThrow()
     expect(deleteEmptyProjectV9(empty, emptyId, true).projects.some((item) => item.id === emptyId)).toBe(false)

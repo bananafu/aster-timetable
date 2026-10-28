@@ -2,12 +2,14 @@ import type { AppDataV9, SubjectV9 } from '../types/v9'
 import type { SchoolLevel, TeachingUnitSubject } from '../types'
 import type { NewProjectInput } from './projectRuntime'
 import { createBlankProject, switchActiveProject } from './projectRuntimeV8'
-import { createTeachingUnitV8, type TeachingUnitV8Draft } from './academicSettingsV8'
+import type { TeachingUnitV8Draft } from './academicSettingsV8'
+import { createTeachingUnitV9 as createManagedTeachingUnitV9 } from './managementV9'
 import { createTeacherTimetableV8, deleteTeacherTimetableV8,
   duplicateTeacherTimetableV8, getTimetableV8Impact, updateTeacherTimetableV8,
   type TimetableV8Details } from './timetablesV8'
 import { asV8ValidationProjection, isCompatibleAppDataV9, isSafeAppDataV9Update } from './validators/v9'
 import { normalizeSubjectText } from '../lib/subjectSearch'
+import { retainUnsetProjectResourcesV9 } from './projectContractV9'
 
 export class TeacherSubjectV9Error extends Error {
   constructor(readonly code: string, message: string, readonly details?: TeacherSubjectV9ErrorDetails) {
@@ -361,39 +363,64 @@ export function createBlankProjectV9(data: AppDataV9, input: NewProjectInput, cr
   valid(data)
   const next = createBlankProject(asV8ValidationProjection(data), input, createId)
   return safe(data, { ...data, activeProjectId: next.activeProjectId,
-    projects: next.projects, schools: next.schools, teachingUnits: next.teachingUnits })
+    ...retainUnsetProjectResourcesV9(data, next), teachingUnits: next.teachingUnits })
 }
 export function switchActiveProjectV9(data: AppDataV9, projectId: string): AppDataV9 {
   valid(data)
+  if (data.projects.some((item) => item.id === projectId && item.term === null && !item.archivedAt)) {
+    return safe(data, { ...data, activeProjectId: projectId })
+  }
   const next = switchActiveProject(asV8ValidationProjection(data), projectId)
   return safe(data, { ...data, activeProjectId: next.activeProjectId })
 }
 export function createTeachingUnitV9(data: AppDataV9, projectId: string,
   draft: TeachingUnitV8Draft, id: string): AppDataV9 {
-  valid(data)
-  const next = createTeachingUnitV8(asV8ValidationProjection(data), projectId, draft, id)
-  return safe(data, { ...data, teachingUnits: next.teachingUnits })
+  return createManagedTeachingUnitV9(data, projectId, draft, id)
 }
 export function createTeacherTimetableV9(data: AppDataV9, projectId: string,
   details: TimetableV8Details, id: string): AppDataV9 {
   valid(data)
+  if (data.projects.some((item) => item.id === projectId && item.term === null)) {
+    if (data.projects.find((item) => item.id === projectId)?.archivedAt || !idAvailable(data, id)
+      || !details.name?.trim() || !details.teacherName?.trim()) fail('invalid-timetable', 'Invalid Timetable or Project.')
+    return safe(data, { ...data, timetables: [...data.timetables,
+      { id, projectId, name: details.name.trim(), teacherName: details.teacherName.trim() }] })
+  }
   const next = createTeacherTimetableV8(asV8ValidationProjection(data), projectId, details, id)
-  return safe(data, { ...data, timetables: next.timetables })
+  return safe(data, { ...data, timetables: retainUnsetProjectResourcesV9(data, next).timetables })
 }
 export function updateTeacherTimetableV9(data: AppDataV9, projectId: string, timetableId: string,
   details: TimetableV8Details): AppDataV9 {
   valid(data)
+  if (data.projects.some((item) => item.id === projectId && item.term === null)) {
+    timetable(data, projectId, timetableId)
+    if (!details.name?.trim() || !details.teacherName?.trim()) fail('invalid-timetable', 'Timetable names are required.')
+    return safe(data, { ...data, timetables: data.timetables.map((item) => item.id === timetableId
+      ? { ...item, name: details.name.trim(), teacherName: details.teacherName.trim(), teacherNamePending: undefined } : item) })
+  }
   const next = updateTeacherTimetableV8(asV8ValidationProjection(data), projectId, timetableId, details)
-  return safe(data, { ...data, timetables: next.timetables })
+  return safe(data, { ...data, timetables: retainUnsetProjectResourcesV9(data, next).timetables })
 }
 export function duplicateTeacherTimetableV9(data: AppDataV9, projectId: string, sourceId: string,
   id: string, details?: TimetableV8Details): AppDataV9 {
   valid(data)
+  if (data.projects.some((item) => item.id === projectId && item.term === null)) {
+    const source = timetable(data, projectId, sourceId)
+    if (!source.teacherName) fail('invalid-timetable', 'Source teacher name is unresolved.')
+    return createTeacherTimetableV9(data, projectId, details ?? {
+      name: `${source.name}（副本）`, teacherName: source.teacherName!,
+    }, id)
+  }
   const next = duplicateTeacherTimetableV8(asV8ValidationProjection(data), projectId, sourceId, projectId, id, details)
-  return safe(data, { ...data, timetables: next.timetables })
+  return safe(data, { ...data, timetables: retainUnsetProjectResourcesV9(data, next).timetables })
 }
 export function getTeacherTimetableV9Impact(data: AppDataV9, projectId: string, timetableId: string) {
   valid(data)
+  if (data.projects.some((item) => item.id === projectId && item.term === null)) {
+    const found = data.timetables.find((item) => item.id === timetableId && item.projectId === projectId)
+    if (!found) fail('invalid-timetable', 'Timetable is outside Project.')
+    return { timetable: found!, recurringLessons: 0, oneOffLessons: 0, changes: 0, events: 0, progress: 0 }
+  }
   return getTimetableV8Impact(asV8ValidationProjection(data), projectId, timetableId)
 }
 export function deleteTeacherTimetableV9(data: AppDataV9, projectId: string, timetableId: string): AppDataV9 {
@@ -401,6 +428,10 @@ export function deleteTeacherTimetableV9(data: AppDataV9, projectId: string, tim
   if (data.subjects.some((item) => item.timetableId === timetableId)) {
     fail('subject-owned', 'Remove this teacher’s Subject library before deleting the Timetable.')
   }
+  if (data.projects.some((item) => item.id === projectId && item.term === null)) {
+    timetable(data, projectId, timetableId)
+    return safe(data, { ...data, timetables: data.timetables.filter((item) => item.id !== timetableId) })
+  }
   const next = deleteTeacherTimetableV8(asV8ValidationProjection(data), projectId, timetableId, true)
-  return safe(data, { ...data, timetables: next.timetables })
+  return safe(data, { ...data, timetables: retainUnsetProjectResourcesV9(data, next).timetables })
 }
