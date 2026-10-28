@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { archiveProject, copyProject, createBlankProject, deleteProject, reactivateProject,
   renameProject, type NewProjectInput } from './data/projectRuntime'
 import type { CopyProjectV8Input } from './data/projectRuntimeV8'
+import type { ConfigureProjectTermV9Input } from './data/managementV9'
 import { copyTimetable, createTimetable, updateTimetable, type TimetableDetails } from './data/timetablesV6'
 import { deleteTimetable } from './data/deleteTimetableV7'
 import type { AppDataV4, AppDataV7 } from './types'
@@ -16,6 +17,7 @@ type ProjectLifecycleActionBase = {
   archiveProject: (projectId: string) => ProjectLifecycleActionResult
   reactivateProject: (projectId: string) => ProjectLifecycleActionResult
   deleteProject: (projectId: string) => ProjectLifecycleActionResult
+  configureTerm?: (input: ConfigureProjectTermV9Input) => Promise<void>
 }
 
 export type ProjectLifecycleActions = ProjectLifecycleActionBase & ({

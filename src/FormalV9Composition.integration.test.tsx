@@ -134,6 +134,13 @@ describe('formal V9 management composition', () => {
     fireEvent.click(screen.getByRole('button', { name: '建立並開始' }))
     await waitFor(() => expect(stored().projects).toHaveLength(1))
     await waitFor(() => expect(screen.queryByRole('heading', { name: '建立你的第一份課表' })).toBeNull())
+    await waitFor(() => expect(screen.getByRole('dialog', { name: '專案設定' })).toBeTruthy())
+    expect(revision()).toBe(1)
+    expect(screen.getByLabelText('學年度')).toBeTruthy()
+    expect(screen.queryByLabelText('專案名稱')).toBeNull()
+    expect(screen.queryByLabelText('起始日')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
     expect(stored().projects[0]).toMatchObject({ name: '名稱專案', term: null })
     for (const key of ['schools', 'teachingUnits', 'timetables', 'subjects', 'classes',
       'recurringLessons', 'oneOffLessons', 'overrides', 'events', 'teachingProgress'] as const) expect(stored()[key]).toEqual([])
@@ -143,6 +150,23 @@ describe('formal V9 management composition', () => {
     expect(useAppDataV4).not.toHaveBeenCalled()
     expect(await inspectFormalRuntime(localStorage)).toEqual({ runtime: 'v9', v9Status: 'active' })
     entry.unmount()
+  })
+
+  it('keeps the name draft and does not open term settings when the Host rejects creation', async () => {
+    await activate()
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '建立第一個課表專案' }))
+    fireEvent.change(screen.getByLabelText('專案名稱'), { target: { value: '未儲存專案' } })
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === APP_DATA_V9_KEY) throw new Error('Host rejected write')
+      return originalSetItem.call(this, key, value)
+    })
+    fireEvent.click(screen.getByRole('button', { name: '建立並開始' }))
+    await waitFor(() => expect(screen.getByText(/專案尚未確認儲存/)).toBeTruthy())
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect((screen.getByLabelText('專案名稱') as HTMLInputElement).value).toBe('未儲存專案')
+    expect(stored().projects).toEqual([])
   })
 
   it('reuses the name-only Project modal with draft protection, focus return and receipt-based selection', async () => {
@@ -156,13 +180,78 @@ describe('formal V9 management composition', () => {
     closeDialog()
     expect((screen.getByLabelText('專案名稱') as HTMLInputElement).value).toBe('新空白')
     fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(screen.getByRole('button', { name: '儲存學期' })).toBeTruthy())
     expect(stored().projects.at(-1)).toMatchObject({ name: '新空白', term: null })
+    expect((screen.getByRole('button', { name: '切換專案' }) as HTMLButtonElement).disabled).toBe(true)
+    closeDialog()
+    expect(screen.queryByRole('dialog')).toBeNull()
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: '新增' })))
+    await act(async () => { await Promise.resolve() })
+    expect(screen.queryByRole('dialog')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '切換專案' }))
     expect(screen.getByRole('menuitemradio', { name: /新空白/ }).getAttribute('aria-checked')).toBe('true')
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(document.activeElement).toBe(screen.getByRole('button', { name: '切換專案' }))
+    fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
+    fireEvent.click(screen.getByRole('button', { name: /學期設定/ }))
+    expect(screen.getByLabelText('學年度')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('configures a standard term through the V9 receipt without changing other resources', async () => {
+    const initial = unsetAcademicFixture(true)
+    await activate(initial)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
+    fireEvent.click(screen.getByRole('button', { name: /學期設定/ }))
+    expect(screen.queryByLabelText('專案名稱')).toBeNull()
+    expect(screen.queryByLabelText('起始日')).toBeNull()
+    const before = stored()
+    const startRevision = revision()
+    fireEvent.change(screen.getByLabelText('學年度'), { target: { value: '116' } })
+    fireEvent.change(screen.getByLabelText('學期'), { target: { value: 'second' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存學期' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(stored().projects.find((item) => item.id === 'blank')?.term).toEqual({ academicYear: 116, semester: 'second' })
+    expect(revision()).toBe(startRevision + 1)
+    for (const key of ['schools', 'teachingUnits', 'timetables', 'subjects', 'teachingUnitSubjects',
+      'classes', 'recurringLessons', 'oneOffLessons', 'overrides', 'events', 'teachingProgress'] as const) {
+      expect(stored()[key], key).toEqual(before[key])
+    }
+    fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
+    expect(screen.queryByRole('button', { name: /學期設定/ })).toBeNull()
+  })
+
+  it('stores a custom term name through the existing settings modal', async () => {
+    await activate(createEmptyProjectV9(empty(), { name: '空白專案' }, 'blank'))
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
+    fireEvent.click(screen.getByRole('button', { name: /學期設定/ }))
+    fireEvent.change(screen.getByLabelText('學期'), { target: { value: 'custom' } })
+    fireEvent.change(screen.getByLabelText('自訂學期名稱'), { target: { value: '特別學期' } })
+    fireEvent.change(screen.getByLabelText('學年度'), { target: { value: '117' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存學期' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(stored().projects[0].term).toEqual({ academicYear: 117, semester: 'custom', customLabel: '特別學期' })
+  })
+
+  it('keeps the term draft open when the Host rejects the term write', async () => {
+    await activate(createEmptyProjectV9(empty(), { name: '空白專案' }, 'blank'))
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
+    fireEvent.click(screen.getByRole('button', { name: /學期設定/ }))
+    fireEvent.change(screen.getByLabelText('學年度'), { target: { value: '118' } })
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === APP_DATA_V9_KEY) throw new Error('Host rejected write')
+      return originalSetItem.call(this, key, value)
+    })
+    fireEvent.click(screen.getByRole('button', { name: '儲存學期' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('學期尚未確認儲存'))
+    expect((screen.getByLabelText('學年度') as HTMLInputElement).value).toBe('118')
+    expect(stored().projects[0].term).toBeNull()
+    expect(screen.getByRole('dialog', { name: '專案設定' })).toBeTruthy()
   })
 
   it('reuses the formal school/level forms to create null-term V9 settings', async () => {

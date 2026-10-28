@@ -7,6 +7,7 @@ import { TimetableControls, TimetableForm, TimetableInfoDialog } from './compone
 import { Topbar } from './components/Topbar'
 import { toFormalV9HostPort } from './formalRuntime'
 import type { ProjectLifecycleActions } from './formalV7ProjectTimetableActions'
+import type { FormalProjectTimetableV9Result } from './formalProjectTimetableV9'
 import { useFormalAcademicSettingsV9Adapter } from './hooks/useFormalAcademicSettingsV9Adapter'
 import { useFormalClassManagementV9Adapter } from './hooks/useFormalClassManagementV9Adapter'
 import { useFormalProjectTimetableV9Adapter } from './hooks/useFormalProjectTimetableV9Adapter'
@@ -27,18 +28,26 @@ type TimetableDialog = {
   actions: Actions['timetable']
   impact: { lessons: number; overrides: number; oneOffLessons: number }
 }
-type LifecycleDialog = { initialPage: 'root' | 'blank'; data: ProjectLifecycleViewData;
+type LifecycleDialog = { initialPage: 'root' | 'blank' | 'term'; data: ProjectLifecycleViewData;
   actions: ProjectLifecycleActions; deletionMessage: (id: string) => string }
+type PendingTerm = { projectId: string; raw: string; revision: number; attemptId: string }
 
-function lifecycleActions(actions: Actions, onDeleted?: () => void): ProjectLifecycleActions {
+function lifecycleActions(actions: Actions, onDeleted?: () => void,
+  onCreated?: (result: FormalProjectTimetableV9Result) => void): ProjectLifecycleActions {
   return {
     runtime: 'v9', creationMode: 'empty-v9', copyRequiresSourceEffectiveDate: true,
-    createProject: async (input) => { await actions.project.createEmptyFromName(input) },
+    createProject: async (input) => { const result = await actions.project.createEmptyFromName(input); onCreated?.(result) },
+    configureTerm: async (input) => { await actions.project.configureTerm(input) },
     copyProject: async (input) => { await actions.project.copy(input) },
     archiveProject: async (id) => { await actions.project.archive(id) },
     reactivateProject: async (id) => { await actions.project.reactivate(id) },
     deleteProject: async (id) => { await actions.project.delete(id); onDeleted?.() },
   }
+}
+function deletionMessage(snapshot: ProjectLifecycleViewData, actions: Actions, id: string) {
+  const target = snapshot.projects.find((item) => item.id === id)
+  const impact = actions.project.deletionImpact(id)
+  return `永久刪除「${target?.name ?? ''}」？\n目前有 ${impact.timetables} 份教師課表、${impact.subjects} 個科目、${impact.classes} 個班級、${impact.recurringLessons} 筆固定課程、${impact.oneOffLessons} 筆單日課程、${impact.events} 筆事件及 ${impact.teachingProgress} 筆進度。\n僅能刪除無教學依賴的空白專案，不會級聯刪除其他資料。`
 }
 
 /** Formal management tree. Stage 0 deliberately does not mount this composition yet. */
@@ -77,6 +86,7 @@ export function FormalV9Composition() {
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [resource, setResource] = useState<ResourceMode | null>(null)
   const [lifecycle, setLifecycle] = useState<LifecycleDialog | null>(null)
+  const [pendingTerm, setPendingTerm] = useState<PendingTerm | null>(null)
   const [tableDialog, setTableDialog] = useState<TimetableDialog | null>(null)
   const [tableError, setTableError] = useState('')
   const [tableNotice, setTableNotice] = useState('')
@@ -97,10 +107,17 @@ export function FormalV9Composition() {
     : writable ? '已儲存至此裝置'
       : host.status === 'conflict' ? '偵測到多分頁衝突'
         : host.status === 'active' && !host.errorCode ? '正在驗證資料寫入資格…' : '資料目前為唯讀，已暫停寫入'
-  const viewData: ProjectLifecycleViewData | null = data ? { projects: data.projects,
+  const viewData: ProjectLifecycleViewData | null = useMemo(() => data ? { projects: data.projects,
     activeProjectId: selection.projectId, teachingUnits: data.teachingUnits,
-    migrationWarnings: data.migrationWarnings } : null
-  const projectActions = actions ? lifecycleActions(actions) : null
+    migrationWarnings: data.migrationWarnings } : null, [data, selection.projectId])
+  const queueCreatedTerm = (result: FormalProjectTimetableV9Result) => {
+    const projectId = result.selection.projectId
+    if (!projectId || projectId !== result.document.activeProjectId
+      || result.document.projects.find((item) => item.id === projectId)?.term !== null) return
+    setPendingTerm({ projectId, raw: result.receipt.raw, revision: result.receipt.revision,
+      attemptId: result.receipt.attemptId })
+  }
+  const projectActions = actions ? lifecycleActions(actions, undefined, queueCreatedTerm) : null
   const clearFeedback = () => {
     subjectPort.clearFeedback(); classPort.clearFeedback(); academicPort.clearFeedback(); setTableNotice('')
   }
@@ -114,17 +131,31 @@ export function FormalV9Composition() {
     if (target && !target.matches(':disabled')) target.focus()
     else document.querySelector<HTMLElement>('.brand-toggle')?.focus()
   }, [lifecycle, tableDialog])
+  useEffect(() => {
+    if (!pendingTerm || !data || host.revision < pendingTerm.revision || lifecycle || modalOpen || pending) return
+    const valid = host.revision === pendingTerm.revision
+      && host.receipt?.revision === pendingTerm.revision
+      && host.receipt.raw === pendingTerm.raw
+      && host.receipt.attemptId === pendingTerm.attemptId
+      && JSON.stringify(data) === pendingTerm.raw
+      && selection.projectId === pendingTerm.projectId
+      && data.projects.find((item) => item.id === pendingTerm.projectId)?.term === null
+    setPendingTerm(null)
+    if (!valid || !actions || !viewData) return
+    modalReturnSelector.current = '.sidebar [aria-label="專案設定"]'
+    modalTrigger.current = document.querySelector<HTMLElement>('.topbar-add > button')
+    setLifecycle({ initialPage: 'term', data: viewData,
+      actions: lifecycleActions(actions, closeLifecycle),
+      deletionMessage: (id) => deletionMessage(viewData, actions, id) })
+  }, [pendingTerm, data, host.revision, host.receipt, selection.projectId, lifecycle, modalOpen, pending, actions, viewData])
   const openLifecycle = (initialPage: 'root' | 'blank') => {
     if (!actions || !controller || !viewData || modalOpen || pending) return
     clearFeedback()
     modalReturnSelector.current = initialPage === 'blank' ? '.topbar-add > button' : '.sidebar [aria-label="專案設定"]'
     modalTrigger.current = document.querySelector<HTMLElement>(modalReturnSelector.current)
     const snapshot = viewData
-    setLifecycle({ initialPage, data: snapshot, actions: lifecycleActions(actions, closeLifecycle), deletionMessage: (id) => {
-      const target = snapshot.projects.find((item) => item.id === id)
-      const impact = actions.project.deletionImpact(id)
-      return `永久刪除「${target?.name ?? ''}」？\n目前有 ${impact.timetables} 份教師課表、${impact.subjects} 個科目、${impact.classes} 個班級、${impact.recurringLessons} 筆固定課程、${impact.oneOffLessons} 筆單日課程、${impact.events} 筆事件及 ${impact.teachingProgress} 筆進度。\n僅能刪除無教學依賴的空白專案，不會級聯刪除其他資料。`
-    } })
+    setLifecycle({ initialPage, data: snapshot, actions: lifecycleActions(actions, closeLifecycle, queueCreatedTerm),
+      deletionMessage: (id) => deletionMessage(snapshot, actions, id) })
   }
   const openTimetable = (mode: 'create' | 'edit') => {
     if (!actions || !project || !writable || modalOpen || (mode === 'edit' && !timetable)) return
