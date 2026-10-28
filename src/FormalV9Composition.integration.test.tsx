@@ -15,6 +15,7 @@ import { createDefaultPeriods } from './data/academicSettingsV4'
 import { createClassV9, createEmptyProjectV9, createSchoolV9 } from './data/managementV9'
 import { inspectFormalRuntime } from './formalRuntime'
 import { useAppDataV4 } from './hooks/useAppDataV4'
+import { startOfWeek, toDateKey } from './lib/date'
 import type { AppDataV9 } from './types/v9'
 
 vi.mock('./hooks/useAppDataV4', async (original) => ({
@@ -78,6 +79,56 @@ function fixture() {
   return { data: switchActiveProjectV9(data, projectA), projectA, projectB, seniorA, seniorB }
 }
 
+function readableFixture() {
+  const result = fixture()
+  let data = structuredClone(result.data)
+  const monday = startOfWeek(new Date())
+  const mondayKey = toDateKey(monday)
+  data.teachingUnits = data.teachingUnits.map((unit) => ({ ...unit, startDate: '2020-01-01', endDate: '2035-12-31',
+    weekCycle: { enabled: true, anchorDate: mondayKey,
+      anchorPattern: unit.id === 'junior-a' ? 'B' as const : 'A' as const } }))
+  const subjectA = data.subjects.find((item) => item.projectId === result.projectA && item.timetableId === 'teacher-a')!
+  data = configureTeacherSubjectV9(data, result.projectA, 'teacher-a', 'junior-a', subjectA.id, 'read-junior-link')
+  const classA = data.classes.find((item) => item.projectId === result.projectA
+    && item.teachingUnitId === result.seniorA.id)!
+  const classJunior = data.classes.find((item) => item.projectId === result.projectA
+    && item.teachingUnitId === 'junior-a')!
+  const subjectB = data.subjects.find((item) => item.projectId === result.projectA && item.timetableId === 'teacher-b')!
+  const classB = data.classes.find((item) => item.projectId === result.projectB)!
+  const subjectC = data.subjects.find((item) => item.projectId === result.projectB && item.timetableId === 'teacher-c')!
+  data.recurringLessons.push(
+    { id: 'read-a-senior', seriesId: 'read-a-senior', projectId: result.projectA, timetableId: 'teacher-a',
+      teachingUnitId: result.seniorA.id, subjectId: subjectA.id, classId: classA.id, day: 1,
+      periodId: result.seniorA.periods[0].id, weekPattern: 'every', effectiveStart: '2020-01-01' },
+    { id: 'read-a-junior', seriesId: 'read-a-junior', projectId: result.projectA, timetableId: 'teacher-a',
+      teachingUnitId: 'junior-a', subjectId: subjectA.id, classId: classJunior.id, day: 1,
+      periodId: data.teachingUnits.find((item) => item.id === 'junior-a')!.periods[0].id,
+      weekPattern: 'every', effectiveStart: '2020-01-01' },
+    { id: 'read-b', seriesId: 'read-b', projectId: result.projectA, timetableId: 'teacher-b',
+      teachingUnitId: result.seniorA.id, subjectId: subjectB.id, classId: classA.id, day: 1,
+      periodId: result.seniorA.periods[0].id, weekPattern: 'every', effectiveStart: '2020-01-01' },
+    { id: 'read-c', seriesId: 'read-c', projectId: result.projectB, timetableId: 'teacher-c',
+      teachingUnitId: result.seniorB.id, subjectId: subjectC.id, classId: classB.id, day: 1,
+      periodId: result.seniorB.periods[0].id, weekPattern: 'every', effectiveStart: '2020-01-01' },
+  )
+  data.events.push(
+    { id: 'visible-meeting', projectId: result.projectA, timetableId: 'teacher-a', teachingUnitId: result.seniorA.id, ownershipStatus: 'resolved',
+      title: '目前教師會議', type: 'meeting', date: mondayKey, startTime: '12:00', endTime: '13:00', color: '#A66D52' },
+    { id: 'visible-activity', projectId: result.projectA, timetableId: 'teacher-a', teachingUnitId: 'junior-a', ownershipStatus: 'resolved',
+      title: '目前教師活動', type: 'activity', date: mondayKey, startTime: '13:00', endTime: '14:00', color: '#A66D52' },
+    { id: 'other-teacher', projectId: result.projectA, timetableId: 'teacher-b', teachingUnitId: result.seniorA.id, ownershipStatus: 'resolved',
+      title: '其他教師會議', type: 'meeting', date: mondayKey, startTime: '14:00', endTime: '15:00', color: '#A66D52' },
+    { id: 'other-project', projectId: result.projectB, timetableId: 'teacher-c', teachingUnitId: result.seniorB.id, ownershipStatus: 'resolved',
+      title: '其他專案會議', type: 'meeting', date: mondayKey, startTime: '15:00', endTime: '16:00', color: '#A66D52' },
+    { id: 'task', projectId: result.projectA, timetableId: 'teacher-a', teachingUnitId: result.seniorA.id, ownershipStatus: 'resolved',
+      title: '不顯示待辦', type: 'task', date: mondayKey, startTime: '16:00', endTime: '17:00', color: '#A66D52' },
+    { id: 'unresolved', projectId: null, ownershipStatus: 'unresolved',
+      ownershipIssue: { reason: 'unassigned-project', candidateTimetableIds: [] }, title: '未解析事件',
+      type: 'meeting', date: mondayKey, startTime: '17:00', endTime: '18:00', color: '#A66D52' },
+  )
+  return { ...result, data }
+}
+
 async function mount() {
   const view = render(<FormalV9Composition />)
   await waitFor(() => expect(screen.getByText('已儲存至此裝置')).toBeTruthy())
@@ -124,7 +175,12 @@ describe('formal V9 management composition', () => {
     expect(document.querySelector('.app-shell')?.classList.contains('sidebar-is-collapsed')).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: '展開側邊欄' }))
     expect(document.querySelector('.app-shell')?.classList.contains('sidebar-is-collapsed')).toBe(false)
-    expect((screen.getByRole('button', { name: '總覽' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '總覽' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '我的課表' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '會議與活動' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '手機導覽：總覽' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '手機導覽：我的課表' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '手機導覽：會議與活動' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: '查看範例' }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: '建立第一個課表專案' }))
     expect(screen.getAllByRole('textbox')).toHaveLength(1)
@@ -141,6 +197,14 @@ describe('formal V9 management composition', () => {
     expect(screen.queryByLabelText('起始日')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('heading', { name: '本週行事曆' })).toBeTruthy()
+    expect(screen.getByText('尚未設定學期')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect(screen.getByRole('heading', { name: '跨校週課表' })).toBeTruthy()
+    expect(screen.getByText('尚未設定學期')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '會議與活動' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '總覽' }))
+    expect(screen.getByRole('heading', { name: '本週行事曆' })).toBeTruthy()
     expect(stored().projects[0]).toMatchObject({ name: '名稱專案', term: null })
     for (const key of ['schools', 'teachingUnits', 'timetables', 'subjects', 'classes',
       'recurringLessons', 'oneOffLessons', 'overrides', 'events', 'teachingProgress'] as const) expect(stored()[key]).toEqual([])
@@ -351,6 +415,45 @@ describe('formal V9 management composition', () => {
     expect(screen.getByRole('button', { name: '編輯班級 丙班' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '編輯班級 甲班' })).toBeNull()
     expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(raw)
+  })
+
+  it('wires resolved Calendar and Schedule reads without leaking another teacher, Project, or unresolved event', async () => {
+    const f = readableFixture()
+    await activate(f.data)
+    await mount()
+    const raw = localStorage.getItem(APP_DATA_V9_KEY)
+
+    expect(screen.getAllByText('甲專用').length).toBeGreaterThan(0)
+    expect(screen.getByText('目前教師會議')).toBeTruthy()
+    expect(screen.getByText('目前教師活動')).toBeTruthy()
+    expect(screen.queryByText('其他教師會議')).toBeNull()
+    expect(screen.queryByText('其他專案會議')).toBeNull()
+    expect(screen.queryByText('未解析事件')).toBeNull()
+    expect(screen.queryByText('不顯示待辦')).toBeNull()
+    expect(screen.queryByRole('button', { name: /編輯.*甲專用/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect(screen.getAllByText('甲專用')).toHaveLength(2)
+    expect(screen.queryByText('A 週')).toBeNull()
+    expect(screen.queryByText('B 週')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: '各校課表' }))
+    expect(screen.queryByText('A 週')).toBeNull()
+    fireEvent.change(screen.getByLabelText('篩選學制'), { target: { value: f.seniorA.id } })
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.getAllByText('甲專用')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('tab', { name: '總課表' }))
+    expect(screen.queryByText('A 週')).toBeNull()
+    expect(screen.getAllByText('甲專用')).toHaveLength(2)
+
+    chooseTeacher(/乙課表/)
+    expect(screen.getByText('乙專用')).toBeTruthy()
+    expect(screen.queryByText('甲專用')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '切換專案' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /乙專案/ }))
+    expect(screen.getByText('丙專用')).toBeTruthy()
+    expect(screen.queryByText('乙專用')).toBeNull()
+    expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(raw)
+    expect(useAppDataV4).not.toHaveBeenCalled()
   })
 
   it('persists custom Subjects without configuration through the single V9 Host', async () => {

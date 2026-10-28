@@ -9,6 +9,7 @@ import { migrateV6ToV7 } from '../data/migrationsV7'
 import { createOneOffLesson } from '../data/oneOffLessonsV7'
 import { initialData } from '../data/seed'
 import { getTeachingUnitWeekPattern } from '../lib/scheduleV4'
+import type { ScheduleDisplayDay, ScheduleDisplayOccurrence } from '../lib/scheduleDisplay'
 import { MultiSchoolSchedule } from './MultiSchoolSchedule'
 
 afterEach(cleanup)
@@ -322,5 +323,100 @@ describe('MultiSchoolSchedule one-off occurrences', () => {
     fireEvent.click(screen.getByRole('button', { name: '七天' }))
     expect(screen.getByLabelText('2026-09-12 課表').querySelectorAll('.one-off')).toHaveLength(1)
     expect(screen.getByLabelText('2026-09-06 課表').querySelectorAll('.one-off')).toHaveLength(0)
+  })
+})
+
+const displayOccurrence = (overrides: Partial<ScheduleDisplayOccurrence> = {}): ScheduleDisplayOccurrence => ({
+  key: 'display-lesson', id: 'display-lesson', kind: 'recurring', date: '2026-09-07',
+  startTime: '08:00', endTime: '08:50', teachingUnitId: 'unit-a', schoolId: 'school-a',
+  schoolName: '甲校', schoolColor: '#556677', teachingUnitName: '高中部', subjectName: 'V9 國文',
+  subjectColor: '#A66D52', className: 'V9 甲班', hasConflict: false, status: 'regular', periodLabel: '第 1 節',
+  ...overrides,
+})
+const displayDays = (byDate: Record<string, readonly ScheduleDisplayOccurrence[]>): readonly ScheduleDisplayDay[] =>
+  Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(2026, 8, 6 + index)
+    const key = `2026-09-${String(6 + index).padStart(2, '0')}`
+    return { date, lessons: byDate[key] ?? [] }
+  })
+const displaySchools = [{ id: 'school-a', name: '甲校' }, { id: 'school-b', name: '乙校' }]
+const displayUnits = [
+  { id: 'unit-a', schoolId: 'school-a', name: '高中部', schoolLevel: 'senior-high' as const },
+  { id: 'unit-b', schoolId: 'school-b', name: '國中部', schoolLevel: 'junior-high' as const },
+]
+
+describe('MultiSchoolSchedule resolved V9 read-only data', () => {
+  it('keeps source/cancelled placeholders visible but out of teaching counts, conflicts, and short breaks', () => {
+    const source = displayOccurrence({ key: 'source', status: 'moved', movementRole: 'source', hasConflict: true })
+    const regular = displayOccurrence({ key: 'regular', id: 'regular', startTime: '09:00', endTime: '09:50',
+      subjectName: 'V9 英文', hasConflict: true })
+    const target = displayOccurrence({ key: 'target', id: 'target', date: '2026-09-08', status: 'moved',
+      movementRole: 'target', subjectName: 'V9 數學', hasConflict: true })
+    const cancelled = displayOccurrence({ key: 'cancelled', id: 'cancelled', date: '2026-09-09',
+      status: 'cancelled', subjectName: 'V9 歷史', hasConflict: true })
+    const weekendSource = displayOccurrence({ key: 'weekend-source', id: 'weekend-source', date: '2026-09-12',
+      status: 'moved', movementRole: 'source', subjectName: 'V9 週末來源' })
+    render(<MultiSchoolSchedule mode="resolved" weekDays={week} readStatus="ready"
+      days={displayDays({ '2026-09-07': [source, regular], '2026-09-08': [target],
+        '2026-09-09': [cancelled], '2026-09-12': [weekendSource] })}
+      schools={displaySchools} teachingUnits={displayUnits} />)
+
+    const sourceCard = screen.getByRole('button', { name: '課程 V9 國文・V9 甲班・已調離' }) as HTMLButtonElement
+    expect(sourceCard.disabled).toBe(true)
+    expect(sourceCard.getAttribute('draggable')).toBe('false')
+    expect(sourceCard.className).not.toContain('conflict')
+    expect(sourceCard.textContent).not.toContain('衝堂')
+    expect(screen.getByRole('button', { name: '課程 V9 英文・V9 甲班' }).className).not.toContain('short-break')
+    expect(screen.getByRole('button', { name: '課程 V9 數學・V9 甲班・調入' }).className).toContain('conflict')
+    expect(screen.getByRole('button', { name: '課程 V9 歷史・V9 甲班・單日取消' }).className).not.toContain('conflict')
+    expect(screen.queryByText(/本週週末有/)).toBeNull()
+    expect(document.querySelector('.lesson-drop-targets')).toBeNull()
+    expect(screen.queryByRole('button', { name: /編輯.*V9/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '七天' }))
+    expect(screen.getByRole('button', { name: '課程 V9 週末來源・V9 甲班・已調離' })).toBeTruthy()
+  })
+
+  it('retains 5/7-day and school filters while reporting only an explicit unit for the header', () => {
+    const onHeaderTeachingUnitChange = vi.fn()
+    const unitA = displayOccurrence({ key: 'unit-a-lesson', subjectName: '甲校課程' })
+    const unitB = displayOccurrence({ key: 'unit-b-lesson', id: 'unit-b-lesson', teachingUnitId: 'unit-b',
+      schoolId: 'school-b', schoolName: '乙校', teachingUnitName: '國中部', subjectName: '乙校課程' })
+    render(<MultiSchoolSchedule mode="resolved" weekDays={week} readStatus="ready"
+      days={displayDays({ '2026-09-07': [unitA, unitB] })} schools={displaySchools}
+      teachingUnits={displayUnits} onHeaderTeachingUnitChange={onHeaderTeachingUnitChange} />)
+
+    expect(document.querySelectorAll('.multi-day-column')).toHaveLength(5)
+    expect(screen.getByText('甲校課程')).toBeTruthy()
+    expect(screen.getByText('乙校課程')).toBeTruthy()
+    expect(onHeaderTeachingUnitChange).toHaveBeenLastCalledWith(null)
+    fireEvent.click(screen.getByRole('tab', { name: '各校課表' }))
+    expect(screen.getByText('甲校課程')).toBeTruthy()
+    expect(screen.queryByText('乙校課程')).toBeNull()
+    expect(onHeaderTeachingUnitChange).toHaveBeenLastCalledWith(null)
+    fireEvent.change(screen.getByLabelText('篩選學制'), { target: { value: 'unit-a' } })
+    expect(onHeaderTeachingUnitChange).toHaveBeenLastCalledWith('unit-a')
+    fireEvent.change(screen.getByLabelText('選擇學校'), { target: { value: 'school-b' } })
+    expect(screen.getByText('乙校課程')).toBeTruthy()
+    expect(screen.queryByText('甲校課程')).toBeNull()
+    expect(onHeaderTeachingUnitChange).toHaveBeenLastCalledWith(null)
+    fireEvent.change(screen.getByLabelText('篩選學制'), { target: { value: 'unit-b' } })
+    expect(onHeaderTeachingUnitChange).toHaveBeenLastCalledWith('unit-b')
+    fireEvent.click(screen.getByRole('tab', { name: '總課表' }))
+    expect(screen.getByText('甲校課程')).toBeTruthy()
+    expect(screen.getByText('乙校課程')).toBeTruthy()
+    expect(onHeaderTeachingUnitChange).toHaveBeenLastCalledWith(null)
+    fireEvent.click(screen.getByRole('button', { name: '七天' }))
+    expect(document.querySelectorAll('.multi-day-column')).toHaveLength(7)
+  })
+
+  it.each([
+    ['unset-term', '尚未設定學期'],
+    ['invalid-scope', '目前選取的課表或授課單位無法使用'],
+    ['invalid-document', '課表資料無法通過驗證'],
+  ] as const)('renders the resolved %s status without treating it as an empty ready schedule', (readStatus, message) => {
+    render(<MultiSchoolSchedule mode="resolved" weekDays={week} readStatus={readStatus}
+      days={displayDays({})} schools={displaySchools} teachingUnits={displayUnits} />)
+    expect(screen.getByText(message)).toBeTruthy()
+    expect(screen.queryByText('無有效課程')).toBeNull()
   })
 })

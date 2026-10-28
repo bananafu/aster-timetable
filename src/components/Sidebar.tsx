@@ -25,6 +25,7 @@ interface SidebarProps {
   classManagerButtonRef?: Ref<HTMLButtonElement>
   projectSelectionDisabled?: boolean
   workspaceUnavailableReason?: string
+  workspaceUnavailableReasons?: Readonly<Record<string, string | undefined>>
   storageLabel?: string
 }
 
@@ -34,7 +35,7 @@ const navItems = [
   { id: 'events', label: '會議與活動', icon: Users },
 ]
 
-export function Sidebar({ activePage, onNavigate, open, onOpen, onClose, storageStatus, projects, activeProjectId, onProjectChange, canManageResources = Boolean(activeProjectId) && storageStatus === 'saved', resourceMode = null, subjectCount, classCount, collapsed, onCollapsedChange, subjectManagerButtonRef, classManagerButtonRef, projectSelectionDisabled = false, workspaceUnavailableReason, storageLabel }: SidebarProps) {
+export function Sidebar({ activePage, onNavigate, open, onOpen, onClose, storageStatus, projects, activeProjectId, onProjectChange, canManageResources = Boolean(activeProjectId) && storageStatus === 'saved', resourceMode = null, subjectCount, classCount, collapsed, onCollapsedChange, subjectManagerButtonRef, classManagerButtonRef, projectSelectionDisabled = false, workspaceUnavailableReason, workspaceUnavailableReasons, storageLabel }: SidebarProps) {
   const statusLabel = storageLabel ?? (storageStatus === 'saved' ? '已儲存至此裝置'
     : storageStatus === 'conflict' ? '偵測到多分頁衝突'
       : storageStatus === 'read-error' ? '資料讀取失敗，已暫停寫入'
@@ -56,11 +57,12 @@ export function Sidebar({ activePage, onNavigate, open, onOpen, onClose, storage
         </div>
         <nav className="side-nav" aria-label="主要導覽">
           <p className="nav-label">工作空間</p>
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} disabled={Boolean(workspaceUnavailableReason)} className={activePage === id && !resourceMode ? 'active' : ''} aria-current={activePage === id && !resourceMode ? 'page' : undefined} aria-label={label} title={workspaceUnavailableReason ?? (collapsed ? label : undefined)} onClick={() => { onNavigate(id); onClose() }}>
+          {navItems.map(({ id, label, icon: Icon }) => {
+            const unavailableReason = workspaceUnavailableReasons?.[id] ?? workspaceUnavailableReason
+            return <button key={id} disabled={Boolean(unavailableReason)} className={activePage === id && !resourceMode ? 'active' : ''} aria-current={activePage === id && !resourceMode ? 'page' : undefined} aria-label={label} title={unavailableReason ?? (collapsed ? label : undefined)} onClick={() => { onNavigate(id); onClose() }}>
               <Icon size={19} strokeWidth={1.8} /><span className="sidebar-item-label">{label}</span>
             </button>
-          ))}
+          })}
           <p className="nav-label">資源</p>
           <button ref={subjectManagerButtonRef} className={resourceMode === 'subjects' ? 'active' : ''} aria-current={resourceMode === 'subjects' ? 'page' : undefined} aria-label={`管理科目，已選 ${subjectCount} 科`} title={collapsed ? `管理科目・已選 ${subjectCount} 科` : undefined} disabled={!canManageResources} onClick={() => { onNavigate('subjects'); onClose() }}>
             <LibraryBig size={19} strokeWidth={1.8} /><span className="sidebar-item-label">管理科目</span><span className="sidebar-count" aria-hidden="true">{subjectCount}</span>
@@ -81,7 +83,8 @@ export function Sidebar({ activePage, onNavigate, open, onOpen, onClose, storage
           </div>
         </div>
       </aside>
-      <MobileBottomNavigation items={navItems} activePage={resourceMode ? '' : activePage}
+      <MobileBottomNavigation items={navItems.map((item) => ({ ...item,
+        disabledReason: workspaceUnavailableReasons?.[item.id] }))} activePage={resourceMode ? '' : activePage}
         disabledReason={workspaceUnavailableReason} onNavigate={(id) => { onNavigate(id); onClose() }} onMore={onOpen} />
     </>
   )

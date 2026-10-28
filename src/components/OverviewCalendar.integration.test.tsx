@@ -8,6 +8,7 @@ import { migrateV3ToV4 } from '../data/migrationsV4'
 import { migrateV4ToV5 } from '../data/migrationsV5'
 import { migrateV5ToV6 } from '../data/migrationsV6'
 import { migrateV6ToV7 } from '../data/migrationsV7'
+import type { ScheduleDisplayDay, ScheduleDisplayOccurrence } from '../lib/scheduleDisplay'
 
 function fixture() {
   const data = migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))))
@@ -15,6 +16,18 @@ function fixture() {
 }
 
 const monday = new Date(2026, 8, 7)
+const resolvedOccurrence = (overrides: Partial<ScheduleDisplayOccurrence> = {}): ScheduleDisplayOccurrence => ({
+  key: 'v9-lesson', id: 'v9-lesson', kind: 'recurring', date: '2026-09-07',
+  startTime: '08:10', endTime: '09:00', teachingUnitId: 'unit-a', schoolId: 'school-a',
+  schoolName: '甲校', schoolColor: '#556677', teachingUnitName: '高中部', subjectName: 'V9 國文',
+  subjectColor: '#A66D52', className: 'V9 甲班', hasConflict: false, status: 'regular', periodLabel: '第 1 節',
+  ...overrides,
+})
+const resolvedDays = (lessons: readonly ScheduleDisplayOccurrence[] = []): readonly ScheduleDisplayDay[] =>
+  Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(2026, 8, 6 + index)
+    return { date, lessons: date.getDate() === 7 ? lessons : [] }
+  })
 
 describe('OverviewCalendar', () => {
   afterEach(cleanup)
@@ -95,5 +108,36 @@ describe('OverviewCalendar', () => {
       .getByRole('button', { name: '編輯單日課程 國文・二年 1 班' })
     expect(within(course).getByText(label).tagName).toBe('EM')
     expect(course.textContent).not.toContain('單日課程')
+  })
+})
+
+describe('OverviewCalendar resolved read-only data', () => {
+  afterEach(cleanup)
+
+  it('renders pre-resolved V9 courses and events with neutral read-only semantics', () => {
+    const source = resolvedOccurrence({ key: 'move-source', status: 'moved', movementRole: 'source' })
+    render(<OverviewCalendar mode="resolved" weekStart={monday} readStatus="ready"
+      days={resolvedDays([source])}
+      events={[{ id: 'meeting', type: 'meeting', date: '2026-09-07', startTime: '07:30',
+        endTime: '08:00', title: '教師會議' }]} />)
+    expect(screen.getByRole('group', { name: '會議 07:30 至 08:00 教師會議' })).toBeTruthy()
+    const course = screen.getByRole('button', { name: '課程 V9 國文・V9 甲班・已調離' }) as HTMLButtonElement
+    expect(course.disabled).toBe(true)
+    expect(course.textContent).toContain('已調離')
+    expect(screen.queryByRole('button', { name: /編輯.*V9/ })).toBeNull()
+  })
+
+  it.each([
+    ['unset-term', '尚未設定學期'],
+    ['invalid-scope', '目前選取的課表或授課單位無法使用'],
+    ['invalid-document', '課表資料無法通過驗證'],
+  ] as const)('distinguishes %s from a legal empty week', (readStatus, message) => {
+    const view = render(<OverviewCalendar mode="resolved" weekStart={monday} readStatus={readStatus}
+      days={resolvedDays()} events={[]} />)
+    expect(screen.getByText(message)).toBeTruthy()
+    expect(screen.queryByText('無行程')).toBeNull()
+    view.rerender(<OverviewCalendar mode="resolved" weekStart={monday} readStatus="ready"
+      days={resolvedDays()} events={[]} />)
+    expect(screen.getAllByText('無行程')).toHaveLength(7)
   })
 })

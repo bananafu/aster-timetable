@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { GraduationCap, Menu, X, type LucideIcon } from 'lucide-react'
 
-export type PreviewNavItem = { id: string; label: string; icon: LucideIcon }
+export type PreviewNavItem = { id: string; label: string; icon: LucideIcon; disabledReason?: string }
 
 /** The same mobile destinations accompany both Sidebar variants. */
 export function MobileBottomNavigation({ items, activePage, onNavigate, onMore, disabledReason }: {
@@ -12,12 +12,14 @@ export function MobileBottomNavigation({ items, activePage, onNavigate, onMore, 
   disabledReason?: string
 }) {
   return <nav className="mobile-bottom-nav" aria-label="手機底部導覽">
-    {items.map(({ id, label, icon: Icon }) => <button key={id} type="button"
-      disabled={Boolean(disabledReason)} title={disabledReason}
+    {items.map(({ id, label, icon: Icon, disabledReason: itemDisabledReason }) => {
+      const reason = itemDisabledReason ?? disabledReason
+      return <button key={id} type="button"
+      disabled={Boolean(reason)} title={reason}
       aria-label={`手機導覽：${label}`} aria-current={activePage === id ? 'page' : undefined}
       data-label={label} onClick={() => onNavigate(id)}>
       <Icon size={20} strokeWidth={1.8} aria-hidden="true" />
-    </button>)}
+    </button>})}
     <button type="button" aria-label="手機導覽：更多" data-label="更多" onClick={onMore}>
       <Menu size={20} strokeWidth={1.8} aria-hidden="true" />
     </button>
@@ -54,9 +56,10 @@ export function PreviewSidebar({ open, onOpen, onClose, activePage, items, mobil
       {controls}
       <nav className="side-nav" aria-label={label}>
         <p className="nav-label">工作空間</p>
-        {items.map(({ id, label: itemLabel, icon: Icon }) => <button key={id}
+        {items.map(({ id, label: itemLabel, icon: Icon, disabledReason }) => <button key={id}
+          disabled={Boolean(disabledReason)}
           className={activePage === id ? 'active' : ''} aria-current={activePage === id ? 'page' : undefined}
-          aria-label={itemLabel} title={collapsed ? itemLabel : undefined}
+          aria-label={itemLabel} title={disabledReason ?? (collapsed ? itemLabel : undefined)}
           onClick={() => onNavigate(id)}>
           <Icon size={19} strokeWidth={1.8} aria-hidden="true" />
           <span className="sidebar-item-label">{itemLabel}</span>
