@@ -4,7 +4,7 @@ import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { APP_DATA_V8_KEY } from '../data/storageV8'
 import { V8_BOOTSTRAP_KEY, V8_TRANSACTION_KEY } from '../data/activationV8'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, checkV9WriteEvidence, loadAppDataV9,
-  persistAppDataV9, type V9LoadStatus, type V9PersistenceReceipt } from '../data/storageV9'
+  persistAppDataV9, type V9HighRiskOperation, type V9LoadStatus, type V9PersistenceReceipt } from '../data/storageV9'
 import { isCompatibleAppDataV9 } from '../data/validators/v9'
 
 export type V9HostStatus = V9LoadStatus | 'conflict' | 'write-error' | 'lock-unavailable'
@@ -18,6 +18,8 @@ export interface V9Host {
   errorCode: string | null
   /** Returns a verified persistence receipt; rejected writes leave the caller's form draft intact. */
   update: (produce: (current: AppDataV9) => AppDataV9) => Promise<V9PersistenceReceipt>
+  updateHighRisk?: (produce: (current: AppDataV9) => AppDataV9,
+    operation: V9HighRiskOperation) => Promise<V9PersistenceReceipt>
   exportLocalJson: () => string | null
   exportStoredJson: () => string | null
   exportActivationJson: () => string | null
@@ -86,7 +88,8 @@ export function useAppDataV9(): V9Host {
     return () => window.removeEventListener('storage', handle)
   }, [revoke])
 
-  const update = useCallback(async (produce: (current: AppDataV9) => AppDataV9) => {
+  const update = useCallback(async (produce: (current: AppDataV9) => AppDataV9,
+    highRiskOperation?: V9HighRiskOperation) => {
     const current = documentRef.current
     const expectedRaw = rawRef.current
     const expectedMetadataRaw = metadataRawRef.current
@@ -100,7 +103,7 @@ export function useAppDataV9(): V9Host {
     const generation = generationRef.current
     try {
       const confirmed = await persistAppDataV9(localStorage, current, next,
-        { raw: expectedRaw, metadataRaw: expectedMetadataRaw, revision: revisionRef.current })
+        { raw: expectedRaw, metadataRaw: expectedMetadataRaw, revision: revisionRef.current }, highRiskOperation)
       if (generationRef.current !== generation) {
         revoke('external-storage-change')
         throw new Error('external-storage-change')
@@ -149,7 +152,7 @@ export function useAppDataV9(): V9Host {
   }, [verify])
 
   return { data, status, writable, pending, receipt, revision: revisionRef.current, errorCode,
-    update, adoptExternal,
+    update, updateHighRisk: (produce, operation) => update(produce, operation), adoptExternal,
     exportLocalJson: () => documentRef.current ? JSON.stringify(documentRef.current) : null,
     exportStoredJson: () => { try { return localStorage.getItem(APP_DATA_V9_KEY) } catch { return null } },
     exportActivationJson: () => { try { return localStorage.getItem(V9_ACTIVATION_KEY) } catch { return null } },

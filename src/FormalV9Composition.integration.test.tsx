@@ -2,13 +2,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FormalV9Composition } from './FormalV9Composition'
-import { DevAppEntry } from './DevAppEntry'
+import { FormalAppEntry } from './DevAppEntry'
 import { bootstrapEmptyV8 } from './data/bootstrapV8'
 import { fingerprintV7Raw } from './data/activationV8'
 import { activateTimetableSubjectsV9 } from './data/activateSubjectV9'
 import { APP_DATA_V8_KEY, createEmptyAppDataV8 } from './data/storageV8'
 import { APP_DATA_V7_KEY } from './data/storageV7'
-import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, loadAppDataV9, persistAppDataV9 } from './data/storageV9'
+import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_AUTO_BACKUP_PREFIX,
+  loadAppDataV9, persistAppDataV9 } from './data/storageV9'
 import { createBlankProjectV9, createTeacherTimetableV9, createTeacherSubjectV9,
   configureTeacherSubjectV9, createTeachingUnitV9, switchActiveProjectV9 } from './data/teacherSubjectsV9'
 import { createDefaultPeriods } from './data/academicSettingsV4'
@@ -149,6 +150,14 @@ function chooseTeacher(name: RegExp) {
   fireEvent.click(screen.getByRole('button', { name: '切換課表' }))
   fireEvent.click(screen.getByRole('menuitemradio', { name }))
 }
+function autoBackupKeys() {
+  return Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)!)
+    .filter((key) => key.startsWith(V9_AUTO_BACKUP_PREFIX))
+}
+function chooseLessonSubject(name: RegExp) {
+  fireEvent.focus(screen.getByRole('combobox', { name: '課程科目' }))
+  fireEvent.click(screen.getByRole('option', { name }))
+}
 function openAcademicSettings() {
   fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
   fireEvent.click(screen.getByRole('button', { name: /學校與學制管理/ }))
@@ -169,7 +178,7 @@ describe('formal V9 management composition', () => {
   it('mounts the real V9 tree from the formal entry and creates only a named Project', async () => {
     const rawV8 = await activate()
     const writes = vi.spyOn(Storage.prototype, 'setItem')
-    const entry = render(<DevAppEntry />)
+    const entry = render(<FormalAppEntry />)
     await waitFor(() => expect(screen.getByText('已儲存至此裝置')).toBeTruthy())
     expect(screen.getByRole('heading', { name: '建立你的第一份課表' })).toBeTruthy()
     expect(document.querySelector('.app-shell')?.classList.contains('sidebar-is-collapsed')).toBe(true)
@@ -430,7 +439,7 @@ describe('formal V9 management composition', () => {
     expect(screen.queryByText('其他專案會議')).toBeNull()
     expect(screen.queryByText('未解析事件')).toBeNull()
     expect(screen.queryByText('不顯示待辦')).toBeNull()
-    expect(screen.queryByRole('button', { name: /編輯.*甲專用/ })).toBeNull()
+    expect(screen.getAllByRole('button', { name: /編輯.*甲專用/ })).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
     expect(screen.getAllByText('甲專用')).toHaveLength(2)
@@ -454,6 +463,103 @@ describe('formal V9 management composition', () => {
     expect(screen.queryByText('乙專用')).toBeNull()
     expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(raw)
     expect(useAppDataV4).not.toHaveBeenCalled()
+  })
+
+  it('creates, edits, and high-risk deletes a fixed lesson only after V9 Host receipts', async () => {
+    const f = fixture()
+    await activate(f.data)
+    await mount()
+    const originalV7 = localStorage.getItem(APP_DATA_V7_KEY)
+    const otherTeacherSubjects = stored().subjects.filter((item) => item.timetableId === 'teacher-b')
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    expect((screen.getByRole('button', { name: /新增單日課程/ }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
+    expect(screen.queryByRole('navigation', { name: '課程編輯範圍' })).toBeNull()
+    chooseLessonSubject(/甲專用/)
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: 'V9-101' } })
+    const createRevision = revision()
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '新增固定課程' })).toBeNull())
+    expect(stored().recurringLessons).toHaveLength(1)
+    expect(stored().recurringLessons[0]).toMatchObject({ projectId: f.projectA, timetableId: 'teacher-a',
+      teachingUnitId: f.seniorA.id, room: 'V9-101' })
+    expect(revision()).toBe(createRevision + 1)
+
+    fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
+    expect(screen.queryByRole('navigation', { name: '課程編輯範圍' })).toBeNull()
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: 'V9-202' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(stored().recurringLessons[0].room).toBe('V9-202')
+    expect(autoBackupKeys()).toEqual([])
+
+    fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
+    const beforeDeleteRaw = localStorage.getItem(APP_DATA_V9_KEY)
+    fireEvent.click(screen.getByRole('button', { name: '刪除固定課程' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(stored().recurringLessons).toEqual([])
+    const backups = autoBackupKeys()
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(backups[0])!)).toMatchObject({ operation: 'delete-recurring-lesson',
+      rawDocument: beforeDeleteRaw })
+    expect(stored().subjects.filter((item) => item.timetableId === 'teacher-b')).toEqual(otherTeacherSubjects)
+    expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(originalV7)
+    expect(useAppDataV4).not.toHaveBeenCalled()
+  })
+
+  it('keeps a fixed-lesson draft open when an external V9 revision makes the editor stale', async () => {
+    const f = readableFixture()
+    await activate(f.data)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '編輯 甲專用・甲班' }))
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '保留的舊草稿' } })
+    const loaded = loadAppDataV9(localStorage)
+    const external = { ...loaded.document!, projects: loaded.document!.projects.map((item) =>
+      item.id === f.projectA ? { ...item, name: '外部更新專案' } : item) }
+    const confirmed = await persistAppDataV9(localStorage, loaded.document!, external,
+      { raw: loaded.rawDocument!, metadataRaw: loaded.rawMetadata!, revision: loaded.metadata!.documentRevision })
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('草稿已保留'))
+    expect(screen.getByRole('dialog', { name: '編輯課程' })).toBeTruthy()
+    expect((screen.getByPlaceholderText('依班級預設') as HTMLInputElement).value).toBe('保留的舊草稿')
+    expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(confirmed.raw)
+    expect(autoBackupKeys()).toEqual([])
+  })
+
+  it('does not create a backup when references block deletion and fails closed when backup persistence fails', async () => {
+    const referenced = readableFixture()
+    referenced.data.teachingProgress.push({ id: '00000000-0000-4000-8000-000000000001', projectId: referenced.projectA,
+      timetableId: 'teacher-a', teachingUnitId: referenced.seniorA.id,
+      classId: referenced.data.recurringLessons[0].classId, subjectId: referenced.data.recurringLessons[0].subjectId,
+      content: { chapter: '', unit: '', note: '引用固定課程' }, previousProgress: null,
+      createdAt: '2026-10-30T00:00:00.000Z', updatedAt: '2026-10-30T00:00:00.000Z' })
+    await activate(referenced.data)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '編輯 甲專用・甲班' }))
+    fireEvent.click(screen.getByRole('button', { name: '刪除固定課程' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(autoBackupKeys()).toEqual([])
+    expect(stored().recurringLessons.some((item) => item.id === 'read-a-senior')).toBe(true)
+
+    cleanup()
+    localStorage.clear()
+    const unreferenced = readableFixture()
+    await activate(unreferenced.data)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '編輯 甲專用・甲班' }))
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '備份失敗時保留' } })
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key.startsWith(V9_AUTO_BACKUP_PREFIX)) throw new Error('backup quota')
+      return originalSetItem.call(this, key, value)
+    })
+    fireEvent.click(screen.getByRole('button', { name: '刪除固定課程' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(screen.getByRole('dialog', { name: '編輯課程' })).toBeTruthy()
+    expect((screen.getByPlaceholderText('依班級預設') as HTMLInputElement).value).toBe('備份失敗時保留')
+    expect(stored().recurringLessons.some((item) => item.id === 'read-a-senior')).toBe(true)
+    expect(autoBackupKeys()).toEqual([])
   })
 
   it('persists custom Subjects without configuration through the single V9 Host', async () => {

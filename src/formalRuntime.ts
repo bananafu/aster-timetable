@@ -95,9 +95,11 @@ export type FormalV9HostPort = {
   revision: V9Host['revision']
   errorCode: V9Host['errorCode']
   update: V9Host['update']
+  updateHighRisk?: V9Host['updateHighRisk']
 }
 
 export function toFormalV9HostPort(host: V9Host): FormalV9HostPort {
   return { document: host.data, status: host.status, writable: host.writable, pending: host.pending,
-    receipt: host.receipt, revision: host.revision, errorCode: host.errorCode, update: host.update }
+    receipt: host.receipt, revision: host.revision, errorCode: host.errorCode,
+    update: host.update, updateHighRisk: host.updateHighRisk }
 }

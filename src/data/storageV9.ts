@@ -9,6 +9,28 @@ import { withV8StorageLock } from './v8Coordination'
 export const APP_DATA_V9_KEY = 'aster-timetable-data-v9'
 export const V9_ACTIVATION_KEY = 'aster-timetable-data-v9-activation-v1'
 export const V9_BACKUP_PREFIX = 'aster-timetable-v9-subject-backup:'
+/** Separate from immutable activation backups and the formal runtime gate's activation evidence. */
+export const V9_AUTO_BACKUP_PREFIX = 'toki-v9-auto-backup:'
+export const V9_AUTO_BACKUP_LIMIT = 10
+export type V9HighRiskOperation = 'delete-recurring-lesson' | 'permanently-update-lesson'
+export interface V9PreMutationBackup {
+  schemaVersion: 1
+  kind: 'v9-pre-mutation-backup'
+  mutationAttemptId: string
+  operation: V9HighRiskOperation
+  revision: number
+  digest: `sha256:${string}`
+  rawDocument: string
+  createdAt: string
+}
+export interface V9PreMutationBackupEvidence {
+  key: string
+  mutationAttemptId: string
+  operation: V9HighRiskOperation
+  revision: number
+  digest: `sha256:${string}`
+  rawDocument: string
+}
 export type V9ActivationStatus = 'preparing' | 'active' | 'interrupted'
 
 export interface V9ActivationRecord {
@@ -156,16 +178,99 @@ export async function checkV9WriteEvidence(storage: Pick<Storage, 'getItem'>,
 
 export type V9PersistenceErrorCode = 'invalid-current' | 'invalid-next' | 'unsafe-update'
   | 'stale-snapshot' | 'activation-conflict' | 'write-failure' | 'readback-failure'
-  | 'lock-unavailable' | 'digest-failure'
+  | 'lock-unavailable' | 'digest-failure' | 'backup-failure' | 'backup-readback-failure'
+  | 'backup-rotation-failure'
 export class V9PersistenceError extends Error {
   constructor(readonly code: V9PersistenceErrorCode) { super(code) }
 }
-export interface V9PersistenceReceipt { raw: string; revision: number; attemptId: string }
+export interface V9PersistenceReceipt { raw: string; revision: number; attemptId: string;
+  mutationAttemptId?: string
+  preMutationBackup?: V9PreMutationBackupEvidence }
+
+type AutoBackupStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>
+function isAutoBackupStorage(storage: Pick<Storage, 'getItem' | 'setItem'>): storage is AutoBackupStorage {
+  const candidate = storage as Partial<AutoBackupStorage>
+  return typeof candidate.removeItem === 'function' && typeof candidate.key === 'function'
+    && Number.isSafeInteger(candidate.length) && Number(candidate.length) >= 0
+}
+async function verifiedAutoBackup(raw: string, key: string): Promise<V9PreMutationBackup | null> {
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (!record(value) || Object.keys(value).length !== 8 || value.schemaVersion !== 1
+      || value.kind !== 'v9-pre-mutation-backup' || typeof value.mutationAttemptId !== 'string'
+      || !/^[0-9a-f-]{36}$/.test(value.mutationAttemptId)
+      || key !== `${V9_AUTO_BACKUP_PREFIX}${value.mutationAttemptId}`
+      || !['delete-recurring-lesson', 'permanently-update-lesson'].includes(String(value.operation))
+      || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0
+      || !digest(value.digest) || typeof value.rawDocument !== 'string' || !iso(value.createdAt)
+      || await fingerprintV7Raw(value.rawDocument) !== value.digest) return null
+    parseAppDataV9Raw(value.rawDocument)
+    return value as unknown as V9PreMutationBackup
+  } catch { return null }
+}
+
+/** Runs only inside the existing V9 persistence lock, after current-document evidence has passed. */
+async function writePreMutationBackup(storage: AutoBackupStorage, expected: {
+  raw: string; revision: number; digest: `sha256:${string}` }, operation: V9HighRiskOperation,
+  mutationAttemptId: string,
+): Promise<V9PreMutationBackupEvidence> {
+  const existing: Array<{ key: string; record: V9PreMutationBackup }> = []
+  for (let index = 0; index < storage.length; index++) {
+    const key = storage.key(index)
+    if (!key?.startsWith(V9_AUTO_BACKUP_PREFIX)) continue
+    let raw: string | null
+    try { raw = storage.getItem(key) }
+    catch { throw new V9PersistenceError('backup-readback-failure') }
+    const parsed = raw && await verifiedAutoBackup(raw, key)
+    if (!parsed) throw new V9PersistenceError('backup-readback-failure')
+    existing.push({ key, record: parsed })
+  }
+  const key = `${V9_AUTO_BACKUP_PREFIX}${mutationAttemptId}`
+  try { if (storage.getItem(key) !== null) throw new V9PersistenceError('backup-failure') }
+  catch { throw new V9PersistenceError('backup-failure') }
+  const backup: V9PreMutationBackup = { schemaVersion: 1, kind: 'v9-pre-mutation-backup',
+    mutationAttemptId, operation, revision: expected.revision, digest: expected.digest,
+    rawDocument: expected.raw, createdAt: new Date().toISOString() }
+  const raw = JSON.stringify(backup)
+  try { storage.setItem(key, raw) }
+  catch { throw new V9PersistenceError('backup-failure') }
+  const discardUncommitted = () => { try { storage.removeItem(key) } catch { /* fail closed below */ } }
+  let confirmed = false
+  try { confirmed = storage.getItem(key) === raw && !!(await verifiedAutoBackup(raw, key)) }
+  catch { confirmed = false }
+  if (!confirmed) {
+    discardUncommitted()
+    throw new V9PersistenceError('backup-readback-failure')
+  }
+  const oldest = [...existing]
+    .sort((left, right) => left.record.createdAt.localeCompare(right.record.createdAt)
+      || left.key.localeCompare(right.key))
+  for (const item of oldest.slice(0, Math.max(0, oldest.length + 1 - V9_AUTO_BACKUP_LIMIT))) {
+    try {
+      storage.removeItem(item.key)
+      if (storage.getItem(item.key) !== null) throw new Error('backup rotation readback failed')
+    } catch {
+      discardUncommitted()
+      throw new V9PersistenceError('backup-rotation-failure')
+    }
+  }
+  return { key, mutationAttemptId, operation, revision: backup.revision,
+    digest: backup.digest, rawDocument: backup.rawDocument }
+}
+async function hasPreMutationBackupEvidence(storage: Pick<Storage, 'getItem'>,
+  evidence: V9PreMutationBackupEvidence): Promise<boolean> {
+  const raw = storage.getItem(evidence.key)
+  const record = raw && await verifiedAutoBackup(raw, evidence.key)
+  return !!record && record.mutationAttemptId === evidence.mutationAttemptId
+    && record.operation === evidence.operation && record.revision === evidence.revision
+    && record.digest === evidence.digest && record.rawDocument === evidence.rawDocument
+}
 
 /** One confirmed write, guarded by both old-source and current-document evidence. */
 export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setItem'>,
   current: AppDataV9, next: AppDataV9,
-  expected: { raw: string; metadataRaw: string; revision: number }): Promise<V9PersistenceReceipt> {
+  expected: { raw: string; metadataRaw: string; revision: number },
+  highRiskOperation?: V9HighRiskOperation): Promise<V9PersistenceReceipt> {
   if (!isCompatibleAppDataV9(current)) throw new V9PersistenceError('invalid-current')
   if (!isCompatibleAppDataV9(next)) throw new V9PersistenceError('invalid-next')
   if (!isSafeAppDataV9Update(current, next)) throw new V9PersistenceError('unsafe-update')
@@ -177,6 +282,23 @@ export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setIt
       }
       const meta: V9ActivationRecord = JSON.parse(expected.metadataRaw)
       if (meta.documentRevision !== expected.revision) throw new V9PersistenceError('stale-snapshot')
+      let preMutationBackup: V9PreMutationBackupEvidence | undefined
+      let mutationAttemptId: string | undefined
+      if (highRiskOperation) {
+        if (!isAutoBackupStorage(storage)) throw new V9PersistenceError('backup-failure')
+        try {
+          mutationAttemptId = crypto.randomUUID()
+          preMutationBackup = await writePreMutationBackup(storage, {
+            raw: expected.raw, revision: expected.revision, digest: meta.currentDigest,
+          }, highRiskOperation, mutationAttemptId)
+        } catch (cause) {
+          if (cause instanceof V9PersistenceError) throw cause
+          throw new V9PersistenceError('backup-failure')
+        }
+        if (!(await checkV9WriteEvidence(storage, expected.raw, expected.metadataRaw))) {
+          throw new V9PersistenceError('activation-conflict')
+        }
+      }
       const raw = JSON.stringify(next)
       let digestNext: `sha256:${string}`
       try { digestNext = await fingerprintV7Raw(raw) }
@@ -189,6 +311,9 @@ export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setIt
         || storage.getItem(V9_ACTIVATION_KEY) !== expected.metadataRaw) {
         throw new V9PersistenceError('stale-snapshot')
       }
+      if (preMutationBackup && !(await hasPreMutationBackupEvidence(storage, preMutationBackup))) {
+        throw new V9PersistenceError('backup-readback-failure')
+      }
       try { storage.setItem(APP_DATA_V9_KEY, raw) }
       catch { throw new V9PersistenceError('write-failure') }
       if (storage.getItem(APP_DATA_V9_KEY) !== raw) throw new V9PersistenceError('readback-failure')
@@ -200,7 +325,8 @@ export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setIt
       if (!(await checkV9WriteEvidence(storage, raw, JSON.stringify(updated)))) {
         throw new V9PersistenceError('readback-failure')
       }
-      return { raw, revision: updated.documentRevision, attemptId: updated.attemptId }
+      return { raw, revision: updated.documentRevision, attemptId: updated.attemptId,
+        ...(preMutationBackup && mutationAttemptId && { mutationAttemptId, preMutationBackup }) }
     })
   } catch (cause) {
     if (cause instanceof V9PersistenceError) throw cause

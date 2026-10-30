@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Plus } from 'lucide-react'
+import { AddChoiceDialog } from './components/AddChoiceDialog'
 import { FormalAcademicSettingsV9 } from './components/FormalAcademicSettingsV9'
+import { LessonEditor } from './components/LessonEditor'
 import { CourseResourceManagerDialog } from './components/CourseResourceManager'
 import { FirstUseView, ProjectLifecycleView, type ProjectLifecycleViewData } from './components/ProjectLifecycleView'
 import { MultiSchoolSchedule } from './components/MultiSchoolSchedule'
@@ -9,9 +12,11 @@ import { TimetableControls, TimetableForm, TimetableInfoDialog } from './compone
 import { Topbar } from './components/Topbar'
 import { toFormalV9HostPort } from './formalRuntime'
 import type { ProjectLifecycleActions } from './formalV7ProjectTimetableActions'
-import type { FormalProjectTimetableV9Result } from './formalProjectTimetableV9'
+import type { FormalProjectTimetableV9Result, FormalProjectTimetableV9Selection } from './formalProjectTimetableV9'
 import { useFormalAcademicSettingsV9Adapter } from './hooks/useFormalAcademicSettingsV9Adapter'
 import { useFormalClassManagementV9Adapter } from './hooks/useFormalClassManagementV9Adapter'
+import { useFormalLessonManagementV9Adapter,
+  type FormalLessonEditorV9Session } from './hooks/useFormalLessonManagementV9Adapter'
 import { useFormalProjectTimetableV9Adapter } from './hooks/useFormalProjectTimetableV9Adapter'
 import { useFormalSubjectManagementV9Adapter } from './hooks/useFormalSubjectManagementV9Adapter'
 import type { StorageStatus } from './hooks/useLocalStorage'
@@ -21,6 +26,7 @@ import { resolveV9WeekResult, selectV9HeaderWeekPatternResult,
   selectV9ResolvedEventsResult, type V9ReadStatus } from './lib/scheduleV9'
 import type { TimetableDetails } from './data/timetablesV6'
 import type { Timetable } from './types'
+import type { AppDataV9 } from './types/v9'
 
 type Management = ReturnType<typeof useFormalProjectTimetableV9Adapter>
 type Actions = NonNullable<Management['actions']>
@@ -37,6 +43,28 @@ type TimetableDialog = {
 type LifecycleDialog = { initialPage: 'root' | 'blank' | 'term'; data: ProjectLifecycleViewData;
   actions: ProjectLifecycleActions; deletionMessage: (id: string) => string }
 type PendingTerm = { projectId: string; raw: string; revision: number; attemptId: string }
+type SubjectPort = ReturnType<typeof useFormalSubjectManagementV9Adapter>
+type ClassPort = ReturnType<typeof useFormalClassManagementV9Adapter>
+type AcademicPort = ReturnType<typeof useFormalAcademicSettingsV9Adapter>
+type LessonPort = ReturnType<typeof useFormalLessonManagementV9Adapter>
+type FormalWorkspaceSource = {
+  kind: 'formal'
+  management: Management
+  subjectPort: SubjectPort
+  classPort: ClassPort
+  academicPort: AcademicPort
+  lessonPort: LessonPort
+}
+type PreviewWorkspaceSource = { kind: 'preview' }
+
+export interface FormalV9WorkspaceProps {
+  data: AppDataV9
+  selection: FormalProjectTimetableV9Selection
+  onProjectChange: (projectId: string) => void
+  onTimetableChange: (timetableId: string) => void
+  source: FormalWorkspaceSource | PreviewWorkspaceSource
+  initialWeekStart?: Date
+}
 
 function lifecycleActions(actions: Actions, onDeleted?: () => void,
   onCreated?: (result: FormalProjectTimetableV9Result) => void): ProjectLifecycleActions {
@@ -66,8 +94,6 @@ export function FormalV9Composition() {
   const selection = controller?.selection ?? management.selection
   const data = host.data
   const project = data?.projects.find((item) => item.id === selection.projectId)
-  const timetables = data?.timetables.filter((item) => item.projectId === project?.id) ?? []
-  const timetable = timetables.find((item) => item.id === selection.timetableId)
   const [unitSelection, setUnitSelection] = useState<{ projectId: string | null; id: string | null }>({ projectId: null, id: null })
   const units = useMemo(() => data?.teachingUnits.filter((item) => item.projectId === project?.id) ?? [],
     [data, project?.id])
@@ -90,9 +116,33 @@ export function FormalV9Composition() {
     setUnitSelection({ projectId: next.projectId, id: next.teachingUnitId })
   }, [selection.projectId, selection.timetableId])
   const academicPort = useFormalAcademicSettingsV9Adapter(port, managementScope, selectAcademicUnit)
+  const lessonPort = useFormalLessonManagementV9Adapter(port, selection)
+  if (!data) return null
+  return <FormalV9Workspace data={data} selection={selection}
+    onProjectChange={(id) => actions?.selectProject(id)}
+    onTimetableChange={(id) => actions?.selectTimetable(id)}
+    source={{ kind: 'formal', management, subjectPort, classPort, academicPort, lessonPort }} />
+}
+
+/** Shared V9 shell. Preview callers provide only memory data and selection callbacks. */
+export function FormalV9Workspace({ data, selection, onProjectChange, onTimetableChange, source,
+  initialWeekStart }: FormalV9WorkspaceProps) {
+  const formal = source.kind === 'formal' ? source : null
+  const host = formal?.management.host ?? null
+  const controller = formal?.management.controller ?? null
+  const actions = formal?.management.actions ?? null
+  const subjectPort = formal?.subjectPort ?? null
+  const classPort = formal?.classPort ?? null
+  const academicPort = formal?.academicPort ?? null
+  const lessonPort = formal?.lessonPort ?? null
+  const project = data.projects.find((item) => item.id === selection.projectId)
+  const timetables = data.timetables.filter((item) => item.projectId === project?.id)
+  const timetable = timetables.find((item) => item.id === selection.timetableId)
+  const units = useMemo(() => data.teachingUnits.filter((item) => item.projectId === project?.id),
+    [data, project?.id])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(initialWeekStart ?? new Date()))
   const [activePage, setActivePage] = useState<WorkspacePage>('dashboard')
   const [headerUnitSelection, setHeaderUnitSelection] = useState<{
     projectId: string | null; timetableId: string | null; teachingUnitId: string | null
@@ -101,25 +151,31 @@ export function FormalV9Composition() {
   const [lifecycle, setLifecycle] = useState<LifecycleDialog | null>(null)
   const [pendingTerm, setPendingTerm] = useState<PendingTerm | null>(null)
   const [tableDialog, setTableDialog] = useState<TimetableDialog | null>(null)
+  const [addChoiceOpen, setAddChoiceOpen] = useState(false)
+  const [lessonEditor, setLessonEditor] = useState<FormalLessonEditorV9Session | null>(null)
   const [tableError, setTableError] = useState('')
   const [tableNotice, setTableNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const submittingRef = useRef(false)
   const subjectTrigger = useRef<HTMLButtonElement>(null)
   const classTrigger = useRef<HTMLButtonElement>(null)
+  const lessonResourceCreated = useRef<((id: string) => void) | null>(null)
   const modalTrigger = useRef<HTMLElement | null>(null)
   const modalReturnSelector = useRef('')
   const restoreModalFocus = useRef(false)
-  const pending = host.pending || submitting || subjectPort.pending || classPort.pending || academicPort.pending
-  const hostWritable = host.status === 'active' && host.writable
+  const pending = Boolean(host?.pending || submitting || subjectPort?.pending || classPort?.pending
+    || academicPort?.pending || lessonPort?.pending)
+  const hostWritable = Boolean(host?.status === 'active' && host.writable)
   const writable = hostWritable && !pending
-  const modalOpen = Boolean(resource || lifecycle || tableDialog)
-  const status: StorageStatus = host.status === 'conflict' ? 'conflict'
-    : host.status === 'write-error' ? 'write-error' : writable ? 'saved' : 'read-error'
+  const modalOpen = Boolean(resource || lifecycle || tableDialog || addChoiceOpen || lessonEditor)
+  const status: StorageStatus = source.kind === 'preview' ? 'conflict'
+    : host?.status === 'conflict' ? 'conflict'
+      : host?.status === 'write-error' ? 'write-error' : writable ? 'saved' : 'read-error'
   const storageLabel = pending ? '正在確認儲存至此裝置…'
     : writable ? '已儲存至此裝置'
-      : host.status === 'conflict' ? '偵測到多分頁衝突'
-        : host.status === 'active' && !host.errorCode ? '正在驗證資料寫入資格…' : '資料目前為唯讀，已暫停寫入'
+      : source.kind === 'preview' ? '資料目前為唯讀，已暫停寫入'
+        : host?.status === 'conflict' ? '偵測到多分頁衝突'
+          : host?.status === 'active' && !host.errorCode ? '正在驗證資料寫入資格…' : '資料目前為唯讀，已暫停寫入'
   const headerTeachingUnitId = activePage === 'timetable'
     && headerUnitSelection.projectId === selection.projectId
     && headerUnitSelection.timetableId === selection.timetableId
@@ -162,7 +218,7 @@ export function FormalV9Composition() {
   }
   const projectActions = actions ? lifecycleActions(actions, undefined, queueCreatedTerm) : null
   const clearFeedback = () => {
-    subjectPort.clearFeedback(); classPort.clearFeedback(); academicPort.clearFeedback(); setTableNotice('')
+    subjectPort?.clearFeedback(); classPort?.clearFeedback(); academicPort?.clearFeedback(); setTableNotice('')
   }
   const closeLifecycle = () => { restoreModalFocus.current = true; setLifecycle(null) }
   const closeTimetable = () => { restoreModalFocus.current = true; setTableDialog(null) }
@@ -175,7 +231,7 @@ export function FormalV9Composition() {
     else document.querySelector<HTMLElement>('.brand-toggle')?.focus()
   }, [lifecycle, tableDialog])
   useEffect(() => {
-    if (!pendingTerm || !data || host.revision < pendingTerm.revision || lifecycle || modalOpen || pending) return
+    if (!pendingTerm || !host || host.revision < pendingTerm.revision || lifecycle || modalOpen || pending) return
     const valid = host.revision === pendingTerm.revision
       && host.receipt?.revision === pendingTerm.revision
       && host.receipt.raw === pendingTerm.raw
@@ -190,7 +246,7 @@ export function FormalV9Composition() {
     setLifecycle({ initialPage: 'term', data: viewData,
       actions: lifecycleActions(actions, closeLifecycle),
       deletionMessage: (id) => deletionMessage(viewData, actions, id) })
-  }, [pendingTerm, data, host.revision, host.receipt, selection.projectId, lifecycle, modalOpen, pending, actions, viewData])
+  }, [pendingTerm, data, host, selection.projectId, lifecycle, modalOpen, pending, actions, viewData])
   const openLifecycle = (initialPage: 'root' | 'blank') => {
     if (!actions || !controller || !viewData || modalOpen || pending) return
     clearFeedback()
@@ -234,9 +290,24 @@ export function FormalV9Composition() {
       : tableDialog.actions.update(tableDialog.projectId, tableDialog.source!.id, draft), '已儲存課表資訊。')
   }
   const closeResource = () => {
+    const fromLessonEditor = Boolean(lessonResourceCreated.current)
+    lessonResourceCreated.current = null
     const trigger = resource === 'subjects' ? subjectTrigger : classTrigger
     setResource(null)
-    trigger.current?.focus()
+    if (!fromLessonEditor) trigger.current?.focus()
+  }
+  const canAddLesson = Boolean(source.kind === 'formal' && writable && project?.term && timetable
+    && lessonPort?.open(null))
+  const openAddChoice = () => {
+    if (!canAddLesson || modalOpen || pending) return
+    setAddChoiceOpen(true)
+  }
+  const openLesson = (lessonId: string | null) => {
+    if (!lessonPort || !writable || pending) return
+    const session = lessonPort.open(lessonId)
+    if (!session) return
+    setAddChoiceOpen(false)
+    setLessonEditor(session)
   }
 
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
@@ -251,44 +322,51 @@ export function FormalV9Composition() {
       if (page === 'settings') openLifecycle('root')
     }} open={sidebarOpen} onOpen={() => setSidebarOpen(true)} onClose={() => setSidebarOpen(false)}
       collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} storageStatus={status} storageLabel={storageLabel}
-      projects={data?.projects ?? []} activeProjectId={selection.projectId} projectSelectionDisabled={modalOpen || pending}
-      onProjectChange={(id) => { if (modalOpen || pending) return; clearFeedback(); actions?.selectProject(id) }}
+      projects={data.projects} activeProjectId={selection.projectId} projectSelectionDisabled={modalOpen || pending}
+      onProjectChange={(id) => { if (modalOpen || pending) return; clearFeedback(); onProjectChange(id) }}
       workspaceUnavailableReasons={V9_WORKSPACE_UNAVAILABLE}
       canManageResources={Boolean(project) && writable} resourceMode={resource}
-      subjectCount={subjectPort.view?.configuredSubjects.length ?? 0} classCount={classPort.classes.length}
+      subjectCount={subjectPort?.view?.configuredSubjects.length ?? 0} classCount={classPort?.classes.length ?? 0}
       subjectManagerButtonRef={subjectTrigger} classManagerButtonRef={classTrigger} />
     <main className={`main-area ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
       <Topbar weekStart={weekStart} onWeekChange={(offset) => setWeekStart(addDays(weekStart, offset))}
-        onToday={() => setWeekStart(startOfWeek(new Date()))} onMenu={() => setSidebarOpen(true)} readOnly={!hostWritable}
-        addActions={[{ id: 'project', label: '新增專案', onSelect: () => openLifecycle('blank'), disabled: modalOpen || pending },
+        onToday={() => setWeekStart(startOfWeek(initialWeekStart ?? new Date()))}
+        onMenu={() => setSidebarOpen(true)} readOnly={!hostWritable}
+        addActions={source.kind === 'preview' ? [] : [{ id: 'project', label: '新增專案', onSelect: () => openLifecycle('blank'), disabled: modalOpen || pending },
           { id: 'timetable', label: '新增空白課表', onSelect: () => openTimetable('create'),
             disabled: !project || modalOpen || pending, reason: !project ? '請先建立課表專案。' : undefined }]} />
-      {viewData && projectActions && (!project
+      {viewData && (!project && projectActions
         ? <FirstUseView data={viewData} actions={projectActions} pending={pending} readOnly={!writable} protectDrafts />
-        : <div className="content"><section className="page-heading">
+        : project ? <div className="content"><section className="page-heading">
           <div><h1>{activePage === 'dashboard' ? '總覽' : '課表'}</h1></div><div className="page-heading-side">
             {timetables.length > 0 && <TimetableControls timetables={timetables} selected={timetable}
               canManage={hostWritable} selectionDisabled={modalOpen || pending} notice={tableNotice}
-              onSelect={(id) => { if (modalOpen || pending) return; clearFeedback(); actions?.selectTimetable(id) }}
+              onSelect={(id) => { if (modalOpen || pending) return; clearFeedback(); onTimetableChange(id) }}
               onEdit={() => openTimetable('edit')} />}
             {activePage === 'timetable' && headerResult.status === 'ready' && headerResult.value
               && <div className="week-pill"><strong>{headerResult.value} 週</strong></div>}
           </div>
         </section>
         {activePage === 'dashboard' && <section className="panel overview-panel">
-          <div className="panel-heading"><div><h2>本週行事曆</h2><p>課程、會議與活動依實際日期和時間排列，包含週末與已取消課程。</p></div></div>
+          <div className="panel-heading"><div><h2>本週行事曆</h2><p>課程、會議與活動依實際日期和時間排列，包含週末與已取消課程。</p></div>
+            {source.kind === 'formal' && timetable && <button className="primary-button" data-course-add
+              onClick={openAddChoice} disabled={!canAddLesson}><Plus size={16} />新增課程</button>}</div>
           <OverviewCalendar mode="resolved" weekStart={weekStart} readStatus={calendarReadStatus}
-            days={displayDays} events={displayEvents} />
+            days={displayDays} events={displayEvents}
+            onLessonClick={source.kind === 'formal' && writable ? (id) => openLesson(id) : undefined} />
         </section>}
         {activePage === 'timetable' && <section className="panel timetable-panel">
-          <div className="panel-heading"><div><h2>跨校週課表</h2><p>依各校學制的實際節次與輪週設定逐日整合。</p></div></div>
+          <div className="panel-heading"><div><h2>跨校週課表</h2><p>依各校學制的實際節次與輪週設定逐日整合。</p></div>
+            {source.kind === 'formal' && timetable && <button className="primary-button" data-course-add
+              onClick={openAddChoice} disabled={!canAddLesson}><Plus size={16} />新增課程</button>}</div>
           <MultiSchoolSchedule key={timetable?.id ?? project.id} mode="resolved" weekDays={weekDays}
             readStatus={weekResult.status} days={displayDays} schools={displaySchools}
-            teachingUnits={displayUnits} onHeaderTeachingUnitChange={selectHeaderUnit} />
+            teachingUnits={displayUnits} onHeaderTeachingUnitChange={selectHeaderUnit}
+            onLessonClick={source.kind === 'formal' && writable ? (id) => openLesson(id) : undefined} />
         </section>}
-        </div>)}
+        </div> : null)}
     </main>
-    {lifecycle && <ProjectLifecycleView {...lifecycle} pending={pending} readOnly={!writable} protectDrafts
+    {lifecycle && academicPort && <ProjectLifecycleView {...lifecycle} pending={pending} readOnly={!writable} protectDrafts
       onClose={closeLifecycle} renderAcademicSettings={(page) =>
         <FormalAcademicSettingsV9 port={academicPort} page={page} />} />}
     {tableDialog?.mode === 'create' && <TimetableForm error={tableError} onSubmit={submitTimetable}
@@ -300,9 +378,24 @@ export function FormalV9Composition() {
         tableDialog.source!.id, input), '已複製並儲存課表設定。') }}
       onDelete={() => { void writeTimetable(() => tableDialog.actions.delete(tableDialog.projectId,
         tableDialog.source!.id), '已刪除並儲存課表。') }} onClose={closeTimetable} />}
-    {resource === 'subjects' && <CourseResourceManagerDialog mode="subjects" subjectPort={subjectPort}
-      onClose={closeResource} />}
-    {resource === 'classes' && <CourseResourceManagerDialog mode="classes" classPort={classPort}
-      onClose={closeResource} />}
+    {addChoiceOpen && <AddChoiceDialog initialFocus={null} canAddLesson={canAddLesson}
+      addLessonReason="請先完成目前專案、教師課表與課程基本資料。" canAddOneOff={false}
+      addOneOffReason="此功能尚未接入正式 V9 資料路徑。" onAddLesson={() => openLesson(null)}
+      onAddOneOff={() => undefined} onClose={() => setAddChoiceOpen(false)} />}
+    {lessonEditor && <LessonEditor key={`${lessonEditor.lessonId ?? 'new'}:${selection.projectId}:${selection.timetableId}`}
+      data={lessonEditor.data} fixedLessonPort={lessonEditor.port} timetableId={selection.timetableId ?? undefined}
+      lessonId={lessonEditor.lessonId} storageStatus={writable ? 'saved' : 'conflict'}
+      onManageResource={(mode, context, onCreated) => {
+        if (!subjectPort || !classPort || pending) return
+        lessonResourceCreated.current = onCreated
+        if (mode === 'subjects') subjectPort.selectTeachingUnit(context.teachingUnitId)
+        else classPort.selectTeachingUnit(context.teachingUnitId)
+        setResource(mode)
+      }} onClose={() => { if (!lessonPort?.pending && !resource) setLessonEditor(null) }}
+      onSaved={() => setLessonEditor(null)} />}
+    {resource === 'subjects' && subjectPort && <CourseResourceManagerDialog mode="subjects" subjectPort={subjectPort}
+      onCreated={(_, id) => lessonResourceCreated.current?.(id)} onClose={closeResource} />}
+    {resource === 'classes' && classPort && <CourseResourceManagerDialog mode="classes" classPort={classPort}
+      onCreated={(_, id) => lessonResourceCreated.current?.(id)} onClose={closeResource} />}
   </div>
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { BookOpenCheck, CalendarClock, CalendarDays, CalendarPlus, Clock3, MapPin, Plus } from 'lucide-react'
+import { CalendarClock, CalendarDays, Clock3, MapPin, Plus } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { Modal } from './components/Modal'
@@ -7,6 +7,7 @@ import { MultiSchoolSchedule } from './components/MultiSchoolSchedule'
 import { OverviewCalendar } from './components/OverviewCalendar'
 import { FirstUse, ProjectLifecycleModal } from './components/ProjectLifecycle'
 import { LessonEditor } from './components/LessonEditor'
+import { AddChoiceDialog, type AddChoiceFocus } from './components/AddChoiceDialog'
 import { OneOffLessonEditor } from './components/OneOffLessonEditor'
 import { TimetableControls, TimetableInfoDialog, TimetableForm, type TimetableCopyDetails } from './components/TimetableControls'
 import { CourseResourceManagerDialog } from './components/CourseResourceManager'
@@ -46,7 +47,6 @@ type TimetableDialog = {
 type ResourceMode = 'classes' | 'subjects'
 type ResourceDialogSource = 'sidebar' | 'lesson-editor' | 'one-off-editor'
 type ResourceDialogState = { mode: ResourceMode; source: ResourceDialogSource }
-type AddChoiceFocus = 'lesson' | 'one-off' | null
 type OneOffEditorState = { projectId: string; timetableId: string; date?: string; id?: string; source: 'add-choice' | 'schedule' }
 
 function timetableCopySourceFingerprint(data: AppDataV4, projectId: string, timetableId: string): string | null {
@@ -650,38 +650,6 @@ export default function App() {
       {resourceDialog && <CourseResourceManagerDialog key={`${resourceDialog.source}:${resourceDialog.mode}`} data={appData} setData={setAppData} mode={resourceDialog.mode} storageStatus={storageStatus} storagePersistence={storagePersistence} storageControls={storageControls} session={resourceSession} readOnly={Boolean(historicalProject)} onOpenSettings={openSettingsFromResourceManager} onCreated={(mode, id) => { if (mode === resourceDialog.mode) resourceCreatedRef.current?.(id) }} onClose={closeResourceManager} />}
     </div>
   )
-}
-
-function AddChoiceDialog({ initialFocus, canAddLesson, addLessonReason, canAddOneOff, addOneOffReason, onAddLesson, onAddOneOff, onClose }: {
-  initialFocus: AddChoiceFocus
-  canAddLesson: boolean
-  addLessonReason: string
-  canAddOneOff: boolean
-  addOneOffReason: string
-  onAddLesson: () => void
-  onAddOneOff: () => void
-  onClose: () => void
-}) {
-  const lessonButton = useRef<HTMLButtonElement>(null)
-  const oneOffButton = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    const requested = initialFocus === 'lesson' ? lessonButton.current
-      : initialFocus === 'one-off' ? oneOffButton.current : null
-    const fallback = canAddLesson ? lessonButton.current : canAddOneOff ? oneOffButton.current
-      : lessonButton.current?.closest('[role="dialog"]')?.querySelector<HTMLButtonElement>('header button') ?? null
-    ;(requested && !requested.disabled ? requested : fallback)?.focus()
-  }, [canAddLesson, canAddOneOff, initialFocus])
-  return <Modal title="新增課程" subtitle="選擇要加入目前教師課表的課程。" onClose={onClose}>
-    <div className="add-choice-dialog">
-      <nav className="settings-menu" aria-label="新增項目">
-        <section className="add-choice-group" aria-labelledby="add-course-group">
-          <p id="add-course-group" className="add-choice-group-title">課程</p>
-          <button ref={lessonButton} type="button" className="settings-menu-item" onClick={onAddLesson} disabled={!canAddLesson}><BookOpenCheck aria-hidden="true" /><span><strong>新增固定課程</strong><small>{canAddLesson ? '使用目前的專案與教師課表。' : addLessonReason}</small></span></button>
-          <button ref={oneOffButton} type="button" className="settings-menu-item" onClick={onAddOneOff} disabled={!canAddOneOff}><CalendarPlus aria-hidden="true" /><span><strong>新增單日課程</strong><small>{canAddOneOff ? '只在指定日期加入目前教師課表。' : addOneOffReason}</small></span></button>
-        </section>
-      </nav>
-    </div>
-  </Modal>
 }
 
 function StorageSafetyNotice({ status, controls }: { status: StorageStatus; controls: StorageControls }) {

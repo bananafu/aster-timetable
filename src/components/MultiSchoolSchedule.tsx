@@ -37,6 +37,7 @@ interface ResolvedProps {
   schools: readonly ScheduleDisplaySchool[]
   teachingUnits: readonly ScheduleDisplayTeachingUnit[]
   onHeaderTeachingUnitChange?: (teachingUnitId: string | null) => void
+  onLessonClick?: (lessonId: string, date: string, overrideId?: string) => void
 }
 
 type Props = LegacyProps | ResolvedProps
@@ -105,7 +106,7 @@ export function MultiSchoolSchedule(props: Props) {
   const weekDays = props.weekDays
   const requestedProjectId = resolved ? undefined : props.projectId
   const timetableId = resolved ? undefined : props.timetableId
-  const onLessonClick = resolved ? undefined : props.onLessonClick
+  const onLessonClick = props.onLessonClick
   const onLessonDrop = resolved ? undefined : props.onLessonDrop
   const onOneOffClick = resolved ? undefined : props.onOneOffClick
   const onHeaderTeachingUnitChange = resolved ? props.onHeaderTeachingUnitChange : undefined
@@ -203,7 +204,7 @@ export function MultiSchoolSchedule(props: Props) {
             {lessons.length === 0
               ? <p className="cross-school-empty">無有效課程</p>
               : lessons.map(({ lesson, legacy }, index) => <LessonCard key={lesson.key} lesson={lesson}
-                previous={lessons[index - 1]?.lesson} readOnly={resolved}
+                previous={lessons[index - 1]?.lesson} readOnly={resolved && !onLessonClick}
                 onClick={lesson.kind === 'one-off' ? onOneOffClick ? () => onOneOffClick(lesson.id) : undefined
                   : onLessonClick ? () => onLessonClick(lesson.id, lesson.date, lesson.overrideId) : undefined}
                 draggable={!resolved && lesson.kind === 'recurring' && Boolean(onLessonDrop)}
