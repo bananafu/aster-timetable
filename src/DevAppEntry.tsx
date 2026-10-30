@@ -3,12 +3,22 @@ import App from './App'
 import { FormalV9Composition } from './FormalV9Composition'
 import { hasActiveFormalV9Structure, inspectFormalRuntime, isV9RuntimeStorageKey,
   type FormalRuntimeDecision } from './formalRuntime'
-import { V8_PREVIEW_HASH, isV8PreviewRoute } from './previewRoute'
 
-const Preview = import.meta.env.DEV
-  ? lazy(() => import('./V8PreviewApp').then((module) => ({ default: module.V8PreviewApp }))) : null
+const LocalPreview = import.meta.env.DEV
+  ? lazy(() => import('./V9LocalPreview').then((module) => ({ default: module.V9LocalPreview }))) : null
 
-function FormalAppEntry() {
+const isLocalV9PreviewHost = (development: boolean, hostname: string) =>
+  development && (hostname === 'localhost' || hostname === '127.0.0.1')
+
+// Exported only so the DEV/production environment matrix can be verified without mutating window.location.
+// eslint-disable-next-line react-refresh/only-export-components
+export function selectDevRuntimeEntry(development: boolean, hostname: string, search: string): 'formal' | 'preview' {
+  if (!isLocalV9PreviewHost(development, hostname)) return 'formal'
+  const runtimes = new URLSearchParams(search).getAll('runtime')
+  return runtimes.length === 1 && runtimes[0] === 'formal' ? 'formal' : 'preview'
+}
+
+export function FormalAppEntry() {
   const [runtime, setRuntime] = useState<FormalRuntimeDecision | null>(null)
   const runtimeRef = useRef(runtime)
   runtimeRef.current = runtime
@@ -53,13 +63,9 @@ function FormalAppEntry() {
 
 /** The production entry never offers or renders the development-only runtime. */
 export function DevAppEntry() {
-  const [preview, setPreview] = useState(() => isV8PreviewRoute(import.meta.env.DEV, window.location.hash))
-  useEffect(() => {
-    const route = () => setPreview(isV8PreviewRoute(import.meta.env.DEV, window.location.hash))
-    window.addEventListener('hashchange', route)
-    return () => window.removeEventListener('hashchange', route)
-  }, [])
-  if (!import.meta.env.DEV) return <FormalAppEntry />
-  return preview && Preview ? <Suspense fallback={<div role="status">正在載入 V8 開發預覽…</div>}><Preview onReturn={() => { window.location.hash = '' }} /></Suspense>
-    : <><FormalAppEntry /><a className="v8-preview-link" href={V8_PREVIEW_HASH}>開啟 V8 開發預覽</a></>
+  const runtime = selectDevRuntimeEntry(import.meta.env.DEV, window.location.hostname, window.location.search)
+  if (runtime === 'formal' || !LocalPreview) {
+    return <FormalAppEntry />
+  }
+  return <Suspense fallback={null}><LocalPreview /></Suspense>
 }

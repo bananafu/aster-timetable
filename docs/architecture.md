@@ -22,7 +22,7 @@ V8 預覽導覽直接掛載既有 `TimetableManagerV8` 與 `V8SubjectClassManage
 
 ## Phase 4D R2-D1 — V8 開發預覽 App Shell
 
-`DevAppEntry` 在開發模式預設渲染原 V7 `App`，只有使用者明確開啟 `#/v8-preview` 才卸載 V7 App 並渲染 `V8PreviewApp`；production 不提供此入口，也不因 hash 掛載 V8。路由不使用 localStorage。V8 預覽使用 `loadAppDataV8Only` 唯讀檢視，再由明確確認呼叫既有 Web Locks `bootstrapEmptyV8`；不得清除或遷移舊 key。既有 V8 只由 `useAppDataV8({ loadMode: 'v8-only' })` 載入，activation gate、validator、衝突與 receipt 均沿用 Host。開發預覽接入 `ProjectLifecycleV8`，其餘頁面明確標示開發中。正式 V7 Runtime、V8 bootstrap／activation 協定及正式週課表未改。V7 在全新 origin 首次掛載會持久化 V7 key；要驗收空白 V8，須在乾淨開發 origin 首次載入時直接進入預覽 hash，而不是先打開 V7 再切換。瀏覽器真實多分頁與完整備份／匯入恢復仍待驗收。產品對等表見 `docs/v7-v8-feature-parity.md`。
+`DevAppEntry` 僅在 Vite DEV 且 hostname 為 `localhost`／`127.0.0.1` 時 lazy-load `V9LocalPreview`；舊 `#/v8-preview` hash 不再有專屬路由，在本機同樣顯示 V9 Local Preview。Preview 使用固定且通過 V9 validator 的記憶體文件與本地 selection state，透過 `FormalV9Workspace` 重用正式 Dashboard、Calendar、Schedule、Sidebar 與 Navigation；不掛載 `useAppDataV9`、不取得 Storage、不執行 migration／activation／backup／匯入匯出，且沒有 mutation port。正式 `FormalV9Composition` 仍固定掛載原 V9 adapter／Host；非本機 hostname 與 production 仍由未修改的 Formal Runtime Gate fail-closed 決定 V7／V9。
 
 ## Phase 4D R2-C2c-2 — V8 單次異動與額外課程（獨立元件）
 

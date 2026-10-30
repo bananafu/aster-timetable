@@ -1,5 +1,9 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R2-2B Dev-1 — V9 Local Preview
+
+Windows／Mac 的 Vite DEV 在 `localhost`／`127.0.0.1` 預設使用固定、唯讀、純記憶體 V9 fixture 顯示既有 Dashboard 與五日／七日課表；共用正式 V9 Workspace，不建立第二套 UI。舊 `#/v8-preview` 入口與右下角按鈕已淘汰；V8 schema、validator、migration、activation、backup 及仍用於資料安全驗證的整合測試保留。Production、非本機開發 hostname 與 Formal Runtime Gate 不變。
+
 ## Phase 4D R2-D2 — 教師獨立科目庫（開發預覽）
 
 已建立內部 schema 9 的新 storage key、V8 raw＋activation raw 備份／SHA-256／讀回、明確決策轉換、版本化啟用、Host 寫入 gate、receipt 與中斷續接。V8 Preview 的教學資源頁提供轉換入口，啟用後改掛教師專屬科目庫畫面；可建立教師 A／B 各自的同名科目並跨高中／國中部配置。D2 管理整合再接入學校／任教單位／節次、班級、Project 複製／封存／重新啟用及受依賴保護的空白 Project 刪除；日常科目與班級編輯使用管理彈窗，進度工作區仍未實作。原 V7／V8 key 不覆寫。這仍是開發預覽，非正式 Runtime 切換；同版本多分頁已完成隔離瀏覽器驗收，已載入且不遵守新版協定的舊分頁仍無法由此證明安全，其舊 key 寫入會使新 Host 停寫。來源 Project 尚無教師課表時，管理 adapter 只複製學校、任教單位與班級設定，不虛構教師或課程；固定課程、事件、進度及正式週課表仍未接線，不得宣稱整體 V8 功能對等。

@@ -18,7 +18,7 @@ B1 原階段僅建立 V9 型別、完整文件 validator 與 V8 唯讀遷移盤�
 
 ## Phase 4D R2-D1 — V8 開發預覽
 
-開發伺服器預設顯示 V7；只有明確進入 `#/v8-preview` 才使用 V8 Host。production 不顯示開發入口。空白 V8 必須由使用者確認後經既有 Web Locks bootstrap 建立；V7 或其他舊資料存在時阻擋，不清除、不自動遷移。既有 V8 只按 activation gate 決定可寫或唯讀，失敗時保留 raw 救援匯出。從 V8-only origin 返回 V7 前須警告：V7 可能建立 V7 key，之後 V8 guard 將阻擋寫入；不提供繞過或自動清理。D1 只將 V8 Project 管理接入預覽，其餘頁面標示開發中；正式 App 仍為 V7。功能對等追蹤見 `docs/v7-v8-feature-parity.md`。
+此段為 D1 歷史契約；`#/v8-preview` 開發入口已由 V9 Local Preview 取代。Vite DEV 僅在 `localhost`／`127.0.0.1` 預設顯示共用正式 V9 展示層與固定唯讀記憶體 fixture，不掛載 V7、V8 或 V9 正式 Host，也不讀寫任何正式 storage、執行 migration 或 activation。非本機 hostname 與 production 仍交由 Formal Runtime Gate 決定 V7／V9；既有 V7／V8／V9 schema、migration、activation、backup 與相容性契約均保留。
 
 V8 教師課表的正式政策為「複製僅設定，不複製固定課、OneOff、Change、Event、Progress」以及「存在關聯資料即阻擋刪除，不級聯」。下方舊版完整課表複製條款僅描述 V7，不得作為 V8 實作依據。
 
