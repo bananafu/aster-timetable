@@ -159,7 +159,8 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
   const submittingRef = useRef(false)
   const subjectTrigger = useRef<HTMLButtonElement>(null)
   const classTrigger = useRef<HTMLButtonElement>(null)
-  const lessonResourceCreated = useRef<((id: string) => void) | null>(null)
+  const lessonResourceCreated = useRef<{ mode: 'classes' | 'subjects'; projectId: string;
+    timetableId: string; teachingUnitId: string; select: (id: string) => void } | null>(null)
   const modalTrigger = useRef<HTMLElement | null>(null)
   const modalReturnSelector = useRef('')
   const restoreModalFocus = useRef(false)
@@ -387,15 +388,24 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
       lessonId={lessonEditor.lessonId} storageStatus={writable ? 'saved' : 'conflict'}
       onManageResource={(mode, context, onCreated) => {
         if (!subjectPort || !classPort || pending) return
-        lessonResourceCreated.current = onCreated
+        lessonResourceCreated.current = { mode, projectId: context.projectId,
+          timetableId: selection.timetableId!, teachingUnitId: context.teachingUnitId, select: onCreated }
         if (mode === 'subjects') subjectPort.selectTeachingUnit(context.teachingUnitId)
         else classPort.selectTeachingUnit(context.teachingUnitId)
         setResource(mode)
       }} onClose={() => { if (!lessonPort?.pending && !resource) setLessonEditor(null) }}
       onSaved={() => setLessonEditor(null)} />}
     {resource === 'subjects' && subjectPort && <CourseResourceManagerDialog mode="subjects" subjectPort={subjectPort}
-      onCreated={(_, id) => lessonResourceCreated.current?.(id)} onClose={closeResource} />}
+      onCreated={(mode, id, scope) => {
+        const pending = lessonResourceCreated.current
+        if (pending && scope && pending.mode === mode && pending.projectId === scope.projectId
+          && pending.timetableId === scope.timetableId && pending.teachingUnitId === scope.teachingUnitId) pending.select(id)
+      }} onClose={closeResource} />}
     {resource === 'classes' && classPort && <CourseResourceManagerDialog mode="classes" classPort={classPort}
-      onCreated={(_, id) => lessonResourceCreated.current?.(id)} onClose={closeResource} />}
+      onCreated={(mode, id, scope) => {
+        const pending = lessonResourceCreated.current
+        if (pending && scope && pending.mode === mode && pending.projectId === scope.projectId
+          && pending.teachingUnitId === scope.teachingUnitId) pending.select(id)
+      }} onClose={closeResource} />}
   </div>
 }

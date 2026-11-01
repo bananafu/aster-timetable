@@ -12,6 +12,8 @@ import { SCHOOL_LEVELS, type AppDataV4, type ProjectClass, type SchoolLevel, typ
 import type { StorageControls, StoragePersistence, StorageStatus } from '../hooks/useLocalStorage'
 import type { FormalClassManagementV9UiPort } from '../hooks/useFormalClassManagementV9Adapter'
 import type { FormalSubjectManagementV9UiPort } from '../hooks/useFormalSubjectManagementV9Adapter'
+import type { FormalClassManagementV9Result } from '../formalClassManagementV9'
+import type { FormalSubjectManagementV9Result } from '../formalSubjectManagementV9'
 import { useResourceManagementSession, type ResourceManagementSession } from '../hooks/useResourceManagementSession'
 import { Modal } from './Modal'
 
@@ -84,7 +86,8 @@ interface CommonProps {
   readOnly?: boolean
   onOpenSettings?: () => void
   onClose?: () => void
-  onCreated?: (mode: 'classes' | 'subjects', id: string) => void
+  onCreated?: (mode: 'classes' | 'subjects', id: string,
+    scope?: { projectId: string | null; timetableId?: string | null; teachingUnitId: string | null }) => void
 }
 
 interface V7Props extends CommonProps {
@@ -607,12 +610,12 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
     const currentKeys = Object.keys(ui.drafts).filter((key) => key.includes(`:${scopeKey}`))
     ui.requestTransition(() => port.selectTeachingUnit(nextUnitId || null), currentKeys)
   }
-  const finish = async (operation: () => Promise<{ subjectId?: string }>, draftKey?: string,
-    created = false) => {
+  const finish = async (operation: () => Promise<FormalSubjectManagementV9Result>, draftKey?: string,
+    selectable = false) => {
     try {
       const result = await operation()
       if (draftKey) ui.clear(draftKey)
-      if (created && result.subjectId) onCreated?.('subjects', result.subjectId)
+      if (selectable && result.subjectId) onCreated?.('subjects', result.subjectId, result.selection)
       return result
     } catch {
       return null
@@ -623,7 +626,7 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
     if (!editable || !view) return
     setSubjectActionId('subject-create')
     await finish(() => port.actions.createCustom({ ...newSubject,
-      applicableSchoolLevels: [...newSubject.applicableSchoolLevels] }), subjectCreateKey, true)
+      applicableSchoolLevels: [...newSubject.applicableSchoolLevels] }), subjectCreateKey)
   }
   const addCatalog = async (catalogKey: string) => {
     setSubjectActionId(`catalog:${catalogKey}`)
@@ -636,7 +639,7 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
     if (confirmLevelExtension && !window.confirm(
       `將既有科目「${item.entry.name}」擴充為適用${levelLabel[unit.schoolLevel]}，並配置到目前任教單位？\n科目 ID、名稱、簡稱與顏色都會保留。`)) return
     setSubjectActionId(`catalog:${catalogKey}`)
-    await finish(() => port.actions.configure(subjectId, confirmLevelExtension))
+    await finish(() => port.actions.configure(subjectId, confirmLevelExtension), undefined, true)
   }
   const unconfigure = async (subject: Subject) => {
     if (!unit || !configuredIds.has(subject.id)) return
@@ -966,12 +969,12 @@ function V9ClassManagerContent({ classPort: port, readOnly = false, onOpenSettin
     const keys = Object.keys(ui.drafts).filter((key) => key.includes(`:${scopeKey}`))
     ui.requestTransition(() => port.selectTeachingUnit(nextUnitId || null), keys)
   }
-  const finish = async (operation: () => Promise<{ classId?: string }>, draftKey?: string,
+  const finish = async (operation: () => Promise<FormalClassManagementV9Result>, draftKey?: string,
     created = false) => {
     try {
       const result = await operation()
       if (draftKey) ui.clear(draftKey)
-      if (created && result.classId) onCreated?.('classes', result.classId)
+      if (created && result.classId) onCreated?.('classes', result.classId, result.selection)
       return result
     } catch {
       return null

@@ -6,6 +6,7 @@ import { FormalAppEntry } from './DevAppEntry'
 import { bootstrapEmptyV8 } from './data/bootstrapV8'
 import { fingerprintV7Raw } from './data/activationV8'
 import { activateTimetableSubjectsV9 } from './data/activateSubjectV9'
+import { initializeFreshV9 } from './data/initializeFreshV9'
 import { APP_DATA_V8_KEY, createEmptyAppDataV8 } from './data/storageV8'
 import { APP_DATA_V7_KEY } from './data/storageV7'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_AUTO_BACKUP_PREFIX,
@@ -47,6 +48,15 @@ async function activate(document = empty()) {
   if (document.projects.length) await persistAppDataV9(localStorage, empty(), document,
     { raw: activation.rawDocument, metadataRaw: localStorage.getItem(V9_ACTIVATION_KEY)!, revision: 0 })
   return rawV8
+}
+
+async function initializeFresh(document: AppDataV9) {
+  const initialized = await initializeFreshV9(localStorage, { attemptId: 'composition-fresh',
+    createdAt: new Date().toISOString() })
+  if (!initialized.ok) throw new Error(initialized.code)
+  const loaded = loadAppDataV9(localStorage)
+  await persistAppDataV9(localStorage, loaded.document!, document,
+    { raw: loaded.rawDocument!, metadataRaw: loaded.rawMetadata!, revision: loaded.metadata!.documentRevision })
 }
 
 function fixture() {
@@ -505,6 +515,105 @@ describe('formal V9 management composition', () => {
       rawDocument: beforeDeleteRaw })
     expect(stored().subjects.filter((item) => item.timetableId === 'teacher-b')).toEqual(otherTeacherSubjects)
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(originalV7)
+    expect(useAppDataV4).not.toHaveBeenCalled()
+  })
+
+  it('keeps a Fresh V9 lesson draft while confirmed Subject and Class resources become live', async () => {
+    const f = fixture()
+    const retainedSubjects = f.data.subjects.filter((item) => item.timetableId !== 'teacher-a')
+    const retainedSubjectIds = new Set(retainedSubjects.map((item) => item.id))
+    let data = {
+      ...f.data,
+      subjects: retainedSubjects,
+      teachingUnitSubjects: f.data.teachingUnitSubjects.filter((item) => retainedSubjectIds.has(item.subjectId)),
+      classes: f.data.classes.filter((item) => item.projectId !== f.projectA
+        || item.teachingUnitId !== f.seniorA.id),
+    }
+    data = createTeacherSubjectV9(data, f.projectA, 'teacher-a', {
+      name: '國中限定', shortName: '國限', color: '#A66D52', applicableSchoolLevels: ['junior-high'],
+    }, 'junior-only')
+    data = configureTeacherSubjectV9(data, f.projectA, 'teacher-a', 'junior-a',
+      'junior-only', 'junior-only-relation')
+    data = createTeacherSubjectV9(data, f.projectA, 'teacher-a', {
+      name: '數學', shortName: '數', color: '#647C88', applicableSchoolLevels: ['senior-high'],
+    }, 'unconfigured-math')
+    await initializeFresh(data)
+    const view = await mount()
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
+    fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('課程節次'), { target: { value: String(f.seniorA.periods[1].id) } })
+    fireEvent.change(screen.getByLabelText('課程輪週'), { target: { value: 'B' } })
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '保留草稿教室' } })
+
+    fireEvent.focus(screen.getByRole('combobox', { name: '課程科目' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    let manager = screen.getByRole('dialog', { name: '管理科目' })
+    fireEvent.click(within(manager).getByRole('button', { name: '加入預設科目 數學' }))
+    await waitFor(() => expect(within(manager).getByText('已儲存：已配置科目到目前任教單位。')).toBeTruthy())
+    fireEvent.click(within(manager).getByRole('button', { name: '關閉對話框' }))
+
+    await waitFor(() => expect((screen.getByRole('combobox', { name: '課程科目' }) as HTMLInputElement).value)
+      .toBe('數學'))
+    expect(screen.queryByText('目前學制尚未建立科目')).toBeNull()
+    expect((screen.getByLabelText('課程星期') as HTMLSelectElement).value).toBe('3')
+    expect((screen.getByLabelText('課程節次') as HTMLSelectElement).value).toBe(String(f.seniorA.periods[1].id))
+    expect((screen.getByLabelText('課程輪週') as HTMLSelectElement).value).toBe('B')
+    expect((screen.getByPlaceholderText('依班級預設') as HTMLInputElement).value).toBe('保留草稿教室')
+
+    fireEvent.focus(screen.getByRole('combobox', { name: '課程科目' }))
+    expect(screen.getByRole('option', { name: /數學/ })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /國中限定|乙專用|丙專用/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    manager = screen.getByRole('dialog', { name: '管理科目' })
+    fireEvent.click(within(manager).getByRole('button', { name: '＋ 新增科目' }))
+    fireEvent.change(within(manager).getByLabelText('新科目名稱'), { target: { value: '未配置專題' } })
+    fireEvent.change(within(manager).getByLabelText('新科目簡稱'), { target: { value: '專題' } })
+    fireEvent.click(within(manager).getByRole('button', { name: '新增科目' }))
+    await waitFor(() => expect(within(manager).getByText('已儲存：已新增科目。')).toBeTruthy())
+    const custom = stored().subjects.find((item) => item.name === '未配置專題')!
+    expect(stored().teachingUnitSubjects.some((item) => item.subjectId === custom.id)).toBe(false)
+    fireEvent.click(within(manager).getByRole('button', { name: '關閉對話框' }))
+    expect((screen.getByRole('combobox', { name: '課程科目' }) as HTMLInputElement).value).toBe('數學')
+
+    fireEvent.click(screen.getByRole('button', { name: '管理班級' }))
+    manager = screen.getByRole('dialog', { name: '管理班級' })
+    fireEvent.change(within(manager).getByLabelText('目前學制'), { target: { value: 'junior-a' } })
+    fireEvent.click(within(manager).getByRole('button', { name: '＋ 新增班級' }))
+    let classForm = within(manager).getByRole('form', { name: '新增班級表單' })
+    fireEvent.change(within(classForm).getByLabelText('新班級班號'), { target: { value: '2' } })
+    fireEvent.click(within(classForm).getByRole('button', { name: '新增班級' }))
+    await waitFor(() => expect(within(manager).getByText('已儲存：已新增班級。')).toBeTruthy())
+    fireEvent.click(within(manager).getByRole('button', { name: '關閉對話框' }))
+    expect((screen.getByLabelText('課程班級') as HTMLSelectElement).value).toBe('')
+
+    fireEvent.click(screen.getByRole('button', { name: '管理班級' }))
+    manager = screen.getByRole('dialog', { name: '管理班級' })
+    fireEvent.click(within(manager).getByRole('button', { name: '＋ 新增班級' }))
+    classForm = within(manager).getByRole('form', { name: '新增班級表單' })
+    fireEvent.change(within(classForm).getByLabelText('新班級班號'), { target: { value: '1' } })
+    fireEvent.click(within(classForm).getByRole('button', { name: '新增班級' }))
+    await waitFor(() => expect(within(manager).getByText('已儲存：已新增班級。')).toBeTruthy())
+    fireEvent.click(within(manager).getByRole('button', { name: '關閉對話框' }))
+
+    await waitFor(() => expect([...screen.getByLabelText<HTMLSelectElement>('課程班級').options]
+      .map((item) => item.text)).toEqual(['請選擇班級', '101']))
+    expect((screen.getByLabelText('課程班級') as HTMLSelectElement).value).not.toBe('')
+    expect((screen.getByPlaceholderText('依班級預設') as HTMLInputElement).value).toBe('保留草稿教室')
+    const beforeLessonRevision = revision()
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '新增固定課程' })).toBeNull())
+    expect(stored().recurringLessons).toContainEqual(expect.objectContaining({
+      projectId: f.projectA, timetableId: 'teacher-a', teachingUnitId: f.seniorA.id,
+      subjectId: 'unconfigured-math', day: 3, periodId: f.seniorA.periods[1].id,
+      weekPattern: 'B', room: '保留草稿教室',
+    }))
+    expect(revision()).toBe(beforeLessonRevision + 1)
+
+    view.unmount()
+    await mount()
+    expect(screen.getByRole('button', { name: /編輯 數學・101/ })).toBeTruthy()
     expect(useAppDataV4).not.toHaveBeenCalled()
   })
 

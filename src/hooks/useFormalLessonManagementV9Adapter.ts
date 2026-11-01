@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import type { LessonDraftV4 } from '../data/lessonsV4'
-import { createFormalLessonManagementV9Controller, type FormalLessonV9Result } from '../formalLessonManagementV9'
+import { createFormalLessonManagementV9Controller, FormalLessonV9Error,
+  type FormalLessonV9Result } from '../formalLessonManagementV9'
 import type { FormalV9HostPort } from '../formalRuntime'
 import type { FormalProjectTimetableV9Selection } from '../formalProjectTimetableV9'
 import type { AppDataV8 } from '../types'
@@ -10,7 +11,7 @@ import type { FixedLessonPersistencePort } from '../components/LessonEditor'
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
 export interface FormalLessonEditorV9Session {
-  data: AppDataV8
+  readonly data: AppDataV8
   lessonId: string | null
   port: FixedLessonPersistencePort
 }
@@ -19,6 +20,11 @@ function toDraft(draft: LessonDraftV4) {
   return { projectId: draft.projectId, timetableId: draft.timetableId!,
     teachingUnitId: draft.teachingUnitId, subjectId: draft.subjectId, classId: draft.classId,
     day: draft.day, periodId: draft.periodId, weekPattern: draft.weekPattern, room: draft.room }
+}
+
+/** Resource managers may advance these collections while an editor draft remains open. */
+function lessonSessionBaseline(document: AppDataV9): string {
+  return JSON.stringify({ ...document, subjects: [], teachingUnitSubjects: [], classes: [] })
 }
 
 export function toFormalLessonEditorDataV9(document: AppDataV9,
@@ -63,7 +69,7 @@ export function toFormalLessonEditorDataV9(document: AppDataV9,
   }
 }
 
-/** Captures a Host snapshot when the editor opens; all writes still complete through the V9 controller. */
+/** Keeps editor identity fixed while projecting confirmed resource collections from the live V9 Host. */
 export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
   selection: FormalProjectTimetableV9Selection, createId: () => string = uid) {
   const hostRef = useRef(host)
@@ -77,19 +83,27 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
     const snapshot = hostRef.current
     if (!snapshot.document || !selectionRef.current.projectId || !selectionRef.current.timetableId) return null
     const capturedSelection = { ...selectionRef.current }
-    const data = toFormalLessonEditorDataV9(snapshot.document, capturedSelection, lessonId)
-    if (!data) return null
-    const configuredSubjectIds = Object.fromEntries(data.teachingUnits.map((unit) => [unit.id,
-      data.teachingUnitSubjects.filter((item) => item.teachingUnitId === unit.id).map((item) => item.subjectId)]))
+    const initialData = toFormalLessonEditorDataV9(snapshot.document, capturedSelection, lessonId)
+    if (!initialData) return null
+    const baseline = lessonSessionBaseline(snapshot.document)
+    const readData = () => {
+      const current = hostRef.current.document
+      return current ? toFormalLessonEditorDataV9(current, capturedSelection, lessonId) ?? initialData : initialData
+    }
     const execute = async (unitId: string, operation: (controller: ReturnType<typeof createFormalLessonManagementV9Controller>) =>
     Promise<FormalLessonV9Result>) => {
       if (submittingRef.current) throw new Error('V9 Host write is already in progress.')
       submittingRef.current = true
       setPending(true)
       try {
+        const currentHost = hostRef.current
+        if (!currentHost.document || lessonSessionBaseline(currentHost.document) !== baseline
+          || !toFormalLessonEditorDataV9(currentHost.document, capturedSelection, lessonId)) {
+          throw new FormalLessonV9Error('stale-document', 'Lesson session data changed before submission.')
+        }
         const scope = { projectId: capturedSelection.projectId!, timetableId: capturedSelection.timetableId!,
           teachingUnitId: unitId }
-        const controller = createFormalLessonManagementV9Controller(snapshot, createId, scope, () => ({
+        const controller = createFormalLessonManagementV9Controller(currentHost, createId, scope, () => ({
           projectId: selectionRef.current.projectId ?? '', timetableId: selectionRef.current.timetableId ?? '',
           teachingUnitId: unitId,
         }))
@@ -99,11 +113,15 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
         setPending(false)
       }
     }
-    const target = lessonId ? data.recurringLessons.find((item) => item.id === lessonId) : null
+    const target = lessonId ? initialData.recurringLessons.find((item) => item.id === lessonId) : null
     const port: FixedLessonPersistencePort = {
       fixedOnly: true,
       get pending() { return submittingRef.current },
-      configuredSubjectIds,
+      get configuredSubjectIds() {
+        const data = readData()
+        return Object.fromEntries(data.teachingUnits.map((unit) => [unit.id,
+          data.teachingUnitSubjects.filter((item) => item.teachingUnitId === unit.id).map((item) => item.subjectId)]))
+      },
       create: (draft) => execute(draft.teachingUnitId,
         (controller) => controller.createRecurring(toDraft(draft))),
       update: (id, draft) => execute(target?.teachingUnitId ?? draft.teachingUnitId,
@@ -113,7 +131,7 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
         return execute(target.teachingUnitId, (controller) => controller.deleteRecurring(id, true))
       },
     }
-    return { data, lessonId, port }
+    return { get data() { return readData() }, lessonId, port }
   }, [createId])
 
   return { open, pending }
