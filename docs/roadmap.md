@@ -1,5 +1,13 @@
 # Toki v0.3.2 roadmap
 
+## ACT-4 — Fresh V9 first-run Modal（接線完成，待審查）
+
+正式入口已沿用既有 Modal 提供空白環境的明確初始化確認，確認後執行 ACT-3 服務並重新通過 Runtime Gate 才掛載 V9；取消與所有不明 evidence 維持非寫入狀態。隔離測試涵蓋 Fresh、舊版資料、失敗與競態；尚未執行真實瀏覽器資料初始化。
+
+## ACT-3 — Fresh V9 initialization（資料層完成，正式入口待決）
+
+已建立明確呼叫的全新 V9 初始化、獨立 fresh evidence 分支、備份／digest／讀回、正式 Runtime Gate 與既有 Host 的驗證及隔離測試。全新環境不再以 V7→V8→V9 遷移為新功能開發前置條件。ACT-4 已接上正式確認入口；仍不自動建立或清除任何使用者資料。
+
 ## Phase 4D R2-2B Dev-1 — V9 Local Preview
 
 Windows／Mac 的 Vite DEV 在 `localhost`／`127.0.0.1` 預設使用固定、唯讀、純記憶體 V9 fixture 顯示既有 Dashboard 與五日／七日課表；共用正式 V9 Workspace，不建立第二套 UI。舊 `#/v8-preview` 入口與右下角按鈕已淘汰；V8 schema、validator、migration、activation、backup 及仍用於資料安全驗證的整合測試保留。Production、非本機開發 hostname 與 Formal Runtime Gate 不變。

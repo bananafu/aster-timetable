@@ -1,5 +1,13 @@
 # Toki v0.3.2 product specification
 
+## ACT-4 — 全新 V9 首次使用確認
+
+完全空白的正式環境顯示既有 Modal「開始使用 Toki」；使用者點擊「建立」前不寫入任何資料，取消後本次 session 不再顯示，也不掛載 V7。確認後由 ACT-3 初始化服務建立空白 V9，正式 Runtime Gate 再驗證 active 才進入現有 V9 Workspace。已有 V7、V8、V9、備份或未知 evidence 不顯示此 Modal；V8 與不明狀態停用，均不自動清理、遷移或重試。
+
+## ACT-3 — 全新 V9 初始化（資料契約）
+
+尚未正式上市的新環境可經明確操作建立全新空白 V9 文件，不要求 V7→V8→V9 搬移。初始化只接受無任何 Toki 資料、activation、backup 或未知 evidence 的 storage，使用 Web Lock、初始文件 validator、不可覆寫且讀回驗證的備份，以及 `preparing → 文件 → active` 證據；失敗不清理、不覆寫、不自動續接。成功後正式 Runtime Gate 與 V9 Host 須各自重新驗證，不能以初始化回傳值直接授予寫入資格。現有 V7／V8 原始資料均不修改；已有任何舊資料的環境不得走 fresh 初始化。
+
 ## Phase 4D R2-D2 — 教師獨立科目庫（V8 開發預覽）
 
 產品仍為 Toki V8，內部以獨立 schema 9 key 儲存教師擁有的 Subject。V8 Preview 需由使用者明確匯出／確認原始 V8 JSON、逐筆決定無法自動判定的科目及任教配置歸屬後，才執行備份、轉換與啟用；一般啟動絕不自動遷移。啟用後每份教師 Timetable 有自己的科目庫；新增或只複製設定的課表不繼承科目。教師可在同一課表將同一 Subject 明確配置到高中部與國中部；若需要擴充適用學制，畫面須先請使用者確認。不同教師可有同名科目及不同 ID，改名不影響其他教師；有配置、課程、異動或進度引用時，刪除須拒絕。原始 V8 與 activation raw 不覆寫，衝突時停寫並提供 JSON 救援匯出。中斷續接必須由使用者明確啟動，並只允許經備份及來源 digest 驗證的原候選文件。

@@ -1,5 +1,15 @@
 # Toki v0.3.2 architecture
 
+## ACT-4 — Fresh V9 first-run Modal
+
+正式 `FormalAppEntry` 在掛載 V7 前使用 ACT-3 的 `preflightFreshV9` 檢查完整空白 evidence；合格時只顯示既有 Modal，明確確認後才呼叫 `initializeFreshV9`。成功後再次執行 `inspectFormalRuntime`，僅 active V9 可掛載既有 `FormalV9Composition`；Host 仍獨立驗證 writable。取消、失敗及中斷均不掛載 V7、不清除 evidence、不自動重試。已有 V7 舊資料維持原入口；V8 或未知 Toki evidence 在正式入口停用，不回退 V7。DEV Preview 保持純記憶體。
+
+## ACT-3 — Fresh V9 initialization foundation
+
+`initializeFreshV9` 是明確呼叫的資料層服務，僅在所有已知與未知 Toki storage evidence 均不存在時使用既有 Web Lock。它以既有 V9 backup prefix 保存合法空白 V9 文件的 exact raw／SHA-256，依序讀回 backup、寫入 `preparing` metadata、V9 文件，最後寫入 `active`；任一中斷不自動重試、清除或接管。`V9ActivationRecord` 新增 `fresh-v9-initialization` 判別分支，不建立 V7／V8 source evidence，舊 `timetable-subject-upgrade` 分支的欄位與驗證維持不變。正式 Runtime Gate 與既有 `useAppDataV9` Host 各自重驗 fresh backup、初始與目前 digest、revision，以及所有舊版 key 不存在，才允許正式 V9 寫入。
+
+ACT-4 已在正式入口的 V7 掛載前加入明確確認 Modal；舊 V7／V8 遷移路徑保留，但不是全新 V9 開始使用的前置條件。
+
 ## Phase 4D R2-D2 — 教師獨立科目庫接線（開發預覽）
 
 產品仍稱 Toki V8；內部 schema 9 使用獨立 `aster-timetable-data-v9` key，不更改 V7／V8 原始 key。使用者在 V8 Preview 的「教學資源」逐筆確認無法自動判定的科目歸屬與多教師任教配置，先匯出 V8 exact raw 並明確確認外部檔案已保存，才可啟動轉換。候選文件必須由同一份 V8 raw 與決策重新產生，通過獨立 V9 validator；舊 V8 raw 與 activation raw 寫入獨立、不可覆寫的 backup record，包含 SHA-256 digest、候選 raw、決策及讀回驗證。接著於 Web Lock 內按 `preparing → V9 文件 → active` 寫入；localStorage 跨 key 並非原子交易。中途失敗保留原始資料及部分紀錄，唯讀顯示；使用者可明確續接已驗證的同一候選，不自動重試或刪除任何 key。
