@@ -2,7 +2,7 @@ import type { AppDataV9 } from '../types/v9'
 import type { SubjectMigrationDecisionV9 } from './subjectMigrationCandidateV9'
 import { fingerprintV7Raw, V8_BOOTSTRAP_KEY, V8_TRANSACTION_KEY } from './activationV8'
 import { APP_DATA_V7_KEY } from './storageV7'
-import { APP_DATA_V8_KEY } from './storageV8'
+import { APP_DATA_V8_KEY, createEmptyAppDataV8, TOKI_LEGACY_DATA_KEYS } from './storageV8'
 import { isCompatibleAppDataV9, isSafeAppDataV9Update } from './validators/v9'
 import { withV8StorageLock } from './v8Coordination'
 
@@ -33,7 +33,7 @@ export interface V9PreMutationBackupEvidence {
 }
 export type V9ActivationStatus = 'preparing' | 'active' | 'interrupted'
 
-export interface V9ActivationRecord {
+export interface V9SubjectUpgradeActivationRecord {
   schemaVersion: 1
   kind: 'timetable-subject-upgrade'
   attemptId: string
@@ -49,6 +49,35 @@ export interface V9ActivationRecord {
   createdAt: string
   updatedAt: string
   activatedAt: string | null
+}
+
+export interface V9FreshActivationRecord {
+  schemaVersion: 1
+  kind: 'fresh-v9-initialization'
+  attemptId: string
+  status: V9ActivationStatus
+  backupKey: string
+  initialDigest: `sha256:${string}`
+  currentDigest: `sha256:${string}`
+  documentRevision: number
+  createdAt: string
+  updatedAt: string
+  activatedAt: string | null
+}
+
+export type V9ActivationRecord = V9SubjectUpgradeActivationRecord | V9FreshActivationRecord
+
+export interface V9FreshBackupRecord {
+  schemaVersion: 1
+  kind: 'fresh-v9-initialization-backup'
+  attemptId: string
+  candidateRaw: string
+  candidateDigest: `sha256:${string}`
+  createdAt: string
+}
+
+export function createEmptyAppDataV9(): AppDataV9 {
+  return { ...createEmptyAppDataV8(), schemaVersion: 9, projects: [], subjects: [] }
 }
 
 export interface V9BackupRecord {
@@ -76,14 +105,10 @@ const iso = (value: unknown): value is string => typeof value === 'string'
   && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value
 
 export function isV9ActivationRecord(value: unknown): value is V9ActivationRecord {
-  if (!record(value) || Object.keys(value).length !== 15) return false
-  return value.schemaVersion === 1 && value.kind === 'timetable-subject-upgrade'
+  if (!record(value)) return false
+  const shared = value.schemaVersion === 1
     && typeof value.attemptId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value.attemptId)
     && ['preparing', 'active', 'interrupted'].includes(value.status as string)
-    && digest(value.sourceV8Digest)
-    && [V8_BOOTSTRAP_KEY, V8_TRANSACTION_KEY].includes(value.sourceActivationKey as typeof V8_BOOTSTRAP_KEY)
-    && digest(value.sourceActivationDigest)
-    && (value.sourceV7Digest === null || digest(value.sourceV7Digest))
     && value.backupKey === `${V9_BACKUP_PREFIX}${value.attemptId}`
     && digest(value.initialDigest) && digest(value.currentDigest)
     && Number.isSafeInteger(value.documentRevision) && Number(value.documentRevision) >= 0
@@ -92,12 +117,36 @@ export function isV9ActivationRecord(value: unknown): value is V9ActivationRecor
       && value.activatedAt >= value.createdAt && value.activatedAt <= value.updatedAt
       : value.activatedAt === null && value.documentRevision === 0
         && value.currentDigest === value.initialDigest)
+  if (!shared) return false
+  if (value.kind === 'fresh-v9-initialization') return Object.keys(value).length === 11
+  return Object.keys(value).length === 15 && value.kind === 'timetable-subject-upgrade'
+    && digest(value.sourceV8Digest)
+    && [V8_BOOTSTRAP_KEY, V8_TRANSACTION_KEY].includes(value.sourceActivationKey as typeof V8_BOOTSTRAP_KEY)
+    && digest(value.sourceActivationDigest)
+    && (value.sourceV7Digest === null || digest(value.sourceV7Digest))
+}
+
+export function isV9FreshBackupRecord(value: unknown): value is V9FreshBackupRecord {
+  return record(value) && Object.keys(value).length === 6 && value.schemaVersion === 1
+    && value.kind === 'fresh-v9-initialization-backup'
+    && typeof value.attemptId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value.attemptId)
+    && typeof value.candidateRaw === 'string' && digest(value.candidateDigest) && iso(value.createdAt)
 }
 
 export function parseAppDataV9Raw(raw: string): AppDataV9 {
   const value: unknown = JSON.parse(raw)
   if (!isCompatibleAppDataV9(value)) throw new Error('invalid-v9-document')
   return value
+}
+
+function isEmptyV9CandidateRaw(raw: string): boolean {
+  try {
+    const data = parseAppDataV9Raw(raw)
+    return data.activeProjectId === null && [data.projects, data.timetables, data.schools,
+      data.teachingUnits, data.subjects, data.teachingUnitSubjects, data.classes,
+      data.recurringLessons, data.events, data.overrides, data.oneOffLessons,
+      data.teachingProgress, data.migrationWarnings].every((items) => items.length === 0)
+  } catch { return false }
 }
 
 export type V9LoadStatus = 'absent' | 'preparing' | 'active' | 'interrupted'
@@ -146,6 +195,27 @@ export async function checkV9WriteEvidence(storage: Pick<Storage, 'getItem'>,
     const backupRaw = storage.getItem(meta.backupKey)
     if (backupRaw === null) return false
     const backup: unknown = JSON.parse(backupRaw)
+    if (meta.kind === 'fresh-v9-initialization') {
+      const enumerable = storage as Pick<Storage, 'getItem'> & Partial<Pick<Storage, 'key' | 'length'>>
+      if (typeof enumerable.key !== 'function' || typeof enumerable.length !== 'number'
+        || !isV9FreshBackupRecord(backup) || backup.attemptId !== meta.attemptId
+        || backup.createdAt !== meta.createdAt || backup.candidateDigest !== meta.initialDigest
+        || !isEmptyV9CandidateRaw(backup.candidateRaw)
+        || await fingerprintV7Raw(backup.candidateRaw) !== meta.initialDigest
+        || TOKI_LEGACY_DATA_KEYS.some((key) => storage.getItem(key) !== null)
+        || storage.getItem(APP_DATA_V8_KEY) !== null
+        || storage.getItem(V8_BOOTSTRAP_KEY) !== null
+        || storage.getItem(V8_TRANSACTION_KEY) !== null) return false
+      for (let index = 0; index < enumerable.length; index += 1) {
+        const key = enumerable.key(index)
+        if (key === null || ((key.startsWith('aster-timetable-') || key.startsWith('toki-v9-'))
+          && key !== APP_DATA_V9_KEY && key !== V9_ACTIVATION_KEY && key !== meta.backupKey
+          && !key.startsWith(V9_AUTO_BACKUP_PREFIX))) return false
+      }
+      return storage.getItem(meta.backupKey) === backupRaw
+        && storage.getItem(APP_DATA_V9_KEY) === expectedRaw
+        && storage.getItem(V9_ACTIVATION_KEY) === expectedMetadataRaw
+    }
     if (!record(backup) || backup.schemaVersion !== 1
       || backup.kind !== 'timetable-subject-upgrade-backup'
       || backup.attemptId !== meta.attemptId || backup.sourceV8Key !== APP_DATA_V8_KEY

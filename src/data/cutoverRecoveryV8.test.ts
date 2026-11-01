@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fingerprintV7Raw, V8_TRANSACTION_KEY, type V8ActivationTransaction } from './activationV8'
 import { createCutoverBackupV8 } from './cutoverBackupV8'
+import { preflightCutoverV8 } from './cutoverPreflightV8'
 import { activateCutoverV8 } from './cutoverTransactionV8'
 import { inspectV8Recovery } from './recoveryInspectionV8'
 import { createV8RollbackArchive, planV8Rollback, readV8RescueRaw, verifyV8RollbackArchive,
@@ -13,8 +14,9 @@ import { migrateV3ToV4 } from './migrationsV4'
 import { migrateV4ToV5 } from './migrationsV5'
 import { migrateV5ToV6 } from './migrationsV6'
 import { migrateV6ToV7 } from './migrationsV7'
-import { APP_DATA_V7_KEY } from './storageV7'
+import { APP_DATA_V7_KEY, persistAppDataV7 } from './storageV7'
 import { APP_DATA_V8_KEY } from './storageV8'
+import { withV8StorageLock } from './v8Coordination'
 
 const time = '2026-10-22T01:00:00.000Z'
 const validV7 = () => migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(structuredClone(initialData)))))
@@ -98,6 +100,32 @@ describe('B2c session safety', () => {
       sessionIssues: expect.arrayContaining(['legacy-tabs-unverifiable']) })
     expect(store.values.has(APP_DATA_V8_KEY)).toBe(false)
     expect(store.values.has(V8_TRANSACTION_KEY)).toBe(false)
+  })
+
+  it('documents that a non-cooperating V7 writer can write while a V8 Web Lock is held', async () => {
+    const store = memory([[APP_DATA_V7_KEY, '{stale-v7-raw}']])
+    locks()
+    await withV8StorageLock(async () => {
+      persistAppDataV7(store, validV7())
+      expect(store.getItem(APP_DATA_V7_KEY)).not.toBe('{stale-v7-raw}')
+    })
+    expect(store.setItem).toHaveBeenCalledWith(APP_DATA_V7_KEY, expect.any(String))
+    expect((await inspectCutoverSessionReadiness()).issues).toContain('legacy-tabs-unverifiable')
+  })
+
+  it('keeps production cutover blocked even when preflight overlooks multiple orphan backups', async () => {
+    const store = memory()
+    const first = await createCutoverBackupV8(store, { backupId: 'first', expectedRaw: null, createdAt: time })
+    const second = await createCutoverBackupV8(store, { backupId: 'second', expectedRaw: null, createdAt: time })
+    if (!first.ok || !second.ok) throw new Error('fixture failed')
+    expect((await preflightCutoverV8(store)).canProceed).toBe(true)
+    locks()
+    expect(await activateCutoverV8(store, { transactionId: 'attempt', backup: first,
+      confirmation: { source: { type: 'empty' }, externalExportPrepared: true,
+        userConfirmedExternalBackup: true }, createdAt: time }))
+      .toMatchObject({ ok: false, code: 'session-unsafe' })
+    expect(store.values.has(V8_TRANSACTION_KEY)).toBe(false)
+    expect(store.values.has(APP_DATA_V8_KEY)).toBe(false)
   })
 })
 

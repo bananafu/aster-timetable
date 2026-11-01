@@ -8,6 +8,7 @@ import { checkV8HostWriteEligibility } from '../hooks/useAppDataV8'
 import { APP_DATA_V7_KEY } from './storageV7'
 import { APP_DATA_V8_KEY } from './storageV8'
 import { isCompatibleAppDataV9 } from './validators/v9'
+import { inspectFormalRuntime } from '../formalRuntime'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_BACKUP_PREFIX,
   checkV9WriteEvidence, isV9ActivationRecord, loadAppDataV9, type V9ActivationRecord,
   type V9BackupRecord } from './storageV9'
@@ -22,6 +23,15 @@ export type V9ActivationResult =
 type StorageAccess = Pick<Storage, 'getItem' | 'setItem' | 'key' | 'length'>
 const validTime = (value: string) => !Number.isNaN(Date.parse(value))
   && new Date(value).toISOString() === value
+
+function hasUnexpectedV9Evidence(storage: StorageAccess, allowed: ReadonlySet<string>): boolean {
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index)
+    if (key === null) return true
+    if ((key.startsWith(APP_DATA_V9_KEY) || key.startsWith(V9_BACKUP_PREFIX)) && !allowed.has(key)) return true
+  }
+  return false
+}
 
 /** Explicit, non-retrying activation. No existing V7 or V8 key is ever written. */
 export async function activateTimetableSubjectsV9(storage: StorageAccess, input: {
@@ -55,9 +65,7 @@ export async function activateTimetableSubjectsV9(storage: StorageAccess, input:
         transactionRaw = storage.getItem(V8_TRANSACTION_KEY)
         if (storage.getItem(APP_DATA_V9_KEY) !== null || storage.getItem(V9_ACTIVATION_KEY) !== null
           || storage.getItem(key) !== null) return fail('already-started')
-        for (let index = 0; index < storage.length; index += 1) {
-          if (storage.key(index)?.startsWith(V9_BACKUP_PREFIX)) return fail('already-started')
-        }
+        if (hasUnexpectedV9Evidence(storage, new Set())) return fail('already-started')
       } catch { return fail('read-error') }
       if (rawV8 === null || rawV8 !== input.expectedV8Raw) return fail('source-changed')
       if (!(await checkV8HostWriteEligibility(storage, rawV8)).eligible) return fail('source-inactive')
@@ -145,6 +153,7 @@ export async function activateTimetableSubjectsV9(storage: StorageAccess, input:
         if (!(await checkV9WriteEvidence(storage, candidateRaw, JSON.stringify(active)))) {
           return fail('active-failed', key)
         }
+        if ((await inspectFormalRuntime(storage)).runtime !== 'v9') return fail('active-failed', key)
       } catch { return fail('active-failed', key) }
       return { ok: true, metadata: active, rawDocument: candidateRaw, backupKey: key }
     })
@@ -162,8 +171,13 @@ export async function resumeTimetableSubjectsV9(storage: StorageAccess): Promise
     return await withV8StorageLock(async () => {
       const loaded = loadAppDataV9(storage)
       if ((loaded.status !== 'preparing' && loaded.status !== 'interrupted')
-        || !loaded.metadata || !loaded.rawMetadata) return fail('not-interrupted')
+        || !loaded.metadata || loaded.metadata.kind !== 'timetable-subject-upgrade'
+        || !loaded.rawMetadata) return fail('not-interrupted')
       const meta = loaded.metadata
+      try {
+        if (hasUnexpectedV9Evidence(storage,
+          new Set([APP_DATA_V9_KEY, V9_ACTIVATION_KEY, meta.backupKey]))) return fail('backup-invalid')
+      } catch { return fail('backup-invalid') }
       let backup: V9BackupRecord
       try {
         const raw = storage.getItem(meta.backupKey)
@@ -212,6 +226,7 @@ export async function resumeTimetableSubjectsV9(storage: StorageAccess): Promise
       if (!(await checkV9WriteEvidence(storage, backup.candidateRaw, JSON.stringify(active)))) {
         return fail('readback-failed')
       }
+      if ((await inspectFormalRuntime(storage)).runtime !== 'v9') return fail('readback-failed')
       return { ok: true, rawDocument: backup.candidateRaw, metadata: active }
     })
   } catch { return fail('lock-unavailable') }
@@ -226,6 +241,7 @@ export async function resumeOrphanedSubjectUpgradeV9(storage: StorageAccess,
   try {
     const prepared = await withV8StorageLock(async () => {
       if (loadAppDataV9(storage).status !== 'absent') return fail('not-interrupted')
+      if (hasUnexpectedV9Evidence(storage, new Set([backupKey]))) return fail('backup-invalid')
       const orphanKeys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
         .filter((key): key is string => key !== null && key.startsWith(V9_BACKUP_PREFIX))
       if (orphanKeys.length !== 1 || orphanKeys[0] !== backupKey) return fail('backup-invalid')

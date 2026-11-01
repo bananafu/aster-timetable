@@ -5,8 +5,9 @@ import { activateTimetableSubjectsV9, resumeOrphanedSubjectUpgradeV9,
   resumeTimetableSubjectsV9 } from './activateSubjectV9'
 import { APP_DATA_V8_KEY, createEmptyAppDataV8 } from './storageV8'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, checkV9WriteEvidence,
-  loadAppDataV9, persistAppDataV9, type V9ActivationRecord } from './storageV9'
+  loadAppDataV9, persistAppDataV9, V9_BACKUP_PREFIX, type V9ActivationRecord } from './storageV9'
 import { checkV8HostWriteEligibility } from '../hooks/useAppDataV8'
+import { inspectFormalRuntime } from '../formalRuntime'
 import { createBlankProjectV9 } from './teacherSubjectsV9'
 import type { AppDataV9 } from '../types/v9'
 import { createEmptyProjectV9 } from './managementV9'
@@ -64,6 +65,7 @@ describe('explicit teacher Subject upgrade and V9 storage', () => {
     expect(storage.getItem(APP_DATA_V8_KEY)).toBe(rawV8)
     expect(loadAppDataV9(storage)).toMatchObject({ status: 'active', document: { schemaVersion: 9 } })
     expect(await checkV9WriteEvidence(storage, result.rawDocument, storage.getItem(V9_ACTIVATION_KEY)!)).toBe(true)
+    expect(await inspectFormalRuntime(storage)).toEqual({ runtime: 'v9', v9Status: 'active' })
     expect((await checkV8HostWriteEligibility(storage, rawV8)).eligible).toBe(false)
   })
 
@@ -155,6 +157,22 @@ describe('explicit teacher Subject upgrade and V9 storage', () => {
     expect(store.getItem(APP_DATA_V8_KEY)).toBe(rawV8)
   })
 
+  it('blocks unknown V9 evidence before activation writes', async () => {
+    const store = memory()
+    const bootstrap = await bootstrapEmptyV8(store, { attemptId: 'v8-source', createdAt: time })
+    if (!bootstrap.ok) throw new Error('fixture failed')
+    const rawV8 = store.getItem(APP_DATA_V8_KEY)!
+    store.setItem(`${APP_DATA_V9_KEY}-unknown`, '{partial}')
+    const result = await activateTimetableSubjectsV9(store, { attemptId: 'new-attempt', createdAt: time,
+      expectedV8Raw: rawV8, candidate: { ...createEmptyAppDataV8(), schemaVersion: 9 } as AppDataV9,
+      decisions: [], confirmedExternalV8Digest: await fingerprintV7Raw(rawV8), userConfirmedExternalBackup: true })
+    expect(result).toMatchObject({ ok: false, code: 'already-started' })
+    expect(store.getItem(APP_DATA_V9_KEY)).toBeNull()
+    expect(store.getItem(V9_ACTIVATION_KEY)).toBeNull()
+    expect(store.getItem(`${V9_BACKUP_PREFIX}new-attempt`)).toBeNull()
+    expect(store.getItem(APP_DATA_V8_KEY)).toBe(rawV8)
+  })
+
   it('refuses activation when internal backup write fails and leaves source untouched', async () => {
     const store = memory()
     const bootstrap = await bootstrapEmptyV8(store, { attemptId: 'v8-source', createdAt: time })
@@ -191,6 +209,11 @@ describe('explicit teacher Subject upgrade and V9 storage', () => {
     expect(loadAppDataV9(store).status).toBe('preparing')
     expect(store.getItem(APP_DATA_V9_KEY)).not.toBeNull()
     store.setItem.mockImplementation(realWrite)
+    const preparingRaw = store.getItem(V9_ACTIVATION_KEY)
+    store.setItem(`${V9_BACKUP_PREFIX}second-attempt`, '{partial}')
+    expect(await resumeTimetableSubjectsV9(store)).toMatchObject({ ok: false, code: 'backup-invalid' })
+    expect(store.getItem(V9_ACTIVATION_KEY)).toBe(preparingRaw)
+    store.values.delete(`${V9_BACKUP_PREFIX}second-attempt`)
     store.setItem(APP_DATA_V8_KEY, '{changed-by-old-tab}')
     expect(await resumeTimetableSubjectsV9(store)).toMatchObject({ ok: false, code: 'source-changed' })
     expect(loadAppDataV9(store).status).toBe('preparing')
@@ -215,8 +238,19 @@ describe('explicit teacher Subject upgrade and V9 storage', () => {
     expect(loadAppDataV9(store).status).toBe('absent')
     expect((await checkV8HostWriteEligibility(store, rawV8)).eligible).toBe(false)
     store.setItem.mockImplementation(realWrite)
+    store.setItem(`${V9_BACKUP_PREFIX}second-attempt`, '{partial}')
+    expect(await resumeOrphanedSubjectUpgradeV9(store, 'orphan'))
+      .toMatchObject({ ok: false, code: 'backup-invalid' })
+    expect(store.getItem(V9_ACTIVATION_KEY)).toBeNull()
+    store.values.delete(`${V9_BACKUP_PREFIX}second-attempt`)
+    store.setItem(`${APP_DATA_V9_KEY}-unknown`, '{partial}')
+    expect(await resumeOrphanedSubjectUpgradeV9(store, 'orphan'))
+      .toMatchObject({ ok: false, code: 'backup-invalid' })
+    expect(store.getItem(V9_ACTIVATION_KEY)).toBeNull()
+    store.values.delete(`${APP_DATA_V9_KEY}-unknown`)
     expect((await resumeOrphanedSubjectUpgradeV9(store, 'orphan')).ok).toBe(true)
     expect(loadAppDataV9(store).status).toBe('active')
+    expect(await inspectFormalRuntime(store)).toEqual({ runtime: 'v9', v9Status: 'active' })
     expect(store.getItem(APP_DATA_V8_KEY)).toBe(rawV8)
   })
 })

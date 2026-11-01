@@ -37,7 +37,7 @@ beforeEach(() => {
     return result
   } } })
 })
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 async function ready() {
   const storage = memory()
@@ -238,15 +238,19 @@ describe('V9 high-risk pre-mutation backup inside the existing transaction', () 
   })
   it('rotates only automatic backups after the new record is readable; protects activation and manual JSON', async () => {
     const { storage, document, expected, autoKeys, activated } = await ready()
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-30T00:00:00.000Z'))
     storage.setItem('manual-export-json', '{"manual":true}')
     const firstKey = (await persistAppDataV9(storage, document, document, expected(),
       'delete-recurring-lesson')).preMutationBackup!.key
     expect(autoKeys()).toHaveLength(1)
     for (let index = 1; index < V9_AUTO_BACKUP_LIMIT; index++) {
+      vi.advanceTimersByTime(1)
       await persistAppDataV9(storage, document, document, expected(), 'permanently-update-lesson')
     }
     expect(autoKeys()).toHaveLength(V9_AUTO_BACKUP_LIMIT)
     expect(storage.getItem(firstKey)).not.toBeNull()
+    vi.advanceTimersByTime(1)
     await persistAppDataV9(storage, document, document, expected(), 'delete-recurring-lesson')
     expect(autoKeys()).toHaveLength(V9_AUTO_BACKUP_LIMIT)
     expect(storage.getItem(firstKey)).toBeNull()
