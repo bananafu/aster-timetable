@@ -303,9 +303,10 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
     if (!canAddLesson || modalOpen || pending) return
     setAddChoiceOpen(true)
   }
-  const openLesson = (lessonId: string | null) => {
+  const openLesson = (lessonId: string | null, occurrenceDate: string | null = null,
+    occurrenceOverrideId: string | null = null) => {
     if (!lessonPort || !writable || pending) return
-    const session = lessonPort.open(lessonId)
+    const session = lessonPort.open(lessonId, occurrenceDate, occurrenceOverrideId)
     if (!session) return
     setAddChoiceOpen(false)
     setLessonEditor(session)
@@ -354,7 +355,8 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
               onClick={openAddChoice} disabled={!canAddLesson}><Plus size={16} />新增課程</button>}</div>
           <OverviewCalendar mode="resolved" weekStart={weekStart} readStatus={calendarReadStatus}
             days={displayDays} events={displayEvents}
-            onLessonClick={source.kind === 'formal' && writable ? (id) => openLesson(id) : undefined} />
+            onLessonClick={source.kind === 'formal' && writable
+              ? (id, date, overrideId) => openLesson(id, date, overrideId ?? null) : undefined} />
         </section>}
         {activePage === 'timetable' && <section className="panel timetable-panel">
           <div className="panel-heading"><div><h2>跨校週課表</h2><p>依各校學制的實際節次與輪週設定逐日整合。</p></div>
@@ -363,7 +365,8 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
           <MultiSchoolSchedule key={timetable?.id ?? project.id} mode="resolved" weekDays={weekDays}
             readStatus={weekResult.status} days={displayDays} schools={displaySchools}
             teachingUnits={displayUnits} onHeaderTeachingUnitChange={selectHeaderUnit}
-            onLessonClick={source.kind === 'formal' && writable ? (id) => openLesson(id) : undefined} />
+            onLessonClick={source.kind === 'formal' && writable
+              ? (id, date, overrideId) => openLesson(id, date, overrideId ?? null) : undefined} />
         </section>}
         </div> : null)}
     </main>
@@ -385,7 +388,9 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
       onAddOneOff={() => undefined} onClose={() => setAddChoiceOpen(false)} />}
     {lessonEditor && <LessonEditor key={`${lessonEditor.lessonId ?? 'new'}:${selection.projectId}:${selection.timetableId}`}
       data={lessonEditor.data} fixedLessonPort={lessonEditor.port} timetableId={selection.timetableId ?? undefined}
-      lessonId={lessonEditor.lessonId} storageStatus={writable ? 'saved' : 'conflict'}
+      lessonId={lessonEditor.lessonId} occurrenceDate={lessonEditor.occurrenceDate}
+      occurrenceOverrideId={lessonEditor.occurrenceOverrideId}
+      storageStatus={writable ? 'saved' : 'conflict'}
       onManageResource={(mode, context, onCreated) => {
         if (!subjectPort || !classPort || pending) return
         lessonResourceCreated.current = { mode, projectId: context.projectId,

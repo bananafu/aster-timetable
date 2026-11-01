@@ -5,8 +5,10 @@ import { fingerprintV7Raw } from './data/activationV8'
 import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './data/storageV9'
 import { cancelOccurrenceV9, createRecurringLessonV9, deleteRecurringLessonV9,
   getRecurringLessonV9Impact, moveOccurrenceV9,
-  permanentlyUpdateLessonV9, replaceOccurrenceV9, revokeOccurrenceOverrideV9, updateRecurringLessonV9,
-  type LessonV9Scope, type RecurringLessonV9Draft } from './data/lessonMutationsV9'
+  permanentlyUpdateLessonV9, replaceOccurrenceChangeV9, replaceOccurrenceV9,
+  revokeOccurrenceOverrideV9, updateRecurringLessonV9,
+  type LessonV9Scope, type OccurrenceChangeV9Draft,
+  type RecurringLessonV9Draft } from './data/lessonMutationsV9'
 
 export type FormalLessonV9ErrorCode = 'invalid-document' | 'invalid-scope' | 'not-writable'
   | 'duplicate-submit' | 'stale-document' | 'invalid-result' | 'receipt-mismatch' | 'backup-required'
@@ -29,9 +31,11 @@ export interface FormalLessonV9Actions {
   deleteRecurring: (lessonId: string, confirmed: true) => Promise<FormalLessonV9Result>
   cancelOccurrence: (lessonId: string, date: string) => Promise<FormalLessonV9Result>
   moveOccurrence: (lessonId: string, date: string,
-    target: { date: string; periodId: number }) => Promise<FormalLessonV9Result>
+    target: { date: string; periodId: number }, allowConflict?: boolean) => Promise<FormalLessonV9Result>
   replaceOccurrence: (lessonId: string, date: string,
     replacement: { subjectId: string; classId: string; room?: string }) => Promise<FormalLessonV9Result>
+  replaceOccurrenceChange: (overrideId: string,
+    change: OccurrenceChangeV9Draft) => Promise<FormalLessonV9Result>
   revokeOccurrenceOverride: (overrideId: string) => Promise<FormalLessonV9Result>
   permanentlyUpdateFromDate: (lessonId: string, date: string,
     draft: RecurringLessonV9Draft) => Promise<FormalLessonV9Result>
@@ -111,13 +115,19 @@ export function createFormalLessonManagementV9Controller(host: FormalV9HostPort,
       let overrideId = ''
       return commit((current) => { overrideId = createId(); return cancelOccurrenceV9(current, captured, id, date, overrideId) }, () => overrideId)
     },
-    moveOccurrence: (id, date, target) => {
+    moveOccurrence: (id, date, target, allowConflict = false) => {
       let overrideId = ''
-      return commit((current) => { overrideId = createId(); return moveOccurrenceV9(current, captured, id, date, target, overrideId) }, () => overrideId)
+      return commit((current) => { overrideId = createId(); return moveOccurrenceV9(current, captured, id, date,
+        target, overrideId, allowConflict === true) }, () => overrideId)
     },
     replaceOccurrence: (id, date, replacement) => {
       let overrideId = ''
       return commit((current) => { overrideId = createId(); return replaceOccurrenceV9(current, captured, id, date, replacement, overrideId) }, () => overrideId)
+    },
+    replaceOccurrenceChange: (id, change) => {
+      let overrideId = ''
+      return commit((current) => { overrideId = createId(); return replaceOccurrenceChangeV9(current, captured,
+        id, change, overrideId) }, () => overrideId)
     },
     revokeOccurrenceOverride: (id) => commit((current) => revokeOccurrenceOverrideV9(current, captured, id), () => id),
     permanentlyUpdateFromDate: (id, date, draft) => {

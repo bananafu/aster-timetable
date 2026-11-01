@@ -7,12 +7,17 @@ import type { FormalProjectTimetableV9Selection } from '../formalProjectTimetabl
 import type { AppDataV8 } from '../types'
 import type { AppDataV9 } from '../types/v9'
 import type { FixedLessonPersistencePort } from '../components/LessonEditor'
+import { fromDateKey } from '../lib/date'
+import { resolveV9Day } from '../lib/scheduleV9'
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
 export interface FormalLessonEditorV9Session {
   readonly data: AppDataV8
   lessonId: string | null
+  occurrenceDate: string | null
+  occurrenceOverrideId: string | null
+  teachingUnitId: string | null
   port: FixedLessonPersistencePort
 }
 
@@ -79,12 +84,25 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
   const submittingRef = useRef(false)
   const [pending, setPending] = useState(false)
 
-  const open = useCallback((lessonId: string | null = null): FormalLessonEditorV9Session | null => {
+  const open = useCallback((lessonId: string | null = null, occurrenceDate: string | null = null,
+    occurrenceOverrideId: string | null = null): FormalLessonEditorV9Session | null => {
     const snapshot = hostRef.current
     if (!snapshot.document || !selectionRef.current.projectId || !selectionRef.current.timetableId) return null
     const capturedSelection = { ...selectionRef.current }
     const initialData = toFormalLessonEditorDataV9(snapshot.document, capturedSelection, lessonId)
     if (!initialData) return null
+    const target = lessonId ? snapshot.document.recurringLessons.find((item) => item.id === lessonId
+      && item.projectId === capturedSelection.projectId && item.timetableId === capturedSelection.timetableId) : null
+    if (lessonId && !target) return null
+    if ((occurrenceDate || occurrenceOverrideId) && (!lessonId || !target || !occurrenceDate)) return null
+    if (target && occurrenceDate) {
+      const occurrence = resolveV9Day(snapshot.document, { projectId: capturedSelection.projectId!,
+        timetableId: capturedSelection.timetableId!, teachingUnitId: target.teachingUnitId },
+      fromDateKey(occurrenceDate)).find((item) => item.kind === 'recurring' && item.id === target.id
+        && item.date === occurrenceDate && (occurrenceOverrideId
+          ? item.overrideId === occurrenceOverrideId : item.overrideId === undefined))
+      if (!occurrence) return null
+    }
     const baseline = lessonSessionBaseline(snapshot.document)
     const readData = () => {
       const current = hostRef.current.document
@@ -113,7 +131,7 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
         setPending(false)
       }
     }
-    const target = lessonId ? initialData.recurringLessons.find((item) => item.id === lessonId) : null
+    const projectedTarget = lessonId ? initialData.recurringLessons.find((item) => item.id === lessonId) : null
     const port: FixedLessonPersistencePort = {
       fixedOnly: true,
       get pending() { return submittingRef.current },
@@ -124,14 +142,32 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
       },
       create: (draft) => execute(draft.teachingUnitId,
         (controller) => controller.createRecurring(toDraft(draft))),
-      update: (id, draft) => execute(target?.teachingUnitId ?? draft.teachingUnitId,
+      update: (id, draft) => execute(projectedTarget?.teachingUnitId ?? draft.teachingUnitId,
         (controller) => controller.updateRecurring(id, toDraft(draft))),
       delete: (id) => {
-        if (!target) return Promise.reject(new Error('Lesson does not exist.'))
-        return execute(target.teachingUnitId, (controller) => controller.deleteRecurring(id, true))
+        if (!projectedTarget) return Promise.reject(new Error('Lesson does not exist.'))
+        return execute(projectedTarget.teachingUnitId, (controller) => controller.deleteRecurring(id, true))
       },
+      ...(projectedTarget && { occurrence: {
+        cancel: (id: string, date: string) => execute(projectedTarget.teachingUnitId,
+          (controller) => controller.cancelOccurrence(id, date)),
+        move: (id: string, date: string, moveTarget: { date: string; periodId: number },
+          allowConflict: boolean) => execute(projectedTarget.teachingUnitId,
+          (controller) => controller.moveOccurrence(id, date, moveTarget, allowConflict === true)),
+        replace: (id: string, date: string,
+          replacement: { subjectId: string; classId: string; room?: string }) =>
+          execute(projectedTarget.teachingUnitId,
+            (controller) => controller.replaceOccurrence(id, date, replacement)),
+        replaceChange: (id: string, change: Parameters<ReturnType<
+          typeof createFormalLessonManagementV9Controller>['replaceOccurrenceChange']>[1]) =>
+          execute(projectedTarget.teachingUnitId,
+            (controller) => controller.replaceOccurrenceChange(id, change)),
+        revoke: (id: string) => execute(projectedTarget.teachingUnitId,
+          (controller) => controller.revokeOccurrenceOverride(id)),
+      } }),
     }
-    return { get data() { return readData() }, lessonId, port }
+    return { get data() { return readData() }, lessonId, occurrenceDate, occurrenceOverrideId,
+      teachingUnitId: projectedTarget?.teachingUnitId ?? null, port }
   }, [createId])
 
   return { open, pending }

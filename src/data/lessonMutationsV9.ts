@@ -11,6 +11,10 @@ type Lesson = AppDataV9['recurringLessons'][number]
 type Override = AppDataV9['overrides'][number]
 export type RecurringLessonV9Draft = RecurringLessonV8Draft
 export type LessonV9Scope = { projectId: string; timetableId: string; teachingUnitId: string }
+export type OccurrenceChangeV9Draft =
+  | { action: 'cancel' }
+  | { action: 'move'; target: { date: string; periodId: number }; allowConflict?: boolean }
+  | { action: 'replace'; replacement: { subjectId: string; classId: string; room?: string } }
 export type LessonV9ErrorCode = 'invalid-document' | 'invalid-scope' | 'invalid-reference' | 'invalid-date'
   | 'invalid-draft' | 'id-collision' | 'not-found' | 'already-changed' | 'conflict' | 'referenced' | 'unsafe-update'
 export class LessonV9Error extends Error {
@@ -149,8 +153,9 @@ export function replaceOccurrenceV9(data: AppDataV9, selected: LessonV9Scope,
     replacement: { ...replacement, room: replacement.room?.trim() || undefined } })
 }
 export function moveOccurrenceV9(data: AppDataV9, selected: LessonV9Scope,
-  lessonId: string, date: string, target: { date: string; periodId: number }, id: string): AppDataV9 {
-  occurrence(data, selected, lessonId, date)
+  lessonId: string, date: string, target: { date: string; periodId: number }, id: string,
+  allowConflict = false): AppDataV9 {
+  const current = occurrence(data, selected, lessonId, date)
   const unit = scope(data, selected)
   const period = unit.periods.find((item) => item.id === target.periodId)
   if (!dateValid(target.date) || target.date < unit.startDate || target.date > unit.endDate || !period) {
@@ -158,12 +163,14 @@ export function moveOccurrenceV9(data: AppDataV9, selected: LessonV9Scope,
   }
   const occupied = resolveV9Day(data, selected, fromDateKey(target.date)).some((item) =>
     (item.kind === 'one-off' || (item.status !== 'cancelled' && item.movementRole !== 'source'))
+    && !(target.date === date && item.kind === 'recurring' && item.id === current.id
+      && item.sourceDate === date && item.movementRole !== 'target')
     && timeIntervalsOverlap(item, period!))
-  if (occupied) fail('conflict', 'Move target overlaps another active lesson.')
+  if (occupied && allowConflict !== true) fail('conflict', 'Move target overlaps another active lesson.')
   return addOverride(data, selected, lessonId, date, id, { action: 'move', target })
 }
-export function revokeOccurrenceOverrideV9(data: AppDataV9, selected: LessonV9Scope,
-  overrideId: string): AppDataV9 {
+
+function selectedOverride(data: AppDataV9, selected: LessonV9Scope, overrideId: string): Override {
   scope(data, selected)
   const found = data.overrides.find((item) => item.id === overrideId && item.projectId === selected.projectId
     && item.timetableId === selected.timetableId && item.teachingUnitId === selected.teachingUnitId)
@@ -172,7 +179,54 @@ export function revokeOccurrenceOverrideV9(data: AppDataV9, selected: LessonV9Sc
     && item.projectId === selected.projectId && item.timetableId === selected.timetableId
     && item.teachingUnitId === selected.teachingUnitId)) fail('referenced', 'Override ownership is unresolved.')
   if (found!.groupId) fail('referenced', 'Grouped override requires a separate atomic group operation.')
-  return safe(data, { ...data, overrides: data.overrides.filter((item) => item.id !== overrideId) })
+  return found!
+}
+
+function assertOccurrenceHasNoConflict(data: AppDataV9, selected: LessonV9Scope,
+  lessonId: string, date: string) {
+  const restored = resolveV9Day(data, selected, fromDateKey(date)).find((item) => item.kind === 'recurring'
+    && item.id === lessonId && item.sourceDate === date && item.movementRole !== 'target')
+  if (!restored) return fail('referenced', 'The original Lesson occurrence cannot be resolved after the change.')
+  if (restored.hasConflict) fail('conflict', 'The restored Lesson occurrence overlaps another active lesson.')
+}
+
+export function revokeOccurrenceOverrideV9(data: AppDataV9, selected: LessonV9Scope,
+  overrideId: string): AppDataV9 {
+  const found = selectedOverride(data, selected, overrideId)
+  const next = safe(data, { ...data, overrides: data.overrides.filter((item) => item.id !== overrideId) })
+  assertOccurrenceHasNoConflict(next, selected, found.originalLessonId!, found.date)
+  return next
+}
+
+function sameOccurrenceChange(found: Override, change: OccurrenceChangeV9Draft) {
+  if (found.action !== change.action) return false
+  if (change.action === 'cancel') return true
+  if (change.action === 'move') return found.target?.date === change.target.date
+    && found.target?.periodId === change.target.periodId
+  return found.replacement?.subjectId === change.replacement.subjectId
+    && found.replacement.classId === change.replacement.classId
+    && (found.replacement.room?.trim() ?? '') === (change.replacement.room?.trim() ?? '')
+}
+
+/** Replaces one non-grouped occurrence override atomically while keeping its Lesson and source date fixed. */
+export function replaceOccurrenceChangeV9(data: AppDataV9, selected: LessonV9Scope,
+  overrideId: string, change: OccurrenceChangeV9Draft, newId: string): AppDataV9 {
+  const found = selectedOverride(data, selected, overrideId)
+  if (newId === overrideId) fail('id-collision', 'Replacement override requires a new ID.')
+  if (sameOccurrenceChange(found, change)) fail('already-changed', 'Occurrence change has no semantic changes.')
+  const base = { ...data, overrides: data.overrides.filter((item) => item.id !== overrideId) }
+  const lessonId = found.originalLessonId!
+  let next: AppDataV9
+  if (change.action === 'cancel') {
+    next = cancelOccurrenceV9(base, selected, lessonId, found.date, newId)
+  } else if (change.action === 'replace') {
+    next = replaceOccurrenceV9(base, selected, lessonId, found.date, change.replacement, newId)
+    assertOccurrenceHasNoConflict(next, selected, lessonId, found.date)
+  } else {
+    next = moveOccurrenceV9(base, selected, lessonId, found.date, change.target, newId,
+      change.allowConflict === true)
+  }
+  return safe(data, next)
 }
 
 /** Isolated split; formal activation is blocked until operation-level backup evidence exists. */

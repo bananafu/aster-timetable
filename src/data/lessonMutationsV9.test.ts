@@ -9,7 +9,7 @@ import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './storageV9'
 import { isCompatibleAppDataV9 } from './validators/v9'
 import { cancelOccurrenceV9, createRecurringLessonV9, deleteRecurringLessonV9,
   getRecurringLessonV9Impact, moveOccurrenceV9, permanentlyUpdateLessonV9,
-  replaceOccurrenceV9, revokeOccurrenceOverrideV9, updateRecurringLessonV9,
+  replaceOccurrenceChangeV9, replaceOccurrenceV9, revokeOccurrenceOverrideV9, updateRecurringLessonV9,
   type LessonV9Scope, type RecurringLessonV9Draft } from './lessonMutationsV9'
 
 export function lessonFixture() {
@@ -114,6 +114,143 @@ describe('V9 Lesson domain mutation', () => {
     expect(() => deleteRecurringLessonV9(cancelled, scope, 'l1', true))
       .toThrow(expect.objectContaining({ code: 'referenced' }))
   })
+  it('rejects revoke when restoring a cancelled occurrence would overlap OneOff or another TeachingUnit', () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    const withOneOff: AppDataV9 = { ...cancelled, oneOffLessons: [{ id: 'one-off', projectId: 'p',
+      timetableId: 't', teachingUnitId: 'u', subjectId: 'math', classId: 'c', date: '2026-03-02',
+      purpose: 'extra', time: { mode: 'period', periodId: 1 } }] }
+    expect(isCompatibleAppDataV9(withOneOff)).toBe(true)
+    expect(() => revokeOccurrenceOverrideV9(withOneOff, scope, 'cancel'))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    expect(withOneOff.overrides).toEqual(cancelled.overrides)
+
+    const secondUnit = { ...cancelled.teachingUnits[0], id: 'u2', name: '第二學制',
+      periods: cancelled.teachingUnits[0].periods.map((period) => ({ ...period, id: period.id + 10 })) }
+    const crossUnit: AppDataV9 = { ...cancelled,
+      teachingUnits: [...cancelled.teachingUnits, secondUnit],
+      teachingUnitSubjects: [...cancelled.teachingUnitSubjects,
+        { id: 'r4', projectId: 'p', teachingUnitId: 'u2', subjectId: 'math' },
+        { id: 'r5', projectId: 'p', teachingUnitId: 'u2', subjectId: 'english' }],
+      classes: [...cancelled.classes, { id: 'c2', projectId: 'p', teachingUnitId: 'u2', name: '二甲' }],
+      recurringLessons: [...cancelled.recurringLessons, { id: 'l2', seriesId: 'l2', projectId: 'p',
+        timetableId: 't', teachingUnitId: 'u2', subjectId: 'math', classId: 'c2', day: 1,
+        periodId: 11, weekPattern: 'every', effectiveStart: '2026-03-01', origin: 'user' }],
+    }
+    expect(isCompatibleAppDataV9(crossUnit)).toBe(true)
+    expect(() => revokeOccurrenceOverrideV9(crossUnit, scope, 'cancel'))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    expect(crossUnit.overrides).toEqual(cancelled.overrides)
+    const withReplacement: AppDataV9 = { ...crossUnit, overrides: [...crossUnit.overrides,
+      { id: 'replace-other', projectId: 'p', timetableId: 't', teachingUnitId: 'u2',
+        date: '2026-03-02', periodId: 11, action: 'replace', originalLessonId: 'l2',
+        replacement: { subjectId: 'english', classId: 'c2' }, origin: 'user' }] }
+    expect(isCompatibleAppDataV9(withReplacement)).toBe(true)
+    expect(() => revokeOccurrenceOverrideV9(withReplacement, scope, 'cancel'))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+  })
+  it('rejects revoke when another move target occupies the source, but ignores another teacher', () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'l1')
+    const fixed = createRecurringLessonV9(first, scope, { ...draft, day: 2, periodId: 2 }, 'l2')
+    const movedFirst = moveOccurrenceV9(fixed, scope, 'l1', '2026-03-02',
+      { date: '2026-03-02', periodId: 2 }, 'move-first')
+    const movedSecond = moveOccurrenceV9(movedFirst, scope, 'l2', '2026-03-03',
+      { date: '2026-03-02', periodId: 1 }, 'move-second')
+    const originalRaw = JSON.stringify(movedSecond)
+    expect(() => revokeOccurrenceOverrideV9(movedSecond, scope, 'move-first'))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    expect(JSON.stringify(movedSecond)).toBe(originalRaw)
+
+    const otherScope = { ...scope, timetableId: 'other' }
+    const otherDraft = { ...draft, timetableId: 'other', subjectId: 'other-subject' }
+    const otherTeacher = createRecurringLessonV9(first, otherScope, otherDraft, 'other-lesson')
+    const cancelled = cancelOccurrenceV9(otherTeacher, scope, 'l1', '2026-03-02', 'cancel')
+    expect(revokeOccurrenceOverrideV9(cancelled, scope, 'cancel').overrides).toEqual([])
+  })
+  it('revokes a move by restoring exactly its original occurrence', () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    const moved = moveOccurrenceV9(fixed, scope, 'l1', '2026-03-02',
+      { date: '2026-03-02', periodId: 2 }, 'move')
+    const revoked = revokeOccurrenceOverrideV9(moved, scope, 'move')
+    expect(revoked.overrides).toEqual([])
+    expect(resolveV9Day(revoked, scope, fromDateKey('2026-03-02'))).toMatchObject([
+      { id: 'l1', status: 'regular', periodId: 1 }])
+  })
+  it('keeps grouped overrides blocked until an atomic group operation exists', () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    const grouped = { ...cancelled, overrides: cancelled.overrides.map((item) => ({ ...item, groupId: 'group' })) }
+    expect(() => revokeOccurrenceOverrideV9(grouped, scope, 'cancel'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+    expect(() => replaceOccurrenceChangeV9(grouped, scope, 'cancel', { action: 'cancel' }, 'replacement'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+  })
+  it('atomically replaces cancel, move and replacement changes for the same occurrence', () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, { ...draft, weekPattern: 'A' }, 'l1')
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    const sameDay = replaceOccurrenceChangeV9(cancelled, scope, 'cancel',
+      { action: 'move', target: { date: '2026-03-02', periodId: 2 } }, 'same-day')
+    expect(sameDay.overrides).toMatchObject([{ id: 'same-day', originalLessonId: 'l1', date: '2026-03-02',
+      action: 'move', target: { date: '2026-03-02', periodId: 2 } }])
+    const crossWeek = replaceOccurrenceChangeV9(sameDay, scope, 'same-day',
+      { action: 'move', target: { date: '2026-03-09', periodId: 2 } }, 'cross-week')
+    expect(resolveV9Day(crossWeek, scope, fromDateKey('2026-03-09'))).toMatchObject([
+      { id: 'l1', movementRole: 'target', periodId: 2 }])
+    const replaced = replaceOccurrenceChangeV9(crossWeek, scope, 'cross-week',
+      { action: 'replace', replacement: { subjectId: 'english', classId: 'c', room: '301' } }, 'replace')
+    expect(resolveV9Day(replaced, scope, fromDateKey('2026-03-02'))[0]).toMatchObject({
+      id: 'l1', status: 'replaced', subjectId: 'english', room: '301' })
+    const recancelled = replaceOccurrenceChangeV9(replaced, scope, 'replace', { action: 'cancel' }, 'recancel')
+    expect(recancelled.overrides).toMatchObject([{ id: 'recancel', action: 'cancel', date: '2026-03-02' }])
+    expect(recancelled.overrides).toHaveLength(1)
+  })
+  it('retains the original override when an atomic replacement is invalid or crosses the term', () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'l1')
+    const fixed = createRecurringLessonV9(first, scope, { ...draft, periodId: 2 }, 'blocker')
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    const before = JSON.stringify(cancelled)
+    expect(() => replaceOccurrenceChangeV9(cancelled, scope, 'cancel',
+      { action: 'move', target: { date: '2026-03-02', periodId: 2 } }, 'conflict'))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    expect(() => replaceOccurrenceChangeV9(cancelled, scope, 'cancel',
+      { action: 'move', target: { date: '2026-07-06', periodId: 1 } }, 'outside'))
+      .toThrow(expect.objectContaining({ code: 'invalid-date' }))
+    expect(() => replaceOccurrenceChangeV9(cancelled, scope, 'cancel',
+      { action: 'replace', replacement: { subjectId: 'other-subject', classId: 'c' } }, 'foreign'))
+      .toThrow(expect.objectContaining({ code: 'invalid-reference' }))
+    expect(JSON.stringify(cancelled)).toBe(before)
+    expect(cancelled.overrides).toMatchObject([{ id: 'cancel' }])
+  })
+  it('requires explicit conflict consent and keeps the conflict visible in the final projection', () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'l1')
+    const fixed = createRecurringLessonV9(first, scope, { ...draft, periodId: 2 }, 'blocker')
+    expect(() => moveOccurrenceV9(fixed, scope, 'l1', '2026-03-02',
+      { date: '2026-03-02', periodId: 2 }, 'unconfirmed')).toThrow(expect.objectContaining({ code: 'conflict' }))
+    const allowed = moveOccurrenceV9(fixed, scope, 'l1', '2026-03-02',
+      { date: '2026-03-02', periodId: 2 }, 'confirmed', true)
+    const active = resolveV9Day(allowed, scope, fromDateKey('2026-03-02'))
+      .filter((item) => item.kind !== 'recurring' || item.movementRole !== 'source')
+    expect(active).toHaveLength(2)
+    expect(active.every((item) => item.hasConflict)).toBe(true)
+
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    expect(() => replaceOccurrenceChangeV9(cancelled, scope, 'cancel',
+      { action: 'move', target: { date: '2026-03-02', periodId: 2 } }, 'atomic-unconfirmed'))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    const atomicAllowed = replaceOccurrenceChangeV9(cancelled, scope, 'cancel',
+      { action: 'move', target: { date: '2026-03-02', periodId: 2 }, allowConflict: true }, 'atomic-confirmed')
+    expect(atomicAllowed.overrides).toMatchObject([{ id: 'atomic-confirmed', action: 'move' }])
+    expect(resolveV9Day(atomicAllowed, scope, fromDateKey('2026-03-02'))
+      .filter((item) => item.kind !== 'recurring' || item.movementRole !== 'source')
+      .every((item) => item.hasConflict)).toBe(true)
+  })
   it('splits a series without rewriting history and reassigns only future override references', () => {
     const { data, scope, draft } = lessonFixture()
     const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
@@ -199,6 +336,101 @@ describe('formal V9 Lesson Host action port', () => {
     await expect(destructive.permanentlyUpdateFromDate('l1', '2026-03-16', draft))
       .rejects.toMatchObject({ code: 'backup-required' })
     expect(blocked.update).not.toHaveBeenCalled()
+  })
+  it('atomically replaces an occurrence change with one Host mutation and matching receipt', async () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    const state = hostFixture(cancelled)
+    const actions = createFormalLessonManagementV9Controller(state.host, () => 'move', scope)
+    const result = await actions.replaceOccurrenceChange('cancel',
+      { action: 'move', target: { date: '2026-03-09', periodId: 2 } })
+    expect(state.update).toHaveBeenCalledOnce()
+    expect(state.host.revision).toBe(1)
+    expect(result).toMatchObject({ affectedId: 'move', receipt: { revision: 1, attemptId: 'host-attempt' } })
+    expect(state.document().overrides).toMatchObject([{ id: 'move', originalLessonId: 'l1',
+      date: '2026-03-02', action: 'move', target: { date: '2026-03-09', periodId: 2 } }])
+    expect(state.document().overrides).toHaveLength(1)
+  })
+  it('keeps the original change and revision when atomic replacement validation fails', async () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'l1')
+    const fixed = createRecurringLessonV9(first, scope, { ...draft, periodId: 2 }, 'blocker')
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    const state = hostFixture(cancelled)
+    const actions = createFormalLessonManagementV9Controller(state.host, () => 'move', scope)
+    await expect(actions.replaceOccurrenceChange('cancel',
+      { action: 'move', target: { date: '2026-03-02', periodId: 2 } }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    expect(state.update).toHaveBeenCalledOnce()
+    expect(state.host.revision).toBe(0)
+    expect(state.document()).toBe(cancelled)
+    expect(state.document().overrides).toMatchObject([{ id: 'cancel' }])
+  })
+  it('keeps the original override and revision when revoke would restore a conflict', async () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    const occupied: AppDataV9 = { ...cancelled, oneOffLessons: [{ id: 'one-off', projectId: 'p',
+      timetableId: 't', teachingUnitId: 'u', subjectId: 'math', classId: 'c', date: '2026-03-02',
+      purpose: 'extra', time: { mode: 'period', periodId: 1 } }] }
+    const state = hostFixture(occupied)
+    await expect(createFormalLessonManagementV9Controller(state.host, () => 'unused', scope)
+      .revokeOccurrenceOverride('cancel')).rejects.toMatchObject({ code: 'conflict' })
+    expect(state.update).toHaveBeenCalledOnce()
+    expect(state.host.revision).toBe(0)
+    expect(state.document()).toBe(occupied)
+    expect(state.document().overrides).toMatchObject([{ id: 'cancel' }])
+  })
+  it('protects atomic replacement from duplicate, stale selection and receipt mismatch', async () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-02', 'cancel')
+    const held = hostFixture(cancelled, { hold: true })
+    const heldActions = createFormalLessonManagementV9Controller(held.host,
+      () => 'move', scope)
+    const pending = heldActions.replaceOccurrenceChange('cancel',
+      { action: 'move', target: { date: '2026-03-09', periodId: 2 } })
+    await expect(heldActions.replaceOccurrenceChange('cancel', { action: 'cancel' }))
+      .rejects.toMatchObject({ code: 'duplicate-submit' })
+    held.release()
+    await pending
+    expect(held.update).toHaveBeenCalledOnce()
+
+    let selected = { ...scope }
+    const stale = hostFixture(cancelled)
+    const staleActions = createFormalLessonManagementV9Controller(stale.host,
+      () => 'move', scope, () => selected)
+    selected = { ...scope, timetableId: 'other' }
+    await expect(staleActions.replaceOccurrenceChange('cancel',
+      { action: 'move', target: { date: '2026-03-09', periodId: 2 } }))
+      .rejects.toMatchObject({ code: 'invalid-scope' })
+    expect(stale.update).not.toHaveBeenCalled()
+
+    const mismatch = hostFixture(cancelled, { badReceipt: true })
+    await expect(createFormalLessonManagementV9Controller(mismatch.host, () => 'move', scope)
+      .replaceOccurrenceChange('cancel',
+        { action: 'move', target: { date: '2026-03-09', periodId: 2 } }))
+      .rejects.toMatchObject({ code: 'receipt-mismatch' })
+    expect(mismatch.document()).toBe(cancelled)
+    expect(mismatch.host.revision).toBe(0)
+  })
+  it('requires explicit conflict consent through the Controller action', async () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'l1')
+    const fixed = createRecurringLessonV9(first, scope, { ...draft, periodId: 2 }, 'blocker')
+    const rejected = hostFixture(fixed)
+    await expect(createFormalLessonManagementV9Controller(rejected.host, () => 'move', scope)
+      .moveOccurrence('l1', '2026-03-02', { date: '2026-03-02', periodId: 2 }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    expect(rejected.host.revision).toBe(0)
+    const accepted = hostFixture(fixed)
+    const result = await createFormalLessonManagementV9Controller(accepted.host, () => 'move', scope)
+      .moveOccurrence('l1', '2026-03-02', { date: '2026-03-02', periodId: 2 }, true)
+    expect(result.receipt.revision).toBe(1)
+    expect(resolveV9Day(result.document, scope, fromDateKey('2026-03-02'))
+      .filter((item) => item.kind !== 'recurring' || item.movementRole !== 'source')
+      .every((item) => item.hasConflict)).toBe(true)
   })
   it('passes validation and transaction-staleness failures through without reporting a receipt', async () => {
     const { data, scope, draft } = lessonFixture()
