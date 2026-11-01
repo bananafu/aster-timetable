@@ -56,6 +56,36 @@ function hostFixture(initial: AppDataV9) {
 }
 
 describe('useFormalLessonManagementV9Adapter live session', () => {
+  it('keeps exact occurrence context and atomically modifies then revokes its override', async () => {
+    const source = fixture()
+    const host = hostFixture(source.data)
+    const ids = ['cancel-a', 'move-a']
+    const hook = renderHook(() => useFormalLessonManagementV9Adapter(
+      host.host, source.selection, () => ids.shift() ?? 'unused'))
+    const session = hook.result.current.open('lesson-a', '2027-08-02')!
+    expect(session).toMatchObject({ lessonId: 'lesson-a', occurrenceDate: '2027-08-02',
+      occurrenceOverrideId: null, teachingUnitId: source.unit.id })
+    expect(hook.result.current.open('lesson-a', '2027-08-03')).toBeNull()
+    await act(async () => { await session.port.occurrence!.cancel('lesson-a', '2027-08-02') })
+    expect(host.host.document?.overrides).toMatchObject([{ id: 'cancel-a', date: '2027-08-02', action: 'cancel' }])
+
+    hook.rerender()
+    const cancelled = hook.result.current.open('lesson-a', '2027-08-02', 'cancel-a')!
+    await act(async () => { await cancelled.port.occurrence!.replaceChange('cancel-a',
+      { action: 'move', target: { date: '2027-08-09', periodId: source.unit.periods[1].id } }) })
+    expect(host.host.document?.overrides).toMatchObject([{ id: 'move-a', date: '2027-08-02', action: 'move',
+      target: { date: '2027-08-09', periodId: source.unit.periods[1].id } }])
+    expect(host.host.document?.overrides).toHaveLength(1)
+
+    hook.rerender()
+    const movedTarget = hook.result.current.open('lesson-a', '2027-08-09', 'move-a')!
+    expect(movedTarget.occurrenceDate).toBe('2027-08-09')
+    expect(hook.result.current.open('lesson-a', '2027-08-16', 'move-a')).toBeNull()
+    await act(async () => { await movedTarget.port.occurrence!.revoke('move-a') })
+    expect(host.host.document?.overrides).toEqual([])
+    expect(host.update).toHaveBeenCalledTimes(3)
+  })
+
   it('projects confirmed resources live and creates against the latest safe Host snapshot', async () => {
     const source = fixture()
     const host = hostFixture(source.data)

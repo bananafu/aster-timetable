@@ -17,7 +17,8 @@ import { createDefaultPeriods } from './data/academicSettingsV4'
 import { createClassV9, createEmptyProjectV9, createSchoolV9 } from './data/managementV9'
 import { inspectFormalRuntime } from './formalRuntime'
 import { useAppDataV4 } from './hooks/useAppDataV4'
-import { startOfWeek, toDateKey } from './lib/date'
+import { addDays, fromDateKey, startOfWeek, toDateKey } from './lib/date'
+import { resolveV9Day } from './lib/scheduleV9'
 import type { AppDataV9 } from './types/v9'
 
 vi.mock('./hooks/useAppDataV4', async (original) => ({
@@ -138,6 +139,39 @@ function readableFixture() {
       type: 'meeting', date: mondayKey, startTime: '17:00', endTime: '18:00', color: '#A66D52' },
   )
   return { ...result, data }
+}
+
+function occurrenceFixture(options: { blocker?: boolean; cancelled?: boolean; oneOff?: boolean;
+  grouped?: boolean } = {}) {
+  const result = fixture()
+  const data = structuredClone(result.data)
+  const monday = startOfWeek(new Date())
+  const mondayKey = toDateKey(monday)
+  const senior = data.teachingUnits.find((item) => item.id === result.seniorA.id)!
+  senior.startDate = toDateKey(addDays(monday, -28))
+  senior.endDate = toDateKey(addDays(monday, 56))
+  senior.weekCycle = { enabled: true, anchorDate: mondayKey, anchorPattern: 'A' }
+  const subject = data.subjects.find((item) => item.projectId === result.projectA
+    && item.timetableId === 'teacher-a')!
+  const schoolClass = data.classes.find((item) => item.projectId === result.projectA
+    && item.teachingUnitId === result.seniorA.id)!
+  data.recurringLessons.push({ id: 'occurrence-lesson', seriesId: 'occurrence-lesson',
+    projectId: result.projectA, timetableId: 'teacher-a', teachingUnitId: senior.id,
+    subjectId: subject.id, classId: schoolClass.id, day: 1, periodId: senior.periods[0].id,
+    weekPattern: 'A', effectiveStart: senior.startDate })
+  if (options.blocker) data.recurringLessons.push({ id: 'occurrence-blocker', seriesId: 'occurrence-blocker',
+    projectId: result.projectA, timetableId: 'teacher-a', teachingUnitId: senior.id,
+    subjectId: subject.id, classId: schoolClass.id, day: 1, periodId: senior.periods[1].id,
+    weekPattern: 'every', effectiveStart: senior.startDate })
+  if (options.cancelled) data.overrides.push({ id: 'existing-cancel', projectId: result.projectA,
+    timetableId: 'teacher-a', teachingUnitId: senior.id, date: mondayKey, periodId: senior.periods[0].id,
+    action: 'cancel', originalLessonId: 'occurrence-lesson', origin: 'user',
+    ...(options.grouped && { groupId: 'unsupported-group' }) })
+  if (options.oneOff) data.oneOffLessons.push({ id: 'occupying-one-off', projectId: result.projectA,
+    timetableId: 'teacher-a', teachingUnitId: senior.id, subjectId: subject.id, classId: schoolClass.id,
+    date: mondayKey, purpose: 'extra', time: { mode: 'period', periodId: senior.periods[0].id } })
+  return { ...result, data, monday, mondayKey, nextMondayKey: toDateKey(addDays(monday, 7)),
+    senior, subject, schoolClass }
 }
 
 async function mount() {
@@ -497,7 +531,7 @@ describe('formal V9 management composition', () => {
     expect(revision()).toBe(createRevision + 1)
 
     fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
-    expect(screen.queryByRole('navigation', { name: '課程編輯範圍' })).toBeNull()
+    expect(screen.getByRole('navigation', { name: '課程編輯範圍' })).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: 'V9-202' } })
     fireEvent.click(screen.getByRole('button', { name: '儲存' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
@@ -516,6 +550,150 @@ describe('formal V9 management composition', () => {
     expect(stored().subjects.filter((item) => item.timetableId === 'teacher-b')).toEqual(otherTeacherSubjects)
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(originalV7)
     expect(useAppDataV4).not.toHaveBeenCalled()
+  })
+
+  it('cancels one occurrence through the Fresh V9 Host and keeps other dates unchanged after remount', async () => {
+    const f = occurrenceFixture()
+    await initializeFresh(f.data)
+    const view = await mount()
+    fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
+    expect(screen.queryByLabelText('異動日期')).toBeNull()
+    expect(screen.queryByRole('button', { name: /從指定日期起/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    expect((screen.getByLabelText('異動日期') as HTMLInputElement).value).toBe(f.mondayKey)
+    expect([...screen.getByLabelText<HTMLSelectElement>('課程異動類型').options]
+      .map((option) => option.value)).toEqual(['cancel', 'move', 'replace'])
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(stored().overrides).toMatchObject([{ action: 'cancel', date: f.mondayKey,
+      originalLessonId: 'occurrence-lesson' }])
+    expect(resolveV9Day(stored(), { projectId: f.projectA, timetableId: 'teacher-a',
+      teachingUnitId: f.senior.id }, fromDateKey(f.mondayKey))[0]).toMatchObject({ status: 'cancelled' })
+    expect(resolveV9Day(stored(), { projectId: f.projectA, timetableId: 'teacher-a',
+      teachingUnitId: f.senior.id }, addDays(f.monday, 14))[0]).toMatchObject({ status: 'regular' })
+    expect(screen.getByText('已取消')).toBeTruthy()
+    view.unmount()
+    await mount()
+    expect(screen.getByText('已取消')).toBeTruthy()
+  })
+
+  it('modifies a cancelled occurrence into same-day and cross-A/B moves, then revokes it from the moved target', async () => {
+    const f = occurrenceFixture({ cancelled: true })
+    await initializeFresh(f.data)
+    await mount()
+    fireEvent.click(screen.getByText('已取消').closest('button')!)
+    fireEvent.click(screen.getByRole('button', { name: '修改此異動' }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'move' } })
+    fireEvent.change(screen.getByLabelText('移至節次'), { target: { value: String(f.senior.periods[1].id) } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    const sameDayId = stored().overrides[0].id
+    expect(stored().overrides).toMatchObject([{ action: 'move', date: f.mondayKey,
+      target: { date: f.mondayKey, periodId: f.senior.periods[1].id } }])
+    expect(screen.getByText('已調離')).toBeTruthy()
+    expect(screen.getByText('調入')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('調入').closest('button')!)
+    expect(screen.getByText(new RegExp(`^${f.mondayKey} →`))).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '修改此異動' }))
+    expect((screen.getByLabelText('異動日期') as HTMLInputElement).value).toBe(f.mondayKey)
+    fireEvent.change(screen.getByLabelText('移至日期'), { target: { value: f.nextMondayKey } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(stored().overrides).toHaveLength(1)
+    expect(stored().overrides[0]).toMatchObject({ action: 'move', date: f.mondayKey,
+      target: { date: f.nextMondayKey, periodId: f.senior.periods[1].id } })
+    expect(stored().overrides[0].id).not.toBe(sameDayId)
+    expect(resolveV9Day(stored(), { projectId: f.projectA, timetableId: 'teacher-a',
+      teachingUnitId: f.senior.id }, fromDateKey(f.nextMondayKey))).toMatchObject([
+      { id: 'occurrence-lesson', movementRole: 'target' }])
+
+    fireEvent.click(screen.getByText('已調離').closest('button')!)
+    expect(screen.getAllByText('單日移動').length).toBeGreaterThanOrEqual(1)
+    fireEvent.click(screen.getByRole('button', { name: '撤銷異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(stored().overrides).toEqual([])
+    expect(resolveV9Day(stored(), { projectId: f.projectA, timetableId: 'teacher-a',
+      teachingUnitId: f.senior.id }, fromDateKey(f.mondayKey))).toMatchObject([
+      { id: 'occurrence-lesson', status: 'regular' }])
+  })
+
+  it('creates a replacement and atomically modifies that existing override without residue', async () => {
+    const f = occurrenceFixture()
+    await initializeFresh(f.data)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'replace' } })
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '代課教室' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    const replacementId = stored().overrides[0].id
+    expect(stored().overrides).toMatchObject([{ action: 'replace', replacement: { room: '代課教室' } }])
+    fireEvent.click(screen.getByText('已替換').closest('button')!)
+    fireEvent.click(screen.getByRole('button', { name: '修改此異動' }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'cancel' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(stored().overrides).toHaveLength(1)
+    expect(stored().overrides[0]).toMatchObject({ action: 'cancel', date: f.mondayKey })
+    expect(stored().overrides[0].id).not.toBe(replacementId)
+  })
+
+  it('rejects cross-term and unconfirmed conflicts, but persists an explicitly confirmed conflict label', async () => {
+    const f = occurrenceFixture({ blocker: true })
+    await initializeFresh(f.data)
+    await mount()
+    fireEvent.click(screen.getAllByRole('button', { name: /編輯 甲專用・甲班/ })[0])
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'move' } })
+    fireEvent.change(screen.getByLabelText('移至日期'), { target: { value: toDateKey(addDays(f.monday, 100)) } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(screen.queryByLabelText('異動預覽')).toBeNull()
+    expect(stored().overrides).toEqual([])
+
+    fireEvent.change(screen.getByLabelText('移至日期'), { target: { value: f.mondayKey } })
+    fireEvent.change(screen.getByLabelText('移至節次'), { target: { value: String(f.senior.periods[1].id) } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(screen.queryByLabelText('異動預覽')).toBeNull()
+    expect(stored().overrides).toEqual([])
+    fireEvent.click(screen.getByLabelText('目標已有課程時仍保留雙方並顯示衝堂警告'))
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(stored().overrides).toMatchObject([{ action: 'move', target: { date: f.mondayKey,
+      periodId: f.senior.periods[1].id } }])
+    expect(screen.getByText('已調離')).toBeTruthy()
+    expect(screen.getByText('調入')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect(screen.getAllByText('衝堂').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText(/堂課涉及時間衝突/)).toBeTruthy()
+  })
+
+  it('keeps a conflicting revoke and grouped override fail-closed in Formal UI', async () => {
+    const f = occurrenceFixture({ cancelled: true, oneOff: true })
+    await initializeFresh(f.data)
+    const view = await mount()
+    fireEvent.click(screen.getByText('已取消').closest('button')!)
+    fireEvent.click(screen.getByRole('button', { name: '撤銷異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(stored().overrides).toMatchObject([{ id: 'existing-cancel' }]))
+    expect(screen.getByRole('dialog', { name: '編輯課程' })).toBeTruthy()
+
+    view.unmount()
+    localStorage.clear()
+    const grouped = occurrenceFixture({ cancelled: true, grouped: true })
+    await initializeFresh(grouped.data)
+    await mount()
+    fireEvent.click(screen.getByText('已取消').closest('button')!)
+    expect(screen.queryByRole('button', { name: '修改此異動' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '撤銷異動' })).toBeNull()
   })
 
   it('keeps a Fresh V9 lesson draft while confirmed Subject and Class resources become live', async () => {
