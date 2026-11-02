@@ -4,7 +4,7 @@ import { fingerprintV7Raw } from './activationV8'
 import { activateTimetableSubjectsV9 } from './activateSubjectV9'
 import { APP_DATA_V8_KEY, createEmptyAppDataV8 } from './storageV8'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_AUTO_BACKUP_LIMIT, V9_AUTO_BACKUP_PREFIX,
-  checkV9WriteEvidence, persistAppDataV9 } from './storageV9'
+  checkV9WriteEvidence, persistAppDataV9, type V9HighRiskOperation } from './storageV9'
 import type { AppDataV9 } from '../types/v9'
 import { inspectFormalRuntime } from '../formalRuntime'
 import type { FormalV9HostPort } from '../formalRuntime'
@@ -75,7 +75,7 @@ async function lessonReady() {
   await persistAppDataV9(base.storage, base.document, document, base.expected())
   let current = document
   const write = async (produce: (value: AppDataV9) => AppDataV9,
-    operation?: 'delete-recurring-lesson' | 'permanently-update-lesson') => {
+    operation?: V9HighRiskOperation) => {
     const next = produce(current)
     const receipt = await persistAppDataV9(base.storage, current, next, base.expected(), operation)
     current = next
@@ -85,7 +85,7 @@ async function lessonReady() {
     status: 'active' as const, writable: true, pending: false, receipt: null, errorCode: null,
     update: (produce: (value: AppDataV9) => AppDataV9) => write(produce),
     updateHighRisk: (produce: (value: AppDataV9) => AppDataV9,
-      operation: 'delete-recurring-lesson' | 'permanently-update-lesson') => write(produce, operation),
+      operation: V9HighRiskOperation) => write(produce, operation),
   } satisfies FormalV9HostPort
   return { ...base, scope, draft, host }
 }

@@ -5,6 +5,8 @@ import { archiveProjectV9, configureProjectTermV9, copyProjectV9, createEmptyPro
 import { createTeacherTimetableV9, deleteTeacherTimetableV9, duplicateTeacherTimetableV9,
   getTeacherTimetableV9Impact, updateTeacherTimetableV9 } from './data/teacherSubjectsV9'
 import type { TimetableV8Details } from './data/timetablesV8'
+import { fingerprintV7Raw } from './data/activationV8'
+import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './data/storageV9'
 import { isCompatibleAppDataV9 } from './data/validators/v9'
 import type { FormalV9HostPort } from './formalRuntime'
 import type { AppDataV9 } from './types/v9'
@@ -15,7 +17,7 @@ export type FormalProjectTimetableV9Selection = {
 }
 
 export type FormalProjectTimetableV9ErrorCode = 'not-writable' | 'duplicate-submit'
-  | 'stale-document' | 'scope-mismatch' | 'invalid-result' | 'receipt-mismatch'
+  | 'stale-document' | 'scope-mismatch' | 'invalid-result' | 'receipt-mismatch' | 'backup-required'
 
 export class FormalProjectTimetableV9Error extends Error {
   constructor(readonly code: FormalProjectTimetableV9ErrorCode, message: string) {
@@ -125,28 +127,45 @@ export function createFormalProjectTimetableV9Controller(host: FormalV9HostPort,
     return timetable
   }
   const commit = async (produce: (current: AppDataV9) => AppDataV9,
-    choose: (next: AppDataV9) => FormalProjectTimetableV9Selection): Promise<FormalProjectTimetableV9Result> => {
+    choose: (next: AppDataV9) => FormalProjectTimetableV9Selection,
+    highRiskOperation?: V9HighRiskOperation): Promise<FormalProjectTimetableV9Result> => {
     if (submitting || host.pending) fail('duplicate-submit', 'A V9 write is already in progress.')
     if (host.status !== 'active' || !host.writable) fail('not-writable', 'V9 Host is read-only.')
     assertSelection()
     if (host.revision !== initialRevision) fail('stale-document', 'V9 revision changed before submission.')
+    if (highRiskOperation && !host.updateHighRisk) {
+      fail('backup-required', 'V9 Host has no verified pre-mutation backup capability.')
+    }
     let nextDocument: AppDataV9 | null = null
     submitting = true
     try {
-      const receipt = await host.update((current) => {
+      const produceChecked = (current: AppDataV9) => {
         assertSelection()
         if (JSON.stringify(current) !== initialRaw) fail('stale-document', 'V9 document changed before submission.')
         const next = produce(current)
         if (!isCompatibleAppDataV9(next)) fail('invalid-result', 'V9 operation produced an invalid document.')
         nextDocument = next
         return next
-      })
+      }
+      const receipt = highRiskOperation
+        ? await host.updateHighRisk!(produceChecked, highRiskOperation)
+        : await host.update(produceChecked)
       assertSelection()
       const confirmed = nextDocument as AppDataV9 | null
       if (!confirmed || receipt.raw !== JSON.stringify(confirmed)
         || receipt.revision !== initialRevision + 1 || !receipt.attemptId) {
         throw new FormalProjectTimetableV9Error('receipt-mismatch',
           'V9 Host receipt does not confirm the submitted document.')
+      }
+      if (highRiskOperation) {
+        const backup = receipt.preMutationBackup
+        if (!backup || backup.operation !== highRiskOperation || backup.revision !== initialRevision
+          || backup.rawDocument !== initialRaw || !receipt.mutationAttemptId
+          || backup.mutationAttemptId !== receipt.mutationAttemptId
+          || backup.key !== `${V9_AUTO_BACKUP_PREFIX}${receipt.mutationAttemptId}`
+          || backup.digest !== await fingerprintV7Raw(initialRaw)) {
+          fail('receipt-mismatch', 'V9 Host did not confirm this operation pre-mutation backup.')
+        }
       }
       return { document: confirmed, receipt, selection: choose(confirmed) }
     } finally {
@@ -160,6 +179,7 @@ export function createFormalProjectTimetableV9Controller(host: FormalV9HostPort,
     projects: listFormalProjectsV9(initial),
     timetables: initialSelection.projectId ? listFormalTimetablesV9(initial, initialSelection.projectId) : [],
     capabilities: FORMAL_PROJECT_V9_CAPABILITIES,
+    exportExactJson: () => initialRaw,
     selectProject: (projectId: string) => selectFormalProjectV9(initial, projectId),
     selectTimetable: (selection: FormalProjectTimetableV9Selection, timetableId: string) =>
       selectFormalTimetableV9(initial, selection, timetableId),
@@ -197,7 +217,7 @@ export function createFormalProjectTimetableV9Controller(host: FormalV9HostPort,
       requireProject(initial, projectId)
       if (confirmed !== true) fail('scope-mismatch', 'Project deletion requires confirmation.')
       return commit((current) => deleteEmptyProjectV9(current, projectId, true),
-        (next) => reconcileFormalProjectTimetableV9Selection(next, initialSelection))
+        (next) => reconcileFormalProjectTimetableV9Selection(next, initialSelection), 'delete-project')
     },
     createTimetable: (projectId: string, details: TimetableV8Details) => {
       requireProject(initial, projectId, true)
@@ -228,7 +248,7 @@ export function createFormalProjectTimetableV9Controller(host: FormalV9HostPort,
       requireTimetable(initial, projectId, timetableId)
       if (confirmed !== true) fail('scope-mismatch', 'Timetable deletion requires confirmation.')
       return commit((current) => deleteTeacherTimetableV9(current, projectId, timetableId),
-        (next) => reconcileFormalProjectTimetableV9Selection(next, { projectId }))
+        (next) => reconcileFormalProjectTimetableV9Selection(next, { projectId }), 'delete-timetable')
     },
   }
 }

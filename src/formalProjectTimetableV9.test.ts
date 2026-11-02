@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createBlankProjectV9, createTeacherSubjectV9, createTeacherTimetableV9 } from './data/teacherSubjectsV9'
 import { createEmptyProjectV9 } from './data/managementV9'
 import { createEmptyAppDataV8 } from './data/storageV8'
+import { fingerprintV7Raw } from './data/activationV8'
+import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './data/storageV9'
 import type { FormalV9HostPort } from './formalRuntime'
 import { FORMAL_PROJECT_V9_CAPABILITIES, FormalProjectTimetableV9Error,
   createFormalProjectTimetableV9Controller } from './formalProjectTimetableV9'
@@ -20,29 +22,50 @@ function hostFixture(initial: AppDataV9, options: {
   currentForUpdate?: AppDataV9
   receiptRevisionOffset?: number
   receiptRawMismatch?: boolean
+  backupReceiptMismatch?: boolean
+  rejectHighRisk?: Error
+  withoutHighRisk?: boolean
   hold?: boolean
 } = {}) {
   let document = initial
   let revision = 0
   let release: (() => void) | null = null
-  const update = vi.fn(async (produce: (current: AppDataV9) => AppDataV9) => {
+  const apply = async (produce: (current: AppDataV9) => AppDataV9,
+    operation?: V9HighRiskOperation) => {
     if (options.reject) throw options.reject
-    const next = produce(options.currentForUpdate ?? document)
+    if (operation && options.rejectHighRisk) throw options.rejectHighRisk
+    const current = options.currentForUpdate ?? document
+    const beforeRaw = JSON.stringify(current)
+    const next = produce(current)
     if (options.hold) await new Promise<void>((resolve) => { release = resolve })
     const receipt = { raw: options.receiptRawMismatch ? '{}' : JSON.stringify(next),
-      revision: revision + 1 + (options.receiptRevisionOffset ?? 0), attemptId: 'stage-1a' }
-    if (!options.receiptRevisionOffset && !options.receiptRawMismatch) {
+      revision: revision + 1 + (options.receiptRevisionOffset ?? 0), attemptId: 'stage-1a',
+      ...(operation ? {
+        mutationAttemptId: '00000000-0000-4000-8000-000000000001',
+        preMutationBackup: {
+          key: `${V9_AUTO_BACKUP_PREFIX}00000000-0000-4000-8000-000000000001`,
+          mutationAttemptId: '00000000-0000-4000-8000-000000000001',
+          operation: options.backupReceiptMismatch ? 'delete-recurring-lesson' as const : operation,
+          revision, digest: await fingerprintV7Raw(beforeRaw), rawDocument: beforeRaw,
+        },
+      } : {}),
+    }
+    if (!options.receiptRevisionOffset && !options.receiptRawMismatch && !options.backupReceiptMismatch) {
       document = next
       revision += 1
     }
     return receipt
-  })
+  }
+  const update = vi.fn((produce: (current: AppDataV9) => AppDataV9) => apply(produce))
+  const updateHighRisk = vi.fn((produce: (current: AppDataV9) => AppDataV9,
+    operation: V9HighRiskOperation) => apply(produce, operation))
   const host = {
     get document() { return document }, status: options.status ?? 'active',
     writable: options.writable ?? true, pending: options.pending ?? false, receipt: null,
     get revision() { return revision }, errorCode: null, update,
+    ...(!options.withoutHighRisk ? { updateHighRisk } : {}),
   } satisfies FormalV9HostPort
-  return { host, update, document: () => document, revision: () => revision,
+  return { host, update, updateHighRisk, document: () => document, revision: () => revision,
     release: () => { const complete = release as (() => void) | null; complete?.() } }
 }
 
@@ -185,8 +208,59 @@ describe('formal V9 Project and Timetable controller', () => {
     expect(copied.document.events).toEqual([])
 
     controller = createFormalProjectTimetableV9Controller(fixture.host, idFactory('unused'))
+    const beforeDeleteRaw = JSON.stringify(fixture.document())
+    const beforeDeleteRevision = fixture.revision()
     const deleted = await controller.deleteTimetable('project-a', 'table-copy', true)
     expect(deleted.document.timetables.some((item) => item.id === 'table-copy')).toBe(false)
+    expect(fixture.updateHighRisk).toHaveBeenLastCalledWith(expect.any(Function), 'delete-timetable')
+    expect(deleted.receipt.preMutationBackup).toMatchObject({ operation: 'delete-timetable',
+      revision: beforeDeleteRevision, rawDocument: beforeDeleteRaw })
+  })
+
+  it('backs up an exact empty Project document before permanent deletion', async () => {
+    const data = createEmptyProjectV9(empty(), { name: 'Temporary' }, 'project-a')
+    const fixture = hostFixture(data)
+    const beforeRaw = JSON.stringify(data)
+    const result = await createFormalProjectTimetableV9Controller(fixture.host, idFactory('unused'))
+      .deleteProject('project-a', true)
+    expect(result.document.projects).toEqual([])
+    expect(fixture.updateHighRisk).toHaveBeenCalledWith(expect.any(Function), 'delete-project')
+    expect(result.receipt.preMutationBackup).toMatchObject({ operation: 'delete-project', revision: 0,
+      rawDocument: beforeRaw })
+  })
+
+  it('blocks destructive writes when backup is unavailable, rejected or mismatched', async () => {
+    const data = createEmptyProjectV9(empty(), { name: 'Temporary' }, 'project-a')
+    const unavailable = hostFixture(data, { withoutHighRisk: true })
+    await expect(createFormalProjectTimetableV9Controller(unavailable.host, idFactory('unused'))
+      .deleteProject('project-a', true)).rejects.toMatchObject({ code: 'backup-required' })
+    expect(unavailable.document()).toEqual(data)
+
+    const rejected = hostFixture(data, { rejectHighRisk: new Error('backup-failed') })
+    await expect(createFormalProjectTimetableV9Controller(rejected.host, idFactory('unused'))
+      .deleteProject('project-a', true)).rejects.toThrow('backup-failed')
+    expect(rejected.document()).toEqual(data)
+
+    const mismatch = hostFixture(data, { backupReceiptMismatch: true })
+    await expect(createFormalProjectTimetableV9Controller(mismatch.host, idFactory('unused'))
+      .deleteProject('project-a', true)).rejects.toMatchObject({ code: 'receipt-mismatch' })
+    expect(mismatch.document()).toEqual(data)
+  })
+
+  it('exports the exact full V9 document without writing or changing selection', () => {
+    const f = twoProjectFixture()
+    const fixture = hostFixture(f.data)
+    const controller = createFormalProjectTimetableV9Controller(fixture.host, idFactory('unused'),
+      { projectId: f.projectB, timetableId: f.timetableB })
+    const selected = vi.fn()
+    const actions = createFormalProjectTimetableV9Actions(controller, selected)
+    expect(actions.exportExactJson()).toBe(JSON.stringify(f.data))
+    expect(JSON.parse(actions.exportExactJson())).toEqual(f.data)
+    expect(actions.selection).toEqual({ projectId: f.projectB, timetableId: f.timetableB })
+    expect(fixture.revision()).toBe(0)
+    expect(fixture.update).not.toHaveBeenCalled()
+    expect(fixture.updateHighRisk).not.toHaveBeenCalled()
+    expect(selected).not.toHaveBeenCalled()
   })
 
   it('keeps teacher ownership isolated and rejects a Timetable from another Project before Host update', async () => {

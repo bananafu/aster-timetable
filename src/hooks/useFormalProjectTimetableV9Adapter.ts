@@ -24,6 +24,7 @@ export function createFormalProjectTimetableV9Actions(controller: FormalV9Contro
   }
   return {
     selection: controller.selection,
+    exportExactJson: () => controller.exportExactJson(),
     selectProject: (projectId: string) => select(controller.selectProject(projectId)),
     selectTimetable: (timetableId: string) => select(controller.selectTimetable(controller.selection, timetableId)),
     project: {
@@ -76,6 +77,7 @@ export function useFormalProjectTimetableV9Adapter() {
     get revision() { return snapshotRef.current.revision },
     get errorCode() { return snapshotRef.current.errorCode },
     update: (produce: Parameters<FormalV9HostPort['update']>[0]) => snapshotRef.current.update(produce),
+    get updateHighRisk() { return snapshotRef.current.updateHighRisk },
   }), [])
   const controller = useMemo(() => host.data ? createFormalProjectTimetableV9Controller(
     port, uid, selection, () => selectionRef.current,

@@ -2,9 +2,12 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { V8PreviewApp } from './V8PreviewApp'
+import { bootstrapEmptyV8 } from './data/bootstrapV8'
+import { V8_BOOTSTRAP_KEY, fingerprintV7Raw } from './data/activationV8'
+import { createBlankProject } from './data/projectRuntimeV8'
 import { APP_DATA_V7_KEY } from './data/storageV7'
-import { APP_DATA_V8_KEY } from './data/storageV8'
-import { V8_BOOTSTRAP_KEY } from './data/activationV8'
+import { APP_DATA_V8_KEY, createEmptyAppDataV8, persistAppDataV8 } from './data/storageV8'
+import { createTeacherTimetableV8 } from './data/timetablesV8'
 
 beforeEach(() => {
   localStorage.clear()
@@ -14,8 +17,33 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks() })
 
+async function seedProjectWithTimetable() {
+  const bootstrap = await bootstrapEmptyV8(localStorage, { attemptId: 'preview-seed' })
+  if (!bootstrap.ok) throw new Error(bootstrap.code)
+  const initial = createEmptyAppDataV8()
+  let serial = 0
+  let data = createBlankProject(initial, { name: '新學期', academicYear: 116, semester: 'first',
+    startDate: '2027-08-01', endDate: '2028-01-31' }, () => `preview-${++serial}`)
+  data = createTeacherTimetableV8(data, data.activeProjectId!,
+    { name: '甲課表', teacherName: '王老師' }, 'teacher-a')
+  const saved = persistAppDataV8(localStorage, initial, data,
+    { raw: bootstrap.receipt.raw, legacyGuardRaw: null, revision: 0 }, 0)
+  const metadata = JSON.parse(localStorage.getItem(V8_BOOTSTRAP_KEY)!)
+  localStorage.setItem(V8_BOOTSTRAP_KEY, JSON.stringify({ ...metadata,
+    currentDigest: await fingerprintV7Raw(saved.raw), documentRevision: saved.revision }))
+  return { stored: data, originalTimetableId: 'teacher-a' }
+}
+
+async function expectConfirmedProjectSwitch(projectId: string, previousRevision: number) {
+  await waitFor(() => {
+    expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).activeProjectId).toBe(projectId)
+    expect(JSON.parse(localStorage.getItem(V8_BOOTSTRAP_KEY)!).documentRevision).toBe(previousRevision + 1)
+    expect((screen.getByRole('button', { name: '切換專案' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+}
+
 describe('V8 browser preview shell', () => {
-  it('requires explicit bootstrap and then supports a persisted blank Project', async () => {
+  it('requires explicit bootstrap and persists blank Project and Timetable management', async () => {
     const { unmount } = render(<V8PreviewApp onReturn={vi.fn()} />)
     expect(screen.getByText('建立空白 V8 工作空間')).toBeTruthy()
     expect(localStorage.getItem(APP_DATA_V8_KEY)).toBeNull()
@@ -72,11 +100,17 @@ describe('V8 browser preview shell', () => {
     fireEvent.click(screen.getByText('刪除教師課表'))
     await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).timetables).toHaveLength(1))
     unmount()
-    const reloaded = render(<V8PreviewApp onReturn={vi.fn()} />)
+    render(<V8PreviewApp onReturn={vi.fn()} />)
     expect(screen.getAllByText('目前教師課表：甲課表・王老師')).toHaveLength(2)
     fireEvent.click(screen.getByRole('button', { name: '教師課表' }))
     expect((screen.getByLabelText('目前選取的教師課表') as HTMLSelectElement).value).toBe(
       JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).timetables[0].id)
+  })
+
+  it('persists School and TeachingUnit settings', async () => {
+    await seedProjectWithTimetable()
+    render(<V8PreviewApp onReturn={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '教師課表' }))
     fireEvent.click(screen.getByLabelText('關閉對話框'))
     fireEvent.click(screen.getByRole('button', { name: '設定' }))
     await waitFor(() => expect((screen.getByText('編輯任教單位') as HTMLButtonElement).disabled).toBe(false))
@@ -102,7 +136,11 @@ describe('V8 browser preview shell', () => {
     fireEvent.click(screen.getByText('儲存設定'))
     await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).teachingUnits).toHaveLength(2))
     expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).teachingUnits[1].weekCycle.anchorPattern).toBe('B')
-    fireEvent.click(screen.getByLabelText('關閉對話框'))
+  })
+
+  it('isolates resources across teachers, Projects and remount', async () => {
+    const { stored, originalTimetableId } = await seedProjectWithTimetable()
+    const reloaded = render(<V8PreviewApp onReturn={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
     fireEvent.click(screen.getByText('進階資料管理：原始匯出與教師科目庫轉換'))
     expect(screen.getByLabelText('教師科目庫版本說明').textContent).toContain('目前教師課表：甲課表')
@@ -158,16 +196,18 @@ describe('V8 browser preview shell', () => {
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBeNull()
     fireEvent.click(screen.getByLabelText('關閉對話框'))
     fireEvent.click(screen.getByRole('button', { name: '切換專案' }))
+    const beforeProjectASwitch = JSON.parse(localStorage.getItem(V8_BOOTSTRAP_KEY)!).documentRevision
     fireEvent.click(screen.getByRole('menuitemradio', { name: /新學期/ }))
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).activeProjectId).toBe(stored.activeProjectId))
+    await expectConfirmedProjectSwitch(stored.activeProjectId!, beforeProjectASwitch)
     fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
     fireEvent.click(screen.getByRole('button', { name: '開啟科目與班級管理' }))
     expect(within(screen.getByLabelText('目前專案科目庫')).getByText('數學')).toBeTruthy()
     fireEvent.click(screen.getByLabelText('關閉對話框'))
     const projectBId = JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).projects[1].id
     fireEvent.click(screen.getByRole('button', { name: '切換專案' }))
+    const beforeProjectBSwitch = JSON.parse(localStorage.getItem(V8_BOOTSTRAP_KEY)!).documentRevision
     fireEvent.click(screen.getByRole('menuitemradio', { name: /另一專案/ }))
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).activeProjectId).toBe(projectBId))
+    await expectConfirmedProjectSwitch(projectBId, beforeProjectBSwitch)
     reloaded.unmount()
     render(<V8PreviewApp onReturn={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))

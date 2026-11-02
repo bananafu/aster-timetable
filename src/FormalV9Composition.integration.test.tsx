@@ -91,6 +91,34 @@ function fixture() {
   return { data: switchActiveProjectV9(data, projectA), projectA, projectB, seniorA, seniorB }
 }
 
+function freshLessonDraftFixture(configureMath = false) {
+  const result = fixture()
+  const retainedSubjects = result.data.subjects.filter((item) => item.timetableId !== 'teacher-a')
+  const retainedSubjectIds = new Set(retainedSubjects.map((item) => item.id))
+  let data = {
+    ...result.data,
+    subjects: retainedSubjects,
+    teachingUnitSubjects: result.data.teachingUnitSubjects.filter((item) => retainedSubjectIds.has(item.subjectId)),
+    classes: result.data.classes.filter((item) => item.projectId !== result.projectA
+      || item.teachingUnitId !== result.seniorA.id),
+  }
+  data = createTeacherSubjectV9(data, result.projectA, 'teacher-a', {
+    name: '國中限定', shortName: '國限', color: '#A66D52', applicableSchoolLevels: ['junior-high'],
+  }, 'junior-only')
+  data = configureTeacherSubjectV9(data, result.projectA, 'teacher-a', 'junior-a',
+    'junior-only', 'junior-only-relation')
+  data = createTeacherSubjectV9(data, result.projectA, 'teacher-a', {
+    name: '數學', shortName: '數', color: '#647C88', applicableSchoolLevels: ['senior-high'],
+  }, 'unconfigured-math')
+  if (configureMath) data = configureTeacherSubjectV9(data, result.projectA, 'teacher-a', result.seniorA.id,
+    'unconfigured-math', 'configured-math-relation')
+  const currentMonday = toDateKey(startOfWeek(new Date()))
+  data = { ...data, teachingUnits: data.teachingUnits.map((item) => item.id === result.seniorA.id
+    ? { ...item, weekCycle: { enabled: true, anchorDate: currentMonday, anchorPattern: 'B' as const } }
+    : item) }
+  return { ...result, data }
+}
+
 function readableFixture() {
   const result = fixture()
   let data = structuredClone(result.data)
@@ -696,27 +724,10 @@ describe('formal V9 management composition', () => {
     expect(screen.queryByRole('button', { name: '撤銷異動' })).toBeNull()
   })
 
-  it('keeps a Fresh V9 lesson draft while confirmed Subject and Class resources become live', async () => {
-    const f = fixture()
-    const retainedSubjects = f.data.subjects.filter((item) => item.timetableId !== 'teacher-a')
-    const retainedSubjectIds = new Set(retainedSubjects.map((item) => item.id))
-    let data = {
-      ...f.data,
-      subjects: retainedSubjects,
-      teachingUnitSubjects: f.data.teachingUnitSubjects.filter((item) => retainedSubjectIds.has(item.subjectId)),
-      classes: f.data.classes.filter((item) => item.projectId !== f.projectA
-        || item.teachingUnitId !== f.seniorA.id),
-    }
-    data = createTeacherSubjectV9(data, f.projectA, 'teacher-a', {
-      name: '國中限定', shortName: '國限', color: '#A66D52', applicableSchoolLevels: ['junior-high'],
-    }, 'junior-only')
-    data = configureTeacherSubjectV9(data, f.projectA, 'teacher-a', 'junior-a',
-      'junior-only', 'junior-only-relation')
-    data = createTeacherSubjectV9(data, f.projectA, 'teacher-a', {
-      name: '數學', shortName: '數', color: '#647C88', applicableSchoolLevels: ['senior-high'],
-    }, 'unconfigured-math')
-    await initializeFresh(data)
-    const view = await mount()
+  it('keeps a Fresh V9 lesson draft while confirmed Subject resources become live', async () => {
+    const f = freshLessonDraftFixture()
+    await initializeFresh(f.data)
+    await mount()
 
     fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
     fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
@@ -754,9 +765,25 @@ describe('formal V9 management composition', () => {
     expect(stored().teachingUnitSubjects.some((item) => item.subjectId === custom.id)).toBe(false)
     fireEvent.click(within(manager).getByRole('button', { name: '關閉對話框' }))
     expect((screen.getByRole('combobox', { name: '課程科目' }) as HTMLInputElement).value).toBe('數學')
+  })
+
+  it('keeps a Fresh V9 lesson draft while confirmed Class resources persist across remount', async () => {
+    const f = freshLessonDraftFixture(true)
+    await initializeFresh(f.data)
+    const view = await mount()
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
+    fireEvent.change(screen.getByLabelText('課程星期'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('課程節次'), { target: { value: String(f.seniorA.periods[1].id) } })
+    fireEvent.change(screen.getByLabelText('課程輪週'), { target: { value: 'B' } })
+    fireEvent.change(screen.getByPlaceholderText('依班級預設'), { target: { value: '保留草稿教室' } })
+    fireEvent.focus(screen.getByRole('combobox', { name: '課程科目' }))
+    fireEvent.click(screen.getByRole('option', { name: /數學/ }))
+    expect((screen.getByRole('combobox', { name: '課程科目' }) as HTMLInputElement).value).toBe('數學')
 
     fireEvent.click(screen.getByRole('button', { name: '管理班級' }))
-    manager = screen.getByRole('dialog', { name: '管理班級' })
+    let manager = screen.getByRole('dialog', { name: '管理班級' })
     fireEvent.change(within(manager).getByLabelText('目前學制'), { target: { value: 'junior-a' } })
     fireEvent.click(within(manager).getByRole('button', { name: '＋ 新增班級' }))
     let classForm = within(manager).getByRole('form', { name: '新增班級表單' })
@@ -782,16 +809,22 @@ describe('formal V9 management composition', () => {
     const beforeLessonRevision = revision()
     fireEvent.click(screen.getByRole('button', { name: '儲存' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '新增固定課程' })).toBeNull())
-    expect(stored().recurringLessons).toContainEqual(expect.objectContaining({
+    const persisted = stored()
+    const persistedClass = persisted.classes.find((item) => item.projectId === f.projectA
+      && item.teachingUnitId === f.seniorA.id)!
+    const persistedLesson = persisted.recurringLessons.find((item) => item.subjectId === 'unconfigured-math')!
+    expect(persistedLesson).toMatchObject({
       projectId: f.projectA, timetableId: 'teacher-a', teachingUnitId: f.seniorA.id,
       subjectId: 'unconfigured-math', day: 3, periodId: f.seniorA.periods[1].id,
-      weekPattern: 'B', room: '保留草稿教室',
-    }))
+      classId: persistedClass.id, weekPattern: 'B', room: '保留草稿教室',
+    })
+    expect(persisted.recurringLessons.filter((item) => item.id === persistedLesson.id)).toHaveLength(1)
     expect(revision()).toBe(beforeLessonRevision + 1)
 
     view.unmount()
     await mount()
     expect(screen.getByRole('button', { name: /編輯 數學・101/ })).toBeTruthy()
+    expect(stored().recurringLessons.filter((item) => item.id === persistedLesson.id)).toEqual([persistedLesson])
     expect(useAppDataV4).not.toHaveBeenCalled()
   })
 
@@ -1014,6 +1047,8 @@ describe('formal V9 management composition', () => {
     expect(copy.projectId).toBe(f.projectA)
     expect(stored().subjects).toEqual(subjects)
     expect(stored().recurringLessons).toEqual([])
+    const beforeDeleteRaw = localStorage.getItem(APP_DATA_V9_KEY)
+    const beforeDeleteRevision = JSON.parse(localStorage.getItem(V9_ACTIVATION_KEY)!).documentRevision
     fireEvent.click(screen.getByRole('button', { name: '編輯課表資訊' }))
     fireEvent.click(screen.getByRole('button', { name: '刪除課表' }))
     fireEvent.click(screen.getByRole('button', { name: '確認刪除「甲課表（副本）」' }))
@@ -1021,6 +1056,10 @@ describe('formal V9 management composition', () => {
     expect(stored().timetables.some((item) => item.id === copy.id)).toBe(false)
     expect(stored().timetables.some((item) => item.id === 'teacher-a')).toBe(true)
     expect(stored().subjects).toEqual(subjects)
+    const backups = autoBackupKeys()
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(backups[0])!)).toMatchObject({ operation: 'delete-timetable',
+      revision: beforeDeleteRevision, rawDocument: beforeDeleteRaw })
     expect(screen.getByText('已刪除並儲存課表。')).toBeTruthy()
   })
 
@@ -1072,6 +1111,8 @@ describe('formal V9 management composition', () => {
     const f = fixture()
     await activate(createEmptyProjectV9(f.data, { name: '可刪空白' }, 'empty-delete'))
     await mount()
+    const beforeDeleteRaw = localStorage.getItem(APP_DATA_V9_KEY)
+    const beforeDeleteRevision = JSON.parse(localStorage.getItem(V9_ACTIVATION_KEY)!).documentRevision
     fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
     fireEvent.click(screen.getByRole('button', { name: /歷史與專案管理/ }))
     const row = screen.getByText('可刪空白', { selector: '.project-history-row strong' }).closest('.project-history-row')!
@@ -1080,5 +1121,29 @@ describe('formal V9 management composition', () => {
     expect(stored().projects).toEqual(f.data.projects)
     expect(stored().subjects).toEqual(f.data.subjects)
     expect(stored().classes).toEqual(f.data.classes)
+    const backups = autoBackupKeys()
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(backups[0])!)).toMatchObject({ operation: 'delete-project',
+      revision: beforeDeleteRevision, rawDocument: beforeDeleteRaw })
+  })
+
+  it('keeps an empty Project when its pre-mutation backup cannot be persisted', async () => {
+    const f = fixture()
+    await activate(createEmptyProjectV9(f.data, { name: '保留空白' }, 'backup-failure'))
+    await mount()
+    const beforeDeleteRaw = localStorage.getItem(APP_DATA_V9_KEY)
+    fireEvent.click(screen.getByRole('button', { name: '專案設定' }))
+    fireEvent.click(screen.getByRole('button', { name: /歷史與專案管理/ }))
+    const row = screen.getByText('保留空白', { selector: '.project-history-row strong' }).closest('.project-history-row')!
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key.startsWith(V9_AUTO_BACKUP_PREFIX)) throw new Error('backup quota')
+      return originalSetItem.call(this, key, value)
+    })
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: '刪除' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(beforeDeleteRaw)
+    expect(stored().projects.some((item) => item.id === 'backup-failure')).toBe(true)
+    expect(autoBackupKeys()).toEqual([])
   })
 })
