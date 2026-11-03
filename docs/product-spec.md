@@ -1,5 +1,9 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R4-1C-3 — Formal V9 full-page recovery
+
+正式入口在合法 V8、已驗證的中斷升級或唯一孤立備份時顯示獨立全頁復原；不更動 Fresh Modal、V7 舊資料入口或正常 V9 Workspace。V8 轉換要求逐筆確認科目與任教配置歸屬、匯出同一快照的原始 JSON，並明確確認外部檔案已保存。中斷與孤立備份只允許使用已驗證的同一候選續接。不明、損壞、讀取失敗及多筆孤立備份維持阻擋，僅在有可取得的證據時提供原始資料匯出。復原成功後重新通過正式 Runtime Gate 才掛載既有 V9 Host。
+
 ## ACT-4 — 全新 V9 首次使用確認
 
 完全空白的正式環境顯示既有 Modal「開始使用 Toki」；使用者點擊「建立」前不寫入任何資料，取消後本次 session 不再顯示，也不掛載 V7。確認後由 ACT-3 初始化服務建立空白 V9，正式 Runtime Gate 再驗證 active 才進入現有 V9 Workspace。已有 V7、V8、V9、備份或未知 evidence 不顯示此 Modal；V8 與不明狀態停用，均不自動清理、遷移或重試。

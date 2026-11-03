@@ -5,7 +5,10 @@ import { activateTimetableSubjectsV9, resumeOrphanedSubjectUpgradeV9,
 import { buildSubjectMigrationCandidateV9, type SubjectMigrationDecisionV9 } from './data/subjectMigrationCandidateV9'
 import { inspectSubjectMigrationV9, type SubjectMigrationPlanV9 } from './data/subjectMigrationPlanV9'
 import { APP_DATA_V7_KEY } from './data/storageV7'
-import { APP_DATA_V8_KEY, createEmptyAppDataV8, loadAppDataV8Only, parseAppDataV8Raw } from './data/storageV8'
+import { APP_DATA_V8_KEY, TOKI_LEGACY_DATA_KEYS, createEmptyAppDataV8,
+  loadAppDataV8Only, parseAppDataV8Raw } from './data/storageV8'
+import { CUTOVER_BACKUP_V8_PREFIX } from './data/cutoverBackupV8'
+import { V8_ROLLBACK_ARCHIVE_PREFIX } from './data/rollbackArchiveV8'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_AUTO_BACKUP_PREFIX, V9_BACKUP_PREFIX,
   loadAppDataV9, type V9ActivationRecord, type V9BackupRecord } from './data/storageV9'
 import { inspectFormalRuntime, type FormalRuntimeDecision } from './formalRuntime'
@@ -14,7 +17,8 @@ import { checkV8HostWriteEligibility } from './hooks/useAppDataV8'
 export type FormalV9RecoverySnapshotKind = 'migration-ready' | 'resume-ready' | 'orphan-ready'
   | 'export-only' | 'ambiguous' | 'read-error'
 
-export type FormalV9RecoveryEvidenceRole = 'v7-source' | 'v8-source' | 'v8-activation'
+export type FormalV9RecoveryEvidenceRole = 'v7-source' | 'legacy-source' | 'v8-source' | 'v8-activation'
+  | 'v8-backup'
   | 'v9-document' | 'v9-activation' | 'v9-backup' | 'unknown'
 
 export interface FormalV9RecoveryEvidence {
@@ -46,8 +50,10 @@ const tokiKey = (key: string) => key.startsWith('aster-timetable-') || key.start
 
 function roleFor(key: string): FormalV9RecoveryEvidenceRole {
   if (key === APP_DATA_V7_KEY) return 'v7-source'
+  if ((TOKI_LEGACY_DATA_KEYS as readonly string[]).includes(key)) return 'legacy-source'
   if (key === APP_DATA_V8_KEY) return 'v8-source'
   if ([APP_DATA_V8_ACTIVATION_KEY, V8_BOOTSTRAP_KEY, V8_TRANSACTION_KEY].includes(key)) return 'v8-activation'
+  if (key.startsWith(CUTOVER_BACKUP_V8_PREFIX) || key.startsWith(V8_ROLLBACK_ARCHIVE_PREFIX)) return 'v8-backup'
   if (key === APP_DATA_V9_KEY) return 'v9-document'
   if (key === V9_ACTIVATION_KEY) return 'v9-activation'
   if (key.startsWith(V9_BACKUP_PREFIX) || key.startsWith(V9_AUTO_BACKUP_PREFIX)) return 'v9-backup'
@@ -179,6 +185,9 @@ export async function inspectFormalV9Recovery(storage: ReadStorage): Promise<For
         : snapshot('ambiguous', runtimeDecision, final.identity, final.entries)
     } catch { return snapshot('read-error', runtimeReadError(), null, []) }
   }
+  if (runtimeDecision.v9Status === 'read-error') {
+    return snapshot('read-error', runtimeDecision, null, [])
+  }
   const loadedV9 = loadAppDataV9(storage)
   if (first.entries.some(({ role }) => role === 'unknown')
     || (loadedV9.status !== 'active'
@@ -198,6 +207,7 @@ export async function inspectFormalV9Recovery(storage: ReadStorage): Promise<For
     return finish(snapshot('export-only', runtimeDecision, first.identity, first.entries))
   }
   const v8 = loadAppDataV8Only(storage, createEmptyAppDataV8())
+  if (v8.status === 'read-error') return snapshot('read-error', runtimeReadError(), null, [])
   if (v8.rawV8 !== null && (await checkV8HostWriteEligibility(storage, v8.rawV8)).eligible) {
     const plan = inspectSubjectMigrationV9(v8.value)
     return finish(snapshot('migration-ready', runtimeDecision, first.identity, first.entries,

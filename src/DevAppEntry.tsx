@@ -1,9 +1,12 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import App from './App'
+import { FormalV9RecoveryPage } from './components/FormalV9RecoveryPage'
 import { Modal } from './components/Modal'
 import { initializeFreshV9, preflightFreshV9, type FreshV9Failure } from './data/initializeFreshV9'
 import { TOKI_LEGACY_DATA_KEYS } from './data/storageV8'
 import { FormalV9Composition } from './FormalV9Composition'
+import { createFormalV9RecoveryCoordinator, type FormalV9RecoveryActionResult,
+  type FormalV9RecoverySnapshot } from './formalV9Recovery'
 import { hasActiveFormalV9Structure, inspectFormalRuntime, isV9RuntimeStorageKey,
   type FormalRuntimeDecision } from './formalRuntime'
 
@@ -15,6 +18,7 @@ const isLocalV9PreviewHost = (development: boolean, hostname: string) =>
 
 type FormalEntryState = { kind: 'checking' | 'cancelled' }
   | { kind: 'fresh'; pending: boolean; error: string | null }
+  | { kind: 'recovery'; snapshot: FormalV9RecoverySnapshot; error: string | null }
   | { kind: 'runtime'; decision: FormalRuntimeDecision }
 
 const blocked = (): FormalEntryState => ({ kind: 'runtime',
@@ -46,6 +50,15 @@ function freshError(code: FreshV9Failure): string {
   return '初始化驗證失敗，工作環境未啟用。'
 }
 
+function recoveryError(result: Extract<FormalV9RecoveryActionResult, { ok: false }>): string {
+  if (result.code === 'snapshot-stale') return '資料快照已變更，舊操作已停用。請重新檢查資料與確認。'
+  if (result.code === 'runtime-blocked') return `復原已執行，但正式驗證仍阻擋：${result.runtimeDecision?.v9Status ?? 'unknown'}。`
+  if (result.code === 'service-failed') return `復原中止：${result.serviceCode ?? 'service-failed'}。原始資料仍保留。`
+  if (result.code === 'invalid-decisions') return '科目或任教配置決策不完整，未執行轉換。'
+  if (result.code === 'export-evidence-mismatch') return '匯出資料與目前快照不符，未執行轉換。'
+  return '目前沒有可安全執行的操作。'
+}
+
 // Exported only so the DEV/production environment matrix can be verified without mutating window.location.
 // eslint-disable-next-line react-refresh/only-export-components
 export function selectDevRuntimeEntry(development: boolean, hostname: string, search: string): 'formal' | 'preview' {
@@ -58,6 +71,10 @@ export function FormalAppEntry() {
   const [state, setState] = useState<FormalEntryState>({ kind: 'checking' })
   const stateRef = useRef(state)
   const pendingRef = useRef(false)
+  const refreshEpochRef = useRef(0)
+  const coordinatorRef = useRef<ReturnType<typeof createFormalV9RecoveryCoordinator> | null>(null)
+  if (!coordinatorRef.current) coordinatorRef.current = createFormalV9RecoveryCoordinator(localStorage)
+  const coordinator = coordinatorRef.current
   stateRef.current = state
   const commitRef = useRef<(next: FormalEntryState) => void>(() => undefined)
   useEffect(() => {
@@ -76,14 +93,17 @@ export function FormalAppEntry() {
         if (mounted && currentGeneration === generation) commit({ kind: 'fresh', pending: false, error: null })
         return
       }
-      if (preflight.issue === 'read-error') {
-        if (mounted && currentGeneration === generation) commit(blocked())
+      const next = preflight.issue === 'read-error' ? null : await inspectFormalRuntime(localStorage)
+      if (next?.runtime === 'v7' && hasOnlyLegacyEvidence(localStorage)) {
+        if (mounted && currentGeneration === generation) commit({ kind: 'runtime', decision: next })
         return
       }
-      const next = await inspectFormalRuntime(localStorage)
-      if (mounted && currentGeneration === generation) commit(next.runtime === 'v7'
-        ? (hasOnlyLegacyEvidence(localStorage) ? { kind: 'runtime', decision: next } : blocked())
-        : { kind: 'runtime', decision: next })
+      const recovery = await coordinator.inspect()
+      if (next?.runtime === 'v9' && recovery.kind !== 'ambiguous' && recovery.kind !== 'read-error') {
+        if (mounted && currentGeneration === generation) commit({ kind: 'runtime', decision: next })
+        return
+      }
+      if (mounted && currentGeneration === generation) commit({ kind: 'recovery', snapshot: recovery, error: null })
     }
     void inspectInitial()
     const inspect = (event: StorageEvent) => {
@@ -105,10 +125,18 @@ export function FormalAppEntry() {
         commit(blocked())
         return
       }
-      if (!isV9RuntimeStorageKey(event.key)) return
+      if (event.key !== null && !event.key.startsWith('aster-timetable-')
+        && !event.key.startsWith('toki-v9-')) return
+      refreshEpochRef.current += 1
       generation += 1
+      if (current.kind === 'recovery') {
+        coordinator.invalidate(current.snapshot)
+        commit({ kind: 'checking' })
+        void inspectInitial()
+        return
+      }
       if (current.kind === 'runtime' && current.decision.runtime === 'v9') {
-        if (!hasActiveFormalV9Structure(localStorage)) {
+        if (isV9RuntimeStorageKey(event.key) && !hasActiveFormalV9Structure(localStorage)) {
           commit({ kind: 'runtime', decision: { runtime: 'blocked-v9', v9Status: 'invalid-evidence' } })
         }
         return
@@ -118,7 +146,7 @@ export function FormalAppEntry() {
     }
     window.addEventListener('storage', inspect)
     return () => { mounted = false; generation += 1; window.removeEventListener('storage', inspect) }
-  }, [])
+  }, [coordinator])
   const cancelFresh = () => {
     if (!pendingRef.current) commitRef.current({ kind: 'cancelled' })
   }
@@ -142,8 +170,27 @@ export function FormalAppEntry() {
         error: '初始化驗證失敗，工作環境未啟用。' })
     } finally { pendingRef.current = false }
   }
+  const handleRecoveryResult = async (result: FormalV9RecoveryActionResult) => {
+    const current = stateRef.current
+    if (current.kind !== 'recovery') return
+    if (result.ok) {
+      commitRef.current({ kind: 'runtime', decision: result.runtimeDecision })
+      return
+    }
+    coordinator.invalidate(current.snapshot)
+    const refreshEpoch = ++refreshEpochRef.current
+    commitRef.current({ kind: 'checking' })
+    const updated = await coordinator.inspect()
+    if (stateRef.current.kind === 'checking' && refreshEpochRef.current === refreshEpoch) {
+      commitRef.current({ kind: 'recovery', snapshot: updated,
+      error: recoveryError(result) })
+    }
+  }
   if (state.kind === 'runtime' && state.decision.runtime === 'v7') return <App />
   if (state.kind === 'runtime' && state.decision.runtime === 'v9') return <FormalV9Composition />
+  if (state.kind === 'recovery') return <FormalV9RecoveryPage key={state.snapshot.evidenceIdentity ?? 'read-error'}
+    snapshot={state.snapshot} coordinator={coordinator} error={state.error}
+    onResult={(result) => { void handleRecoveryResult(result) }} />
   if (state.kind === 'fresh') return <Modal title="開始使用 Toki" onClose={cancelFresh}>
     <div className="form-grid">
       <p className="full">目前沒有既有資料。確認後將建立全新的空白工作環境。</p>

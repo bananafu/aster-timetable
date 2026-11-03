@@ -331,7 +331,8 @@ describe('formal runtime entry', () => {
     await waitFor(() => expect(inspections).toBe(2))
     expect(screen.queryByText('V9 formal App')).toBeNull()
     expect(screen.queryByText('V7 formal App')).toBeNull()
-    expect(screen.queryByRole('dialog')).toBeNull()
+    expect((await screen.findByRole('alert')).textContent).toContain('正式啟用驗證失敗')
+    expect((screen.getByRole('button', { name: '建立' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('reports unavailable Web Locks without writing or granting a runtime', async () => {
@@ -378,6 +379,15 @@ describe('formal runtime entry', () => {
     expect(screen.queryByText('V7 formal App')).toBeNull()
     expect(screen.queryByRole('dialog', { name: '開始使用 Toki' })).toBeNull()
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe('preserve-exact-v7-raw')
+  })
+
+  it('blocks an otherwise active V9 document when an unknown Toki key is present', async () => {
+    seed(await activeEvidence())
+    localStorage.setItem('aster-timetable-unknown-future', '{}')
+    render(<FormalAppEntry />)
+    expect((await screen.findByRole('main')).textContent).toContain('資料證據不一致')
+    expect(screen.queryByText('V9 formal App')).toBeNull()
+    expect(v9Mount).not.toHaveBeenCalled()
   })
 
   it('fails closed for preparing, inconsistent and corrupt V9 evidence', async () => {

@@ -1,5 +1,9 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R4-1C-3 — Formal V9 full-page recovery（接線完成，待瀏覽器驗收）
+
+正式入口已接上 V8 轉換、已驗證中斷續接、唯一孤立備份續接與安全原始匯出；跨分頁 evidence 變動會撤銷舊快照。整合測試涵蓋入口分流、確認與匯出、失效快照、損壞及多筆備份、復原後 Runtime Gate。真實瀏覽器操作尚待驗收。
+
 ## ACT-4 — Fresh V9 first-run Modal（接線完成，待審查）
 
 正式入口已沿用既有 Modal 提供空白環境的明確初始化確認，確認後執行 ACT-3 服務並重新通過 Runtime Gate 才掛載 V9；取消與所有不明 evidence 維持非寫入狀態。隔離測試涵蓋 Fresh、舊版資料、失敗與競態；尚未執行真實瀏覽器資料初始化。

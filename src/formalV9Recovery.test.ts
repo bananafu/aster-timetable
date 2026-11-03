@@ -5,6 +5,7 @@ import { bootstrapEmptyV8 } from './data/bootstrapV8'
 import { initializeFreshV9 } from './data/initializeFreshV9'
 import { createBlankProject } from './data/projectRuntimeV8'
 import { APP_DATA_V8_KEY, createEmptyAppDataV8, persistAppDataV8 } from './data/storageV8'
+import { APP_DATA_V6_KEY } from './data/storageV6'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_AUTO_BACKUP_PREFIX, V9_BACKUP_PREFIX } from './data/storageV9'
 import { createSubject } from './data/subjectsV8'
 import { createTeacherTimetableV8 } from './data/timetablesV8'
@@ -79,6 +80,14 @@ describe('Formal V9 recovery core', () => {
       migration: { sourceRaw: rawV8, plan: { sourceCompatibleV8: true } } })
     expect(value.evidenceIdentity).toMatch(/^sha256:/)
     expect(storage.setItem).not.toHaveBeenCalled()
+  })
+
+  it('keeps recognized older legacy evidence available without misclassifying it as unknown', async () => {
+    const { storage } = await activeV8()
+    storage.setItem(APP_DATA_V6_KEY, 'preserved-legacy-raw')
+    const value = await inspectFormalV9Recovery(storage)
+    expect(value.kind).toBe('migration-ready')
+    expect(createFormalV9RecoveryExportPort(value).readExact(APP_DATA_V6_KEY)).toBe('preserved-legacy-raw')
   })
 
   it('requires complete explicit ownership decisions and confirmed external export evidence', async () => {
@@ -211,6 +220,17 @@ describe('Formal V9 recovery core', () => {
     expect(value).toMatchObject({ kind: 'read-error', runtimeReason: 'read-error',
       evidenceIdentity: null, capabilities: { activate: false, resume: false, resumeOrphan: false, export: false } })
     expect(setItem).not.toHaveBeenCalled()
+  })
+
+  it('does not expose migration when only the V8 source read fails', async () => {
+    const { storage } = await activeV8()
+    const read = storage.getItem.getMockImplementation()!
+    storage.getItem.mockImplementation((key) => {
+      if (key === APP_DATA_V8_KEY) throw new Error('denied')
+      return read(key)
+    })
+    expect(await inspectFormalV9Recovery(storage)).toMatchObject({ kind: 'read-error',
+      capabilities: { activate: false, resume: false, resumeOrphan: false, export: false } })
   })
 
   it('exports exact snapshot raw without rereading or writing storage', async () => {

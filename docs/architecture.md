@@ -1,5 +1,9 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R4-1C-3 — Formal V9 recovery entry
+
+`FormalAppEntry` 在 Fresh、純 V7 舊資料及 active V9 之外，使用 `createFormalV9RecoveryCoordinator` 的唯讀快照導向全頁 `FormalV9RecoveryPage`。畫面只持有快照與決策狀態；所有原始匯出由 `createFormalV9RecoveryExportPort` 提供，轉換、續接與孤立備份續接均由 coordinator 呼叫既有 verified service。相關 storage event 立即 invalidate 舊快照、卸載舊畫面並重新盤點，不沿用決策或確認。verified service 成功後 coordinator 再次執行正式 Runtime Gate；只有 `runtime === 'v9'` 可掛載既有單一 `FormalV9Composition`。
+
 ## ACT-4 — Fresh V9 first-run Modal
 
 正式 `FormalAppEntry` 在掛載 V7 前使用 ACT-3 的 `preflightFreshV9` 檢查完整空白 evidence；合格時只顯示既有 Modal，明確確認後才呼叫 `initializeFreshV9`。成功後再次執行 `inspectFormalRuntime`，僅 active V9 可掛載既有 `FormalV9Composition`；Host 仍獨立驗證 writable。取消、失敗及中斷均不掛載 V7、不清除 evidence、不自動重試。已有 V7 舊資料維持原入口；V8 或未知 Toki evidence 在正式入口停用，不回退 V7。DEV Preview 保持純記憶體。
