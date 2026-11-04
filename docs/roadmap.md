@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R4-1D-2B — Formal V9 OneOff Lesson CRUD（接線完成，待瀏覽器驗收）
+
+正式 V9 已重用既有 `OneOffLessonEditor`、新增入口及總覽／週課表卡片，接入 OneOff 新增、保留 ID 的編輯與刪除；既有三種 purpose、明確允許衝突 checkbox、Meeting／Activity 非阻擋政策、Project／Timetable／學期邊界及 A/B 解析維持不變。新增與編輯走既有 Host 普通更新，刪除走 `delete-one-off-lesson` 高風險 pre-mutation backup；editor identity、selection／revision staleness、receipt/readback、Runtime Gate 與資源即時投影均 fail closed。未新增 schema、Host、persistence 或 UI 元件，也未改變固定課程、override、永久修改及引用保護。
+
+R4-1D-2B targeted tests、完整單 worker suite、lint 與 build 已通過；預設平行 suite 仍有既知 runner-sensitive UI failures，須與產品回歸分開追蹤。真實瀏覽器 OneOff smoke 與 Recovery browser smoke 尚未執行，不宣稱完成。
+
 ## Phase 4D R4-1D-1 — Formal V9 effective-dated permanent update（接線完成，待瀏覽器驗收）
 
 正式 V9 `LessonEditor` 已沿用既有預覽／確認介面接上自指定日期永久修改。新舊版本以 effective-dated split 保留歷史，合法 future override 改指向新版本，EVERY／A／B 週型沿用既有錨點；寫入必須通過單一 V9 Host 的 revision、selection、validator、receipt/readback 及 `permanently-update-lesson` pre-mutation backup 驗證。永久交換、永久結束、單日交換與額外單日課程不在本階段。自動測試與真實瀏覽器驗收狀態分開記錄；Recovery 的真實瀏覽器操作仍未驗收。

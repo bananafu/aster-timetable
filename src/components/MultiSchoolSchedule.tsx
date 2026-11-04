@@ -38,6 +38,7 @@ interface ResolvedProps {
   teachingUnits: readonly ScheduleDisplayTeachingUnit[]
   onHeaderTeachingUnitChange?: (teachingUnitId: string | null) => void
   onLessonClick?: (lessonId: string, date: string, overrideId?: string) => void
+  onOneOffClick?: (oneOffId: string) => void
 }
 
 type Props = LegacyProps | ResolvedProps
@@ -108,7 +109,7 @@ export function MultiSchoolSchedule(props: Props) {
   const timetableId = resolved ? undefined : props.timetableId
   const onLessonClick = props.onLessonClick
   const onLessonDrop = resolved ? undefined : props.onLessonDrop
-  const onOneOffClick = resolved ? undefined : props.onOneOffClick
+  const onOneOffClick = props.onOneOffClick
   const onHeaderTeachingUnitChange = resolved ? props.onHeaderTeachingUnitChange : undefined
   const [scope, setScope] = useState<ScheduleScope>('all')
   const [showWeekend, setShowWeekend] = useState(false)

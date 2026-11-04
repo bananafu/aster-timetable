@@ -24,6 +24,7 @@ interface ResolvedProps {
   days: readonly ScheduleDisplayDay[]
   events: readonly ScheduleDisplayEvent[]
   onLessonClick?: (lessonId: string, date: string, overrideId?: string) => void
+  onOneOffClick?: (oneOffId: string) => void
 }
 
 type Props = LegacyProps | ResolvedProps
@@ -114,8 +115,8 @@ export function OverviewCalendar(props: Props) {
         <div className="overview-day-items">{items.length ? items.map((item) => item.kind === 'course'
           ? <CourseItem key={item.lesson.key} lesson={item.lesson}
             onLessonClick={props.onLessonClick}
-            onOneOffClick={resolved ? undefined : props.onOneOffClick}
-            readOnly={resolved && !props.onLessonClick} />
+            onOneOffClick={props.onOneOffClick}
+            readOnly={resolved && !props.onLessonClick && !props.onOneOffClick} />
           : <EventItem key={item.event.id} event={item.event} />) : <p className="overview-day-empty">無行程</p>}</div>
       </section>
     })}

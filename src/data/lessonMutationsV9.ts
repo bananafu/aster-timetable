@@ -1,6 +1,6 @@
 import type { AppDataV9 } from '../types/v9'
 import { addDays, fromDateKey, toDateKey } from '../lib/date'
-import { resolveV9Day } from '../lib/scheduleV9'
+import { resolveV9Day, type V9ReadOccurrence } from '../lib/scheduleV9'
 import { timeIntervalsOverlap } from '../lib/scheduleV4'
 import { asV8ValidationProjection, isCompatibleAppDataV9, isSafeAppDataV9Update } from './validators/v9'
 import { createRecurringLessonV8, deleteRecurringLessonV8, getRecurringLessonV8Impact,
@@ -11,6 +11,8 @@ type Lesson = AppDataV9['recurringLessons'][number]
 type Override = AppDataV9['overrides'][number]
 export type RecurringLessonV9Draft = RecurringLessonV8Draft
 export type LessonV9Scope = { projectId: string; timetableId: string; teachingUnitId: string }
+type OneOffLesson = AppDataV9['oneOffLessons'][number]
+export type OneOffLessonV9Draft = Omit<OneOffLesson, 'id'>
 export type OccurrenceChangeV9Draft =
   | { action: 'cancel' }
   | { action: 'move'; target: { date: string; periodId: number }; allowConflict?: boolean }
@@ -19,6 +21,12 @@ export type LessonV9ErrorCode = 'invalid-document' | 'invalid-scope' | 'invalid-
   | 'invalid-draft' | 'id-collision' | 'not-found' | 'already-changed' | 'conflict' | 'referenced' | 'unsafe-update'
 export class LessonV9Error extends Error {
   constructor(readonly code: LessonV9ErrorCode, message: string) { super(message); this.name = 'LessonV9Error' }
+}
+export class OneOffLessonConflictV9Error extends LessonV9Error {
+  constructor(readonly conflicts: readonly V9ReadOccurrence[]) {
+    super('conflict', `One-off Lesson overlaps ${conflicts.length} active lesson(s).`)
+    this.name = 'OneOffLessonConflictV9Error'
+  }
 }
 const fail = (code: LessonV9ErrorCode, message: string): never => { throw new LessonV9Error(code, message) }
 const valid = (data: AppDataV9) => { if (!isCompatibleAppDataV9(data)) fail('invalid-document', 'Invalid V9 document.') }
@@ -105,6 +113,101 @@ export function deleteRecurringLessonV9(data: AppDataV9, selected: LessonV9Scope
   const result = deleteRecurringLessonV8(asV8ValidationProjection(data), selected.projectId,
     selected.timetableId, lessonId, confirmed)
   return safe(data, { ...data, recurringLessons: result.recurringLessons })
+}
+
+const fiveMinuteTime = (value: string) => /^([01]\d|2[0-3]):(00|05|10|15|20|25|30|35|40|45|50|55)$/.test(value)
+const uuidV4 = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+
+function oneOffContent(data: AppDataV9, selected: LessonV9Scope, draft: OneOffLessonV9Draft,
+  editingId?: string) {
+  valid(data)
+  const project = data.projects.find((item) => item.id === selected.projectId)
+  const timetable = data.timetables.find((item) => item.id === selected.timetableId
+    && item.projectId === selected.projectId)
+  const unit = data.teachingUnits.find((item) => item.id === draft.teachingUnitId
+    && item.projectId === selected.projectId)
+  const original = editingId ? data.oneOffLessons.find((item) => item.id === editingId) : undefined
+  if (!project || project.archivedAt || project.term === null || !timetable || !unit
+    || !data.schools.some((item) => item.id === unit.schoolId && item.projectId === project.id)) {
+    fail('invalid-scope', 'Configured editable Project, Timetable and TeachingUnit are required.')
+  }
+  if (draft.projectId !== selected.projectId || draft.timetableId !== selected.timetableId
+    || draft.teachingUnitId !== selected.teachingUnitId) fail('invalid-scope', 'One-off Lesson draft changed scope.')
+  if (editingId && !original) fail('not-found', 'One-off Lesson no longer exists.')
+  if (original && (original.projectId !== selected.projectId || original.timetableId !== selected.timetableId)) {
+    fail('invalid-scope', 'One-off Lesson cannot move across Projects or Timetables.')
+  }
+  const subject = data.subjects.find((item) => item.id === draft.subjectId
+    && item.projectId === selected.projectId && item.timetableId === selected.timetableId)
+  const schoolClass = data.classes.find((item) => item.id === draft.classId
+    && item.projectId === selected.projectId && item.teachingUnitId === unit!.id)
+  if (!subject || !schoolClass || !subject.applicableSchoolLevels.includes(unit!.schoolLevel)
+    || !data.teachingUnitSubjects.some((item) => item.projectId === selected.projectId
+      && item.teachingUnitId === unit!.id && item.subjectId === subject.id)) {
+    fail('invalid-reference', 'Subject or Class does not belong to the selected teacher and TeachingUnit.')
+  }
+  if (!dateValid(draft.date) || draft.date < unit!.startDate || draft.date > unit!.endDate) {
+    fail('invalid-date', 'One-off Lesson date is outside the selected TeachingUnit term.')
+  }
+  if (!['extra', 'make-up', 'substitute'].includes(draft.purpose)) fail('invalid-draft', 'Invalid one-off Lesson purpose.')
+  if (draft.relatedRecurringLessonId !== undefined) {
+    if (draft.purpose !== 'make-up' || !draft.relatedRecurringLessonId.trim()) {
+      fail('invalid-reference', 'Only a make-up Lesson may reference a recurring Lesson.')
+    }
+    const source = data.recurringLessons.find((item) => item.id === draft.relatedRecurringLessonId)
+    if (source && (source.projectId !== selected.projectId || source.timetableId !== selected.timetableId)) {
+      fail('invalid-reference', 'Make-up source belongs to another Project or Timetable.')
+    }
+  }
+  if (draft.room !== undefined && typeof draft.room !== 'string') fail('invalid-draft', 'Invalid room.')
+  if (draft.time.mode === 'period') {
+    const period = unit!.periods.find((item) => item.id === draft.time.periodId)
+    if (!period) fail('invalid-draft', 'Period does not belong to the selected TeachingUnit.')
+    return { startTime: period!.startTime, endTime: period!.endTime }
+  }
+  if (draft.time.mode !== 'custom' || !fiveMinuteTime(draft.time.startTime)
+    || !fiveMinuteTime(draft.time.endTime) || draft.time.endTime <= draft.time.startTime) {
+    fail('invalid-draft', 'Custom time must use five-minute intervals and cannot cross midnight.')
+  }
+  return { startTime: draft.time.startTime, endTime: draft.time.endTime }
+}
+
+export function getOneOffLessonConflictsV9(data: AppDataV9, selected: LessonV9Scope,
+  draft: OneOffLessonV9Draft, editingId?: string): readonly V9ReadOccurrence[] {
+  const time = oneOffContent(data, selected, draft, editingId)
+  return resolveV9Day(data, selected, fromDateKey(draft.date))
+    .filter((item) => (item.kind === 'one-off' || (item.status !== 'cancelled' && item.movementRole !== 'source'))
+      && !(editingId && item.kind === 'one-off' && item.id === editingId)
+      && timeIntervalsOverlap(item, time))
+}
+
+export function createOneOffLessonV9(data: AppDataV9, selected: LessonV9Scope,
+  draft: OneOffLessonV9Draft, id: string, allowConflict = false): AppDataV9 {
+  const conflicts = getOneOffLessonConflictsV9(data, selected, draft)
+  if (conflicts.length && allowConflict !== true) throw new OneOffLessonConflictV9Error(conflicts)
+  if (!uuidV4(id) || !idAvailable(data, id)) fail('id-collision', 'One-off Lesson ID must be an unused UUID.')
+  const next: OneOffLesson = { ...draft, id, room: draft.room?.trim() || undefined, time: { ...draft.time } }
+  return safe(data, { ...data, oneOffLessons: [...data.oneOffLessons, next] })
+}
+
+export function updateOneOffLessonV9(data: AppDataV9, selected: LessonV9Scope,
+  oneOffId: string, draft: OneOffLessonV9Draft, allowConflict = false): AppDataV9 {
+  const conflicts = getOneOffLessonConflictsV9(data, selected, draft, oneOffId)
+  if (conflicts.length && allowConflict !== true) throw new OneOffLessonConflictV9Error(conflicts)
+  return safe(data, { ...data, oneOffLessons: data.oneOffLessons.map((item) => item.id === oneOffId
+    ? { ...draft, id: item.id, room: draft.room?.trim() || undefined, time: { ...draft.time } } : item) })
+}
+
+export function deleteOneOffLessonV9(data: AppDataV9, selected: LessonV9Scope,
+  oneOffId: string, confirmed: true): AppDataV9 {
+  valid(data)
+  const project = data.projects.find((item) => item.id === selected.projectId)
+  const found = data.oneOffLessons.find((item) => item.id === oneOffId
+    && item.projectId === selected.projectId && item.timetableId === selected.timetableId)
+  if (!project || project.archivedAt || project.term === null) fail('invalid-scope', 'Project is unavailable or read-only.')
+  if (!found) fail('not-found', 'One-off Lesson is outside the selected scope or no longer exists.')
+  if (confirmed !== true) fail('invalid-draft', 'One-off Lesson deletion requires confirmation.')
+  return safe(data, { ...data, oneOffLessons: data.oneOffLessons.filter((item) => item.id !== oneOffId) })
 }
 
 function occurrence(data: AppDataV9, selected: LessonV9Scope, lessonId: string, date: string) {

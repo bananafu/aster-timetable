@@ -7,10 +7,12 @@ import { createFormalLessonManagementV9Controller } from '../formalLessonManagem
 import { fingerprintV7Raw } from './activationV8'
 import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './storageV9'
 import { isCompatibleAppDataV9 } from './validators/v9'
-import { cancelOccurrenceV9, createRecurringLessonV9, deleteRecurringLessonV9,
+import { cancelOccurrenceV9, createOneOffLessonV9, createRecurringLessonV9,
+  deleteOneOffLessonV9, deleteRecurringLessonV9, getOneOffLessonConflictsV9,
   getRecurringLessonV9Impact, moveOccurrenceV9, permanentlyUpdateLessonV9,
-  replaceOccurrenceChangeV9, replaceOccurrenceV9, revokeOccurrenceOverrideV9, updateRecurringLessonV9,
-  type LessonV9Scope, type RecurringLessonV9Draft } from './lessonMutationsV9'
+  replaceOccurrenceChangeV9, replaceOccurrenceV9, revokeOccurrenceOverrideV9,
+  updateOneOffLessonV9, updateRecurringLessonV9,
+  type LessonV9Scope, type OneOffLessonV9Draft, type RecurringLessonV9Draft } from './lessonMutationsV9'
 
 export function lessonFixture() {
   const stamp = '2026-02-01T00:00:00.000Z'
@@ -287,6 +289,144 @@ describe('V9 Lesson domain mutation', () => {
   })
 })
 
+describe('V9 OneOff Lesson domain mutation', () => {
+  const firstId = '11111111-1111-4111-8111-111111111111'
+  const secondId = '22222222-2222-4222-8222-222222222222'
+  const thirdId = '33333333-3333-4333-8333-333333333333'
+  const oneOffDraft = (scope: LessonV9Scope, purpose: OneOffLessonV9Draft['purpose'] = 'extra') => ({
+    ...scope, subjectId: 'math', classId: 'c', date: '2026-03-02', purpose,
+    time: { mode: 'period' as const, periodId: 1 },
+  })
+
+  it('creates all purposes, edits across dates with a stable ID, and deletes only the target', () => {
+    const { data, scope } = lessonFixture()
+    const extra = createOneOffLessonV9(data, scope, oneOffDraft(scope), firstId)
+    const makeUp = createOneOffLessonV9(extra, scope, {
+      ...oneOffDraft(scope, 'make-up'), date: '2026-03-03', relatedRecurringLessonId: 'removed-source',
+      time: { mode: 'custom', startTime: '10:00', endTime: '10:45' },
+    }, secondId)
+    const all = createOneOffLessonV9(makeUp, scope, {
+      ...oneOffDraft(scope, 'substitute'), date: '2026-03-04', time: { mode: 'period', periodId: 2 },
+    }, thirdId)
+    expect(all.oneOffLessons.map((item) => item.purpose)).toEqual(['extra', 'make-up', 'substitute'])
+    const edited = updateOneOffLessonV9(all, scope, firstId, {
+      ...oneOffDraft(scope), date: '2026-03-05', room: '301',
+      time: { mode: 'custom', startTime: '08:05', endTime: '08:50' },
+    })
+    expect(edited.oneOffLessons.find((item) => item.id === firstId)).toMatchObject({
+      id: firstId, date: '2026-03-05', room: '301', time: { mode: 'custom' },
+    })
+    expect(deleteOneOffLessonV9(edited, scope, firstId, true).oneOffLessons.map((item) => item.id))
+      .toEqual([secondId, thirdId])
+    expect(data.oneOffLessons).toEqual([])
+  })
+
+  it('rejects invalid ownership, configuration, dates, time, IDs, and cross-scope edits', () => {
+    const { data, scope } = lessonFixture()
+    const draft = oneOffDraft(scope)
+    expect(() => createOneOffLessonV9(data, scope, { ...draft, subjectId: 'other-subject' }, firstId))
+      .toThrow(expect.objectContaining({ code: 'invalid-reference' }))
+    expect(() => createOneOffLessonV9(data, scope, { ...draft, date: '2026-07-01' }, firstId))
+      .toThrow(expect.objectContaining({ code: 'invalid-date' }))
+    expect(() => createOneOffLessonV9(data, scope, { ...draft,
+      time: { mode: 'custom', startTime: '23:55', endTime: '00:05' } }, firstId))
+      .toThrow(expect.objectContaining({ code: 'invalid-draft' }))
+    expect(() => createOneOffLessonV9(data, scope, draft, 'not-a-uuid'))
+      .toThrow(expect.objectContaining({ code: 'id-collision' }))
+    const created = createOneOffLessonV9(data, scope, draft, firstId)
+    expect(() => createOneOffLessonV9(created, scope, { ...draft, date: '2026-03-03' }, firstId))
+      .toThrow(expect.objectContaining({ code: 'id-collision' }))
+    expect(() => updateOneOffLessonV9(created, scope, 'missing', draft))
+      .toThrow(expect.objectContaining({ code: 'not-found' }))
+    expect(() => updateOneOffLessonV9(created, { ...scope, timetableId: 'other' }, firstId,
+      { ...draft, timetableId: 'other', subjectId: 'other-subject' }))
+      .toThrow(expect.objectContaining({ code: 'invalid-scope' }))
+    const unset = { ...data, projects: data.projects.map((item) => ({ ...item, term: null })) }
+    expect(() => createOneOffLessonV9(unset, scope, draft, secondId))
+      .toThrow(expect.objectContaining({ code: 'invalid-scope' }))
+  })
+
+  it('keeps boundary dates, five-minute custom times, half-open intervals, and cross-year A/B resolution exact', () => {
+    const { data, scope, draft } = lessonFixture()
+    expect(() => createOneOffLessonV9(data, scope, { ...oneOffDraft(scope),
+      time: { mode: 'custom', startTime: '08:03', endTime: '08:50' } }, firstId))
+      .toThrow(expect.objectContaining({ code: 'invalid-draft' }))
+    const fixed = createRecurringLessonV9(data, scope, draft, 'fixed')
+    expect(getOneOffLessonConflictsV9(fixed, scope, { ...oneOffDraft(scope),
+      time: { mode: 'custom', startTime: '08:50', endTime: '09:00' } })).toEqual([])
+    expect(getOneOffLessonConflictsV9(fixed, scope, { ...oneOffDraft(scope),
+      time: { mode: 'custom', startTime: '08:45', endTime: '08:55' } })).toMatchObject([{ id: 'fixed' }])
+    const boundaries = createOneOffLessonV9(data, scope,
+      { ...oneOffDraft(scope), date: '2026-03-01' }, firstId)
+    expect(createOneOffLessonV9(boundaries, scope,
+      { ...oneOffDraft(scope), date: '2026-06-30' }, secondId).oneOffLessons).toHaveLength(2)
+
+    const extended = { ...data, teachingUnits: data.teachingUnits.map((item) => ({ ...item,
+      endDate: '2027-01-31', weekCycle: { enabled: true as const,
+        anchorDate: '2026-12-28', anchorPattern: 'A' as const } })) }
+    const aWeek = createRecurringLessonV9(extended, scope, { ...draft, weekPattern: 'A' }, 'cross-year')
+    expect(getOneOffLessonConflictsV9(aWeek, scope,
+      { ...oneOffDraft(scope), date: '2026-12-28' })).toMatchObject([{ id: 'cross-year' }])
+    expect(getOneOffLessonConflictsV9(aWeek, scope,
+      { ...oneOffDraft(scope), date: '2027-01-04' })).toEqual([])
+  })
+
+  it('moves across TeachingUnits in one Project and keeps make-up references deletion-blocking', () => {
+    const { data, scope, draft } = lessonFixture()
+    const secondUnit = { ...data.teachingUnits[0], id: 'u2', name: '第二學期',
+      startDate: '2026-07-01', endDate: '2026-12-31',
+      weekCycle: { enabled: true as const, anchorDate: '2026-07-06', anchorPattern: 'A' as const } }
+    const multi: AppDataV9 = { ...data, teachingUnits: [...data.teachingUnits, secondUnit],
+      teachingUnitSubjects: [...data.teachingUnitSubjects,
+        { id: 'r4', projectId: 'p', teachingUnitId: 'u2', subjectId: 'math' }],
+      classes: [...data.classes, { id: 'c2', projectId: 'p', teachingUnitId: 'u2', name: '二甲' }] }
+    const created = createOneOffLessonV9(multi, scope, oneOffDraft(scope), firstId)
+    const targetScope = { ...scope, teachingUnitId: 'u2' }
+    const moved = updateOneOffLessonV9(created, targetScope, firstId, {
+      ...oneOffDraft(targetScope), classId: 'c2', date: '2026-07-06',
+    })
+    expect(moved.oneOffLessons).toMatchObject([{ id: firstId, teachingUnitId: 'u2',
+      classId: 'c2', date: '2026-07-06' }])
+
+    const fixed = createRecurringLessonV9(data, scope, draft, 'fixed')
+    const related = createOneOffLessonV9(fixed, scope, {
+      ...oneOffDraft(scope, 'make-up'), date: '2026-03-03', relatedRecurringLessonId: 'fixed',
+      time: { mode: 'custom', startTime: '10:00', endTime: '10:45' },
+    }, secondId)
+    expect(getRecurringLessonV9Impact(related, scope, 'fixed').oneOff).toBe(1)
+    expect(() => deleteRecurringLessonV9(related, scope, 'fixed', true))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+  })
+
+  it('uses resolved V9 occupancy, explicit conflict consent, A/B anchors, and timetable isolation', () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, { ...draft, weekPattern: 'A' }, 'fixed')
+    const oneOff = oneOffDraft(scope)
+    expect(getOneOffLessonConflictsV9(fixed, scope, oneOff)).toMatchObject([{ id: 'fixed' }])
+    expect(() => createOneOffLessonV9(fixed, scope, oneOff, firstId))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    const allowed = createOneOffLessonV9(fixed, scope, oneOff, firstId, true)
+    expect(resolveV9Day(allowed, scope, fromDateKey(oneOff.date)).every((item) => item.hasConflict)).toBe(true)
+    const nextBWeek = { ...oneOff, date: '2026-03-09' }
+    expect(getOneOffLessonConflictsV9(fixed, scope, nextBWeek)).toEqual([])
+    const cancelled = cancelOccurrenceV9(fixed, scope, 'fixed', '2026-03-02', 'cancel')
+    expect(getOneOffLessonConflictsV9(cancelled, scope, oneOff)).toEqual([])
+    const moved = moveOccurrenceV9(fixed, scope, 'fixed', '2026-03-02',
+      { date: '2026-03-02', periodId: 2 }, 'move')
+    expect(getOneOffLessonConflictsV9(moved, scope, oneOff)).toEqual([])
+    expect(getOneOffLessonConflictsV9(moved, scope, { ...oneOff,
+      time: { mode: 'period', periodId: 2 } })).toMatchObject([{ id: 'fixed', movementRole: 'target' }])
+    const otherScope = { ...scope, timetableId: 'other' }
+    const other = createRecurringLessonV9(data, otherScope, { ...draft, timetableId: 'other',
+      subjectId: 'other-subject' }, 'other-fixed')
+    expect(getOneOffLessonConflictsV9(other, scope, oneOff)).toEqual([])
+    const withEvent = { ...data, events: [{ id: 'event', projectId: 'p', timetableId: 't',
+      teachingUnitId: 'u', ownershipStatus: 'resolved' as const, title: 'event', type: 'meeting' as const,
+      date: oneOff.date, startTime: '08:00', endTime: '08:50', color: '#112233' }] }
+    expect(getOneOffLessonConflictsV9(withEvent, scope, oneOff)).toEqual([])
+  })
+})
+
 function hostFixture(initial: AppDataV9, options: { badReceipt?: boolean; reject?: Error;
   currentForUpdate?: AppDataV9; hold?: boolean } = {}) {
   let document = initial
@@ -354,6 +494,23 @@ describe('formal V9 Lesson Host action port', () => {
     await expect(destructive.permanentlyUpdateFromDate('l1', '2026-03-16', draft))
       .rejects.toMatchObject({ code: 'backup-required' })
     expect(blocked.update).not.toHaveBeenCalled()
+  })
+  it('fails OneOff writes closed while the Host is readonly or already pending', async () => {
+    const { data, scope } = lessonFixture()
+    const draft = { ...scope, subjectId: 'math', classId: 'c', date: '2026-03-02', purpose: 'extra' as const,
+      time: { mode: 'period' as const, periodId: 1 } }
+    const readonly = hostFixture(data)
+    const readonlyHost = { ...readonly.host, writable: false } satisfies FormalV9HostPort
+    await expect(createFormalLessonManagementV9Controller(readonlyHost,
+      () => '11111111-1111-4111-8111-111111111111', scope).createOneOff(draft))
+      .rejects.toMatchObject({ code: 'not-writable' })
+    expect(readonly.update).not.toHaveBeenCalled()
+    const busy = hostFixture(data)
+    const busyHost = { ...busy.host, pending: true } satisfies FormalV9HostPort
+    await expect(createFormalLessonManagementV9Controller(busyHost,
+      () => '11111111-1111-4111-8111-111111111111', scope).createOneOff(draft))
+      .rejects.toMatchObject({ code: 'duplicate-submit' })
+    expect(busy.update).not.toHaveBeenCalled()
   })
   it('atomically replaces an occurrence change with one Host mutation and matching receipt', async () => {
     const { data, scope, draft } = lessonFixture()
@@ -500,6 +657,15 @@ describe('formal V9 Lesson Host action port', () => {
       .permanentlyUpdateFromDate('l1', '2026-03-16', { ...draft, subjectId: 'english' })
     expect(split.document.recurringLessons.map((item) => item.id)).toEqual(['l1', 'l2'])
     expect(split.receipt.preMutationBackup?.operation).toBe('permanently-update-lesson')
+    const oneOff = createOneOffLessonV9(data, scope, {
+      ...scope, subjectId: 'math', classId: 'c', date: '2026-03-02', purpose: 'extra',
+      time: { mode: 'period', periodId: 2 },
+    }, '11111111-1111-4111-8111-111111111111')
+    const oneOffDeletion = backedHost(oneOff)
+    const removed = await createFormalLessonManagementV9Controller(oneOffDeletion.host, () => 'unused', scope)
+      .deleteOneOff('11111111-1111-4111-8111-111111111111', true)
+    expect(removed.document.oneOffLessons).toEqual([])
+    expect(removed.receipt.preMutationBackup).toMatchObject({ operation: 'delete-one-off-lesson', revision: 0 })
     for (const fault of ['operation', 'revision', 'mutation-attempt'] as const) {
       const mismatch = backedHost(fixed, fault)
       await expect(createFormalLessonManagementV9Controller(mismatch.host, () => 'unused', scope)

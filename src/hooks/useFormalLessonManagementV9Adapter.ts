@@ -7,10 +7,15 @@ import type { FormalProjectTimetableV9Selection } from '../formalProjectTimetabl
 import type { AppDataV8 } from '../types'
 import type { AppDataV9 } from '../types/v9'
 import type { FixedLessonPersistencePort } from '../components/LessonEditor'
+import type { OneOffLessonPersistencePort, OneOffSaveRequest } from '../components/OneOffLessonEditor'
 import { fromDateKey } from '../lib/date'
 import { resolveV9Day } from '../lib/scheduleV9'
+import { getOneOffLessonConflictsV9 } from '../data/lessonMutationsV9'
 
-const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
+const uid = () => crypto.randomUUID?.() ?? 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (value) => {
+  const random = Math.floor(Math.random() * 16)
+  return (value === 'x' ? random : (random & 0x3) | 0x8).toString(16)
+})
 
 export interface FormalLessonEditorV9Session {
   readonly data: AppDataV8
@@ -19,6 +24,12 @@ export interface FormalLessonEditorV9Session {
   occurrenceOverrideId: string | null
   teachingUnitId: string | null
   port: FixedLessonPersistencePort
+}
+
+export interface FormalOneOffLessonEditorV9Session {
+  readonly data: AppDataV8
+  oneOffLessonId: string | null
+  port: OneOffLessonPersistencePort
 }
 
 function toDraft(draft: LessonDraftV4) {
@@ -72,6 +83,11 @@ export function toFormalLessonEditorDataV9(document: AppDataV9,
       || document.recurringLessons.some((candidate) => candidate.id === item.entityId
         && candidate.projectId === project.id && candidate.timetableId === timetable.id)),
   }
+}
+
+export function toFormalOneOffLessonEditorDataV9(document: AppDataV9,
+  selection: FormalProjectTimetableV9Selection): AppDataV8 | null {
+  return toFormalLessonEditorDataV9(document, selection, null)
 }
 
 /** Keeps editor identity fixed while projecting confirmed resource collections from the live V9 Host. */
@@ -172,5 +188,71 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
       teachingUnitId: projectedTarget?.teachingUnitId ?? null, port }
   }, [createId])
 
-  return { open, pending }
+  const openOneOff = useCallback((oneOffLessonId: string | null = null): FormalOneOffLessonEditorV9Session | null => {
+    const snapshot = hostRef.current
+    if (!snapshot.document || !selectionRef.current.projectId || !selectionRef.current.timetableId) return null
+    const capturedSelection = { ...selectionRef.current }
+    const initialData = toFormalOneOffLessonEditorDataV9(snapshot.document, capturedSelection)
+    if (!initialData) return null
+    const target = oneOffLessonId ? snapshot.document.oneOffLessons.find((item) => item.id === oneOffLessonId
+      && item.projectId === capturedSelection.projectId && item.timetableId === capturedSelection.timetableId) : null
+    if (oneOffLessonId && !target) return null
+    const baseline = lessonSessionBaseline(snapshot.document)
+    const readData = () => {
+      const current = hostRef.current.document
+      return current ? toFormalOneOffLessonEditorDataV9(current, capturedSelection) ?? initialData : initialData
+    }
+    const execute = async (unitId: string, operation: (controller: ReturnType<
+      typeof createFormalLessonManagementV9Controller>) => Promise<FormalLessonV9Result>) => {
+      if (submittingRef.current) throw new Error('V9 Host write is already in progress.')
+      submittingRef.current = true
+      setPending(true)
+      try {
+        const currentHost = hostRef.current
+        const currentData = currentHost.document
+        if (!currentData || lessonSessionBaseline(currentData) !== baseline
+          || !toFormalOneOffLessonEditorDataV9(currentData, capturedSelection)
+          || (oneOffLessonId && !currentData.oneOffLessons.some((item) => item.id === oneOffLessonId
+            && item.projectId === capturedSelection.projectId && item.timetableId === capturedSelection.timetableId))) {
+          throw new FormalLessonV9Error('stale-document', 'One-off Lesson session data changed before submission.')
+        }
+        const scope = { projectId: capturedSelection.projectId!, timetableId: capturedSelection.timetableId!,
+          teachingUnitId: unitId }
+        const controller = createFormalLessonManagementV9Controller(currentHost, createId, scope, () => ({
+          projectId: selectionRef.current.projectId ?? '', timetableId: selectionRef.current.timetableId ?? '',
+          teachingUnitId: unitId,
+        }))
+        return await operation(controller)
+      } finally {
+        submittingRef.current = false
+        setPending(false)
+      }
+    }
+    const port: OneOffLessonPersistencePort = {
+      get pending() { return submittingRef.current },
+      get configuredSubjectIds() {
+        const data = readData()
+        return Object.fromEntries(data.teachingUnits.map((unit) => [unit.id,
+          data.teachingUnitSubjects.filter((item) => item.teachingUnitId === unit.id).map((item) => item.subjectId)]))
+      },
+      previewConflicts: (draft, editingId) => {
+        const current = hostRef.current.document
+        if (!current) throw new FormalLessonV9Error('invalid-document', 'V9 document is unavailable.')
+        return getOneOffLessonConflictsV9(current, {
+          projectId: capturedSelection.projectId!, timetableId: capturedSelection.timetableId!,
+          teachingUnitId: draft.teachingUnitId,
+        }, draft, editingId)
+      },
+      save: (request: OneOffSaveRequest) => execute(request.draft.teachingUnitId, (controller) => request.id
+        ? controller.updateOneOff(request.id, request.draft, request.allowConflict)
+        : controller.createOneOff(request.draft, request.allowConflict)),
+      delete: (id) => {
+        if (!target) return Promise.reject(new Error('One-off Lesson does not exist.'))
+        return execute(target.teachingUnitId, (controller) => controller.deleteOneOff(id, true))
+      },
+    }
+    return { get data() { return readData() }, oneOffLessonId, port }
+  }, [createId])
+
+  return { open, openOneOff, pending }
 }

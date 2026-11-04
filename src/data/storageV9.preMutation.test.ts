@@ -91,7 +91,7 @@ async function lessonReady() {
 }
 
 describe('V9 high-risk pre-mutation backup inside the existing transaction', () => {
-  it('integrates real persisted pre-backup and receipt with both formal Lesson operations', async () => {
+  it('integrates real persisted pre-backup and receipt with formal recurring and OneOff operations', async () => {
     const deletion = await lessonReady()
     const beforeDelete = deletion.expected()
     const deleted = await createFormalLessonManagementV9Controller(deletion.host, () => 'unused', deletion.scope)
@@ -117,6 +117,39 @@ describe('V9 high-risk pre-mutation backup inside the existing transaction', () 
       revision: beforePermanent.revision, rawDocument: beforePermanent.raw })
     expect(JSON.parse(permanent.storage.getItem(changed.receipt.preMutationBackup!.key)!).rawDocument)
       .toBe(beforePermanent.raw)
+    const oneOff = await lessonReady()
+    const oneOffUnit = oneOff.host.document!.teachingUnits.find((item) => item.id === oneOff.scope.teachingUnitId)!
+    const oneOffId = '11111111-1111-4111-8111-111111111111'
+    await createFormalLessonManagementV9Controller(oneOff.host, () => oneOffId, oneOff.scope)
+      .createOneOff({ ...oneOff.scope, subjectId: 'subject', classId: 'class', date: oneOffUnit.startDate,
+        purpose: 'extra', time: { mode: 'custom', startTime: '18:00', endTime: '18:45' } })
+    const beforeOneOffDelete = oneOff.expected()
+    const removed = await createFormalLessonManagementV9Controller(oneOff.host, () => 'unused', oneOff.scope)
+      .deleteOneOff(oneOffId, true)
+    expect(removed.document.oneOffLessons).toEqual([])
+    expect(removed.receipt.preMutationBackup).toMatchObject({ operation: 'delete-one-off-lesson',
+      revision: beforeOneOffDelete.revision, rawDocument: beforeOneOffDelete.raw })
+    expect(JSON.parse(oneOff.storage.getItem(removed.receipt.preMutationBackup!.key)!).rawDocument)
+      .toBe(beforeOneOffDelete.raw)
+  })
+  it('keeps a OneOff lesson unchanged when its required deletion backup cannot be written', async () => {
+    const fixture = await lessonReady()
+    const unit = fixture.host.document!.teachingUnits.find((item) => item.id === fixture.scope.teachingUnitId)!
+    const oneOffId = '11111111-1111-4111-8111-111111111111'
+    await createFormalLessonManagementV9Controller(fixture.host, () => oneOffId, fixture.scope)
+      .createOneOff({ ...fixture.scope, subjectId: 'subject', classId: 'class',
+      date: unit.startDate, purpose: 'extra',
+      time: { mode: 'custom', startTime: '18:00', endTime: '18:45' } })
+    const before = fixture.expected()
+    fixture.storage.setItem.mockImplementation((key, value) => {
+      if (key.startsWith(V9_AUTO_BACKUP_PREFIX)) throw new Error('quota')
+      fixture.storage.values.set(key, value)
+    })
+    await expect(createFormalLessonManagementV9Controller(fixture.host, () => 'unused', fixture.scope)
+      .deleteOneOff(oneOffId, true)).rejects.toMatchObject({ code: 'backup-failure' })
+    expect(fixture.host.document!.oneOffLessons.map((item) => item.id)).toEqual([oneOffId])
+    expect(fixture.storage.getItem(APP_DATA_V9_KEY)).toBe(before.raw)
+    expect(fixture.storage.getItem(V9_ACTIVATION_KEY)).toBe(before.metadataRaw)
   })
   it('backs up the complete persisted raw and revision before write, then returns bound evidence', async () => {
     const { storage, document, expected, autoKeys, activated } = await ready()

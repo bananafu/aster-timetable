@@ -121,6 +121,44 @@ describe('useFormalLessonManagementV9Adapter live session', () => {
     }))
   })
 
+  it('keeps a OneOff draft eligible for live resources and revalidates V9 conflicts at submit', async () => {
+    const source = fixture()
+    const host = hostFixture(source.data)
+    const createId = vi.fn(() => '11111111-1111-4111-8111-111111111111')
+    const { result, rerender } = renderHook(() =>
+      useFormalLessonManagementV9Adapter(host.host, source.selection, createId))
+    const session = result.current.openOneOff()!
+    let refreshed = createTeacherSubjectV9(source.data, source.projectId, 'teacher-a', {
+      name: '即時單日科目', shortName: '即單', color: '#718B6C', applicableSchoolLevels: ['senior-high'],
+    }, 'one-off-subject-live')
+    refreshed = configureTeacherSubjectV9(refreshed, source.projectId, 'teacher-a', source.unit.id,
+      'one-off-subject-live', 'one-off-relation-live')
+    refreshed = createClassV9(refreshed, source.projectId,
+      { teachingUnitId: source.unit.id, grade: 1, classNumber: 3 }, 'one-off-class-live')
+    host.replace(refreshed)
+    rerender()
+    expect(session.data.subjects.map((item) => item.id)).toContain('one-off-subject-live')
+    expect(session.port.configuredSubjectIds[source.unit.id]).toContain('one-off-subject-live')
+    const draft = { projectId: source.projectId, timetableId: 'teacher-a', teachingUnitId: source.unit.id,
+      subjectId: 'one-off-subject-live', classId: 'one-off-class-live', date: '2027-08-03',
+      purpose: 'extra' as const, time: { mode: 'period' as const, periodId: source.unit.periods[0].id } }
+    expect(session.port.previewConflicts(draft)).toEqual([])
+    await act(async () => { await session.port.save({ draft, allowConflict: false }) })
+    expect(host.host.document?.oneOffLessons).toMatchObject([{ id: '11111111-1111-4111-8111-111111111111',
+      subjectId: 'one-off-subject-live', classId: 'one-off-class-live' }])
+
+    rerender()
+    const stale = result.current.openOneOff('11111111-1111-4111-8111-111111111111')!
+    host.replace({ ...host.host.document!, events: [...host.host.document!.events, {
+      id: 'external-event', projectId: source.projectId, timetableId: 'teacher-a',
+      teachingUnitId: source.unit.id, ownershipStatus: 'resolved', title: 'external', type: 'meeting',
+      date: '2027-08-03', startTime: '12:00', endTime: '13:00', color: '#112233',
+    }] })
+    rerender()
+    await expect(stale.port.save({ id: '11111111-1111-4111-8111-111111111111', draft,
+      allowConflict: false })).rejects.toMatchObject({ code: 'stale-document' })
+  })
+
   it('fails closed for changed Lesson identity, changed selection, revoked writable, and receipt mismatch', async () => {
     const source = fixture()
     const updateDraft = { projectId: source.projectId, timetableId: 'teacher-a',

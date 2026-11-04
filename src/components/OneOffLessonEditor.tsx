@@ -2,8 +2,9 @@ import { useState, type FormEvent } from 'react'
 import { getOneOffLessonConflicts, OneOffConflictError, type OneOffLessonDraft } from '../data/oneOffLessonsV7'
 import { findProjectSubject, selectProjectSubjectsForLevel } from '../data/subjectSelectorsV8'
 import { classDisplayName } from '../lib/classes'
-import type { AppDataV7 } from '../types'
+import type { AppDataV7, AppDataV8 } from '../types'
 import type { ResolvedScheduleOccurrence } from '../lib/scheduleV4'
+import type { V9ReadOccurrence } from '../lib/scheduleV9'
 import { Modal } from './Modal'
 
 const hours = Array.from({ length: 24 }, (_, value) => String(value).padStart(2, '0'))
@@ -17,26 +18,52 @@ export interface OneOffSaveRequest {
   allowConflict: boolean
 }
 
+export type OneOffLessonConflict = ResolvedScheduleOccurrence | V9ReadOccurrence
+
+export interface OneOffLessonPersistencePort {
+  readonly pending: boolean
+  readonly configuredSubjectIds: Readonly<Record<string, readonly string[]>>
+  previewConflicts: (draft: OneOffLessonDraft, editingId?: string) => readonly OneOffLessonConflict[]
+  save: (request: OneOffSaveRequest) => Promise<unknown>
+  delete: (id: string) => Promise<unknown>
+}
+
 interface Props {
-  data: AppDataV7
+  data: AppDataV7 | AppDataV8
   projectId: string
   timetableId: string
   oneOffLessonId?: string
   initialDate?: string
   initialTeachingUnitId?: string
   /** Re-run the v7 CRUD operation against the latest AppData in the parent. */
-  onSave: (request: OneOffSaveRequest) => void | Promise<void>
+  onSave?: (request: OneOffSaveRequest) => void | Promise<void>
   /** Called only after an explicit confirmation; the parent uses deleteOneOffLesson. */
   onDelete?: (id: string) => void | Promise<void>
+  persistencePort?: OneOffLessonPersistencePort
+  onSaved?: () => void
   onClose: () => void
   onManageResource?: (mode: 'classes' | 'subjects', context: { projectId: string; teachingUnitId: string }, onCreated: (id: string) => void) => void
 }
 
-function conflictDescription(item: ResolvedScheduleOccurrence) {
+function conflictDescription(item: OneOffLessonConflict) {
   return `${item.schoolName}・${item.teachingUnitName}・${item.className}・${item.subjectName}（${item.startTime}–${item.endTime}）`
 }
 
-export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonId, initialDate, initialTeachingUnitId, onSave, onDelete, onClose, onManageResource }: Props) {
+function conflictKey(item: OneOffLessonConflict) {
+  return 'occurrenceKey' in item ? item.occurrenceKey : item.occurrenceId
+}
+
+function reportedConflictList(cause: unknown): readonly OneOffLessonConflict[] | null {
+  if (cause instanceof OneOffConflictError) return cause.conflicts
+  if (cause !== null && typeof cause === 'object' && 'conflicts' in cause
+    && Array.isArray((cause as { conflicts?: unknown }).conflicts)) {
+    return (cause as { conflicts: OneOffLessonConflict[] }).conflicts
+  }
+  return null
+}
+
+export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonId, initialDate,
+  initialTeachingUnitId, onSave, onDelete, persistencePort, onSaved, onClose, onManageResource }: Props) {
   const existing = oneOffLessonId ? data.oneOffLessons.find((item) => item.id === oneOffLessonId) : undefined
   const initialUnit = data.teachingUnits.find((item) => item.id === (existing?.teachingUnitId ?? initialTeachingUnitId) && item.projectId === projectId)
   const [schoolId, setSchoolId] = useState(initialUnit?.schoolId ?? '')
@@ -54,9 +81,10 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
   const [endHour, setEndHour] = useState(existing?.time.mode === 'custom' ? existing.time.endTime.slice(0, 2) : '10')
   const [endMinute, setEndMinute] = useState(existing?.time.mode === 'custom' ? existing.time.endTime.slice(3) : '00')
   const [allowConflict, setAllowConflict] = useState(false)
-  const [reportedConflicts, setReportedConflicts] = useState<ResolvedScheduleOccurrence[] | null>(null)
+  const [reportedConflicts, setReportedConflicts] = useState<readonly OneOffLessonConflict[] | null>(null)
   const [error, setError] = useState('')
-  const [pending, setPending] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const pending = submitting || Boolean(persistencePort?.pending)
 
   const project = data.projects.find((item) => item.id === projectId)
   const timetable = data.timetables.find((item) => item.id === timetableId && item.projectId === projectId)
@@ -69,7 +97,10 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
   const units = data.teachingUnits.filter((item) => item.projectId === projectId && item.schoolId === schoolId)
   const unit = units.find((item) => item.id === teachingUnitId)
   const classes = data.classes.filter((item) => item.projectId === projectId && item.teachingUnitId === teachingUnitId)
-  const subjects = selectProjectSubjectsForLevel(data, projectId, unit?.schoolLevel)
+  const eligibleSubjects = selectProjectSubjectsForLevel(data, projectId, unit?.schoolLevel)
+  const configuredSubjectIds = persistencePort?.configuredSubjectIds[teachingUnitId]
+  const subjects = configuredSubjectIds === undefined ? eligibleSubjects
+    : eligibleSubjects.filter((item) => configuredSubjectIds.includes(item.id))
   const periods = [...(unit?.periods ?? [])].sort((left, right) => left.order - right.order)
   const sources = data.recurringLessons.filter((item) => item.projectId === projectId && item.timetableId === timetableId)
   const startTime = `${startHour}:${startMinute}`
@@ -85,10 +116,14 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
     time: timeMode === 'period' ? { mode: 'period', periodId: Number(periodId) }
       : { mode: 'custom', startTime, endTime },
   }
-  let previewConflicts: ResolvedScheduleOccurrence[] = []
+  let previewConflicts: readonly OneOffLessonConflict[] = []
   let previewError = ''
   if (complete && !readOnly) {
-    try { previewConflicts = getOneOffLessonConflicts(data, draft, existing?.id) }
+    try {
+      previewConflicts = persistencePort
+        ? persistencePort.previewConflicts(draft, existing?.id)
+        : data.schemaVersion === 7 ? getOneOffLessonConflicts(data, draft, existing?.id) : []
+    }
     catch (cause) { previewError = cause instanceof Error ? cause.message : '無法驗證單日課程。' }
   }
   const conflicts = reportedConflicts ?? previewConflicts
@@ -110,22 +145,34 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
     }
     if (previewError) { setError(previewError); return }
     if (conflicts.length && !allowConflict) { setError('此時段已有課程；請調整時間，或明確勾選允許衝堂。'); return }
-    setPending(true)
+    setSubmitting(true)
     setError('')
-    try { await onSave({ draft, ...(existing ? { id: existing.id } : {}), allowConflict }) }
+    try {
+      const request = { draft, ...(existing ? { id: existing.id } : {}), allowConflict }
+      if (persistencePort) await persistencePort.save(request)
+      else if (onSave) await onSave(request)
+      else throw new Error('找不到單日課程儲存路徑。')
+      onSaved?.()
+    }
     catch (cause) {
-      if (cause instanceof OneOffConflictError) { setReportedConflicts(cause.conflicts); setAllowConflict(false) }
+      const latestConflicts = reportedConflictList(cause)
+      if (latestConflicts) { setReportedConflicts(latestConflicts); setAllowConflict(false) }
       setError(cause instanceof Error ? cause.message : '儲存失敗，請再試一次。')
-    } finally { setPending(false) }
+    } finally { setSubmitting(false) }
   }
 
   const remove = async () => {
-    if (!existing || !onDelete || locked || !window.confirm('確定刪除這堂單日課程？此操作不影響固定課程。')) return
-    setPending(true)
+    if (!existing || (!onDelete && !persistencePort) || locked
+      || !window.confirm('確定刪除這堂單日課程？此操作不影響固定課程。')) return
+    setSubmitting(true)
     setError('')
-    try { await onDelete(existing.id) }
+    try {
+      if (persistencePort) await persistencePort.delete(existing.id)
+      else await onDelete!(existing.id)
+      onSaved?.()
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : '刪除失敗，請再試一次。') }
-    finally { setPending(false) }
+    finally { setSubmitting(false) }
   }
 
   return <Modal title={oneOffLessonId ? '編輯單日課程' : '新增單日課程'} subtitle={`僅此日期・${timetable?.name ?? '未選擇教師課表'}`} onClose={() => { if (!pending) onClose() }}>
@@ -168,10 +215,10 @@ export function OneOffLessonEditor({ data, projectId, timetableId, oneOffLessonI
       {unit && date && (date < unit.startDate || date > unit.endDate) && <p className="full one-off-error" role="alert">日期須位於此學制的學期範圍：{unit.startDate}–{unit.endDate}。</p>}
       {timeMode === 'custom' && !timeValid && <p className="full one-off-error" role="alert">結束時間必須晚於開始時間，不支援跨午夜。</p>}
       {previewError && <p className="full one-off-error" role="alert">{previewError}</p>}
-      {conflicts.length > 0 && <div className="full one-off-conflicts" role="status"><strong>此時段已有 {conflicts.length} 堂課</strong><ul>{conflicts.map((item) => <li key={item.occurrenceKey}>{conflictDescription(item)}</li>)}</ul><label><input type="checkbox" checked={allowConflict} disabled={locked} onChange={(event) => { setAllowConflict(event.target.checked); setError('') }} />明確允許衝堂，保留兩堂課</label></div>}
+      {conflicts.length > 0 && <div className="full one-off-conflicts" role="status"><strong>此時段已有 {conflicts.length} 堂課</strong><ul>{conflicts.map((item) => <li key={conflictKey(item)}>{conflictDescription(item)}</li>)}</ul><label><input type="checkbox" checked={allowConflict} disabled={locked} onChange={(event) => { setAllowConflict(event.target.checked); setError('') }} />明確允許衝堂，保留兩堂課</label></div>}
       {error && <p className="full one-off-error" role="alert">{error}</p>}
       <div className="full form-actions">
-        {existing && onDelete && <button type="button" className="danger-button one-off-delete" disabled={locked} onClick={() => { void remove() }}>刪除單日課程</button>}
+        {existing && (onDelete || persistencePort) && <button type="button" className="danger-button one-off-delete" disabled={locked} onClick={() => { void remove() }}>刪除單日課程</button>}
         <button type="button" disabled={pending} onClick={onClose}>關閉</button>
         {!readOnly && <button type="submit" className="primary-button" disabled={pending || !complete || Boolean(previewError) || (conflicts.length > 0 && !allowConflict)}>{pending ? '處理中…' : existing ? '送出修改' : '送出新增'}</button>}
       </div>

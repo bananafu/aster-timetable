@@ -545,7 +545,7 @@ describe('formal V9 management composition', () => {
     const otherTeacherSubjects = stored().subjects.filter((item) => item.timetableId === 'teacher-b')
 
     fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
-    expect((screen.getByRole('button', { name: /新增單日課程/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /新增單日課程/ }) as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: /新增固定課程/ }))
     expect(screen.queryByRole('navigation', { name: '課程編輯範圍' })).toBeNull()
     chooseLessonSubject(/甲專用/)
@@ -578,6 +578,61 @@ describe('formal V9 management composition', () => {
     expect(stored().subjects.filter((item) => item.timetableId === 'teacher-b')).toEqual(otherTeacherSubjects)
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(originalV7)
     expect(useAppDataV4).not.toHaveBeenCalled()
+  })
+
+  it('creates, moves, opens from both resolved views, and high-risk deletes a OneOff lesson', async () => {
+    const f = fixture()
+    await initializeFresh(f.data)
+    await mount()
+    const date = toDateKey(startOfWeek(new Date()))
+    const nextDate = toDateKey(addDays(fromDateKey(date), 1))
+
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(screen.getByRole('button', { name: /新增單日課程/ }))
+    const editor = screen.getByRole('dialog', { name: '新增單日課程' })
+    fireEvent.change(within(editor).getByLabelText('指定日期'), { target: { value: date } })
+    fireEvent.change(within(editor).getByLabelText('學校'), { target: { value: f.seniorA.schoolId } })
+    fireEvent.change(within(editor).getByLabelText('學制'), { target: { value: f.seniorA.id } })
+    const schoolClass = f.data.classes.find((item) => item.projectId === f.projectA
+      && item.teachingUnitId === f.seniorA.id)!
+    const subject = f.data.subjects.find((item) => item.projectId === f.projectA
+      && item.timetableId === 'teacher-a')!
+    fireEvent.change(within(editor).getByLabelText('班級'), { target: { value: schoolClass.id } })
+    fireEvent.change(within(editor).getByLabelText('科目'), { target: { value: subject.id } })
+    fireEvent.change(within(editor).getByLabelText('節次'), { target: { value: String(f.seniorA.periods[0].id) } })
+    const beforeCreateRevision = revision()
+    fireEvent.click(within(editor).getByRole('button', { name: '送出新增' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '新增單日課程' })).toBeNull())
+    const created = stored().oneOffLessons[0]
+    expect(created).toMatchObject({ projectId: f.projectA, timetableId: 'teacher-a',
+      teachingUnitId: f.seniorA.id, classId: schoolClass.id, subjectId: subject.id,
+      date, purpose: 'extra' })
+    expect(revision()).toBe(beforeCreateRevision + 1)
+    expect(autoBackupKeys()).toEqual([])
+
+    const overviewCard = screen.getByRole('button', { name: /編輯單日課程/ })
+    fireEvent.click(overviewCard)
+    expect(screen.getByRole('dialog', { name: '編輯單日課程' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('指定日期'), { target: { value: nextDate } })
+    fireEvent.click(screen.getByRole('button', { name: '送出修改' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯單日課程' })).toBeNull())
+    expect(stored().oneOffLessons[0]).toMatchObject({ id: created.id, date: nextDate })
+
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    const scheduleCard = screen.getByRole('button', { name: /編輯單日課程/ })
+    fireEvent.click(scheduleCard)
+    expect(screen.getByRole('dialog', { name: '編輯單日課程' })).toBeTruthy()
+    const beforeDeleteRaw = localStorage.getItem(APP_DATA_V9_KEY)
+    const beforeDeleteRevision = revision()
+    fireEvent.click(screen.getByRole('button', { name: '刪除單日課程' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯單日課程' })).toBeNull())
+    expect(stored().oneOffLessons).toEqual([])
+    expect(revision()).toBe(beforeDeleteRevision + 1)
+    const backups = autoBackupKeys()
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(backups[0])!)).toMatchObject({
+      operation: 'delete-one-off-lesson', revision: beforeDeleteRevision, rawDocument: beforeDeleteRaw,
+    })
   })
 
   it('permanently updates a fixed lesson through the high-risk Host path and preserves history', async () => {

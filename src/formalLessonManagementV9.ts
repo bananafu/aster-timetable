@@ -3,12 +3,12 @@ import type { FormalV9HostPort } from './formalRuntime'
 import { isCompatibleAppDataV9 } from './data/validators/v9'
 import { fingerprintV7Raw } from './data/activationV8'
 import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './data/storageV9'
-import { cancelOccurrenceV9, createRecurringLessonV9, deleteRecurringLessonV9,
-  getRecurringLessonV9Impact, moveOccurrenceV9,
+import { cancelOccurrenceV9, createOneOffLessonV9, createRecurringLessonV9,
+  deleteOneOffLessonV9, deleteRecurringLessonV9, getRecurringLessonV9Impact, moveOccurrenceV9,
   permanentlyUpdateLessonV9, replaceOccurrenceChangeV9, replaceOccurrenceV9,
-  revokeOccurrenceOverrideV9, updateRecurringLessonV9,
+  revokeOccurrenceOverrideV9, updateOneOffLessonV9, updateRecurringLessonV9,
   type LessonV9Scope, type OccurrenceChangeV9Draft,
-  type RecurringLessonV9Draft } from './data/lessonMutationsV9'
+  type OneOffLessonV9Draft, type RecurringLessonV9Draft } from './data/lessonMutationsV9'
 
 export type FormalLessonV9ErrorCode = 'invalid-document' | 'invalid-scope' | 'not-writable'
   | 'duplicate-submit' | 'stale-document' | 'invalid-result' | 'receipt-mismatch' | 'backup-required'
@@ -39,6 +39,10 @@ export interface FormalLessonV9Actions {
   revokeOccurrenceOverride: (overrideId: string) => Promise<FormalLessonV9Result>
   permanentlyUpdateFromDate: (lessonId: string, date: string,
     draft: RecurringLessonV9Draft) => Promise<FormalLessonV9Result>
+  createOneOff: (draft: OneOffLessonV9Draft, allowConflict?: boolean) => Promise<FormalLessonV9Result>
+  updateOneOff: (oneOffId: string, draft: OneOffLessonV9Draft,
+    allowConflict?: boolean) => Promise<FormalLessonV9Result>
+  deleteOneOff: (oneOffId: string, confirmed: true) => Promise<FormalLessonV9Result>
 }
 
 /** Unmounted action port. The selection reader invalidates callbacks captured before a context switch. */
@@ -136,6 +140,21 @@ export function createFormalLessonManagementV9Controller(host: FormalV9HostPort,
         newId = createId()
         return permanentlyUpdateLessonV9(current, captured, id, date, draft, newId)
       }, () => newId, 'permanently-update-lesson')
+    },
+    createOneOff: (draft, allowConflict = false) => {
+      let id = ''
+      return commit((current) => {
+        id = createId()
+        return createOneOffLessonV9(current, captured, draft, id, allowConflict === true)
+      }, () => id)
+    },
+    updateOneOff: (id, draft, allowConflict = false) => commit((current) =>
+      updateOneOffLessonV9(current, captured, id, draft, allowConflict === true), () => id),
+    deleteOneOff: (id, confirmed) => {
+      requireSelection()
+      if (confirmed !== true) fail('invalid-scope', 'Deletion requires explicit confirmation.')
+      return commit((current) => deleteOneOffLessonV9(current, captured, id, true),
+        () => id, 'delete-one-off-lesson')
     },
   }
 }

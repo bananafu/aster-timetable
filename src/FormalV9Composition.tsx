@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react'
 import { AddChoiceDialog } from './components/AddChoiceDialog'
 import { FormalAcademicSettingsV9 } from './components/FormalAcademicSettingsV9'
 import { LessonEditor } from './components/LessonEditor'
+import { OneOffLessonEditor } from './components/OneOffLessonEditor'
 import { CourseResourceManagerDialog } from './components/CourseResourceManager'
 import { FirstUseView, ProjectLifecycleView, type ProjectLifecycleViewData } from './components/ProjectLifecycleView'
 import { MultiSchoolSchedule } from './components/MultiSchoolSchedule'
@@ -16,7 +17,8 @@ import type { FormalProjectTimetableV9Result, FormalProjectTimetableV9Selection 
 import { useFormalAcademicSettingsV9Adapter } from './hooks/useFormalAcademicSettingsV9Adapter'
 import { useFormalClassManagementV9Adapter } from './hooks/useFormalClassManagementV9Adapter'
 import { useFormalLessonManagementV9Adapter,
-  type FormalLessonEditorV9Session } from './hooks/useFormalLessonManagementV9Adapter'
+  type FormalLessonEditorV9Session,
+  type FormalOneOffLessonEditorV9Session } from './hooks/useFormalLessonManagementV9Adapter'
 import { useFormalProjectTimetableV9Adapter } from './hooks/useFormalProjectTimetableV9Adapter'
 import { useFormalSubjectManagementV9Adapter } from './hooks/useFormalSubjectManagementV9Adapter'
 import type { StorageStatus } from './hooks/useLocalStorage'
@@ -153,6 +155,7 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
   const [tableDialog, setTableDialog] = useState<TimetableDialog | null>(null)
   const [addChoiceOpen, setAddChoiceOpen] = useState(false)
   const [lessonEditor, setLessonEditor] = useState<FormalLessonEditorV9Session | null>(null)
+  const [oneOffEditor, setOneOffEditor] = useState<FormalOneOffLessonEditorV9Session | null>(null)
   const [tableError, setTableError] = useState('')
   const [tableNotice, setTableNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -168,7 +171,7 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
     || academicPort?.pending || lessonPort?.pending)
   const hostWritable = Boolean(host?.status === 'active' && host.writable)
   const writable = hostWritable && !pending
-  const modalOpen = Boolean(resource || lifecycle || tableDialog || addChoiceOpen || lessonEditor)
+  const modalOpen = Boolean(resource || lifecycle || tableDialog || addChoiceOpen || lessonEditor || oneOffEditor)
   const status: StorageStatus = source.kind === 'preview' ? 'conflict'
     : host?.status === 'conflict' ? 'conflict'
       : host?.status === 'write-error' ? 'write-error' : writable ? 'saved' : 'read-error'
@@ -299,8 +302,10 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
   }
   const canAddLesson = Boolean(source.kind === 'formal' && writable && project?.term && timetable
     && lessonPort?.open(null))
+  const canAddOneOff = Boolean(source.kind === 'formal' && writable && project?.term && timetable
+    && lessonPort?.openOneOff(null))
   const openAddChoice = () => {
-    if (!canAddLesson || modalOpen || pending) return
+    if ((!canAddLesson && !canAddOneOff) || modalOpen || pending) return
     setAddChoiceOpen(true)
   }
   const openLesson = (lessonId: string | null, occurrenceDate: string | null = null,
@@ -310,6 +315,13 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
     if (!session) return
     setAddChoiceOpen(false)
     setLessonEditor(session)
+  }
+  const openOneOff = (oneOffLessonId: string | null) => {
+    if (!lessonPort || !writable || pending) return
+    const session = lessonPort.openOneOff(oneOffLessonId)
+    if (!session) return
+    setAddChoiceOpen(false)
+    setOneOffEditor(session)
   }
 
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
@@ -352,21 +364,23 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
         {activePage === 'dashboard' && <section className="panel overview-panel">
           <div className="panel-heading"><div><h2>本週行事曆</h2><p>課程、會議與活動依實際日期和時間排列，包含週末與已取消課程。</p></div>
             {source.kind === 'formal' && timetable && <button className="primary-button" data-course-add
-              onClick={openAddChoice} disabled={!canAddLesson}><Plus size={16} />新增課程</button>}</div>
+              onClick={openAddChoice} disabled={!canAddLesson && !canAddOneOff}><Plus size={16} />新增課程</button>}</div>
           <OverviewCalendar mode="resolved" weekStart={weekStart} readStatus={calendarReadStatus}
             days={displayDays} events={displayEvents}
             onLessonClick={source.kind === 'formal' && writable
-              ? (id, date, overrideId) => openLesson(id, date, overrideId ?? null) : undefined} />
+              ? (id, date, overrideId) => openLesson(id, date, overrideId ?? null) : undefined}
+            onOneOffClick={source.kind === 'formal' && writable ? (id) => openOneOff(id) : undefined} />
         </section>}
         {activePage === 'timetable' && <section className="panel timetable-panel">
           <div className="panel-heading"><div><h2>跨校週課表</h2><p>依各校學制的實際節次與輪週設定逐日整合。</p></div>
             {source.kind === 'formal' && timetable && <button className="primary-button" data-course-add
-              onClick={openAddChoice} disabled={!canAddLesson}><Plus size={16} />新增課程</button>}</div>
+              onClick={openAddChoice} disabled={!canAddLesson && !canAddOneOff}><Plus size={16} />新增課程</button>}</div>
           <MultiSchoolSchedule key={timetable?.id ?? project.id} mode="resolved" weekDays={weekDays}
             readStatus={weekResult.status} days={displayDays} schools={displaySchools}
             teachingUnits={displayUnits} onHeaderTeachingUnitChange={selectHeaderUnit}
             onLessonClick={source.kind === 'formal' && writable
-              ? (id, date, overrideId) => openLesson(id, date, overrideId ?? null) : undefined} />
+              ? (id, date, overrideId) => openLesson(id, date, overrideId ?? null) : undefined}
+            onOneOffClick={source.kind === 'formal' && writable ? (id) => openOneOff(id) : undefined} />
         </section>}
         </div> : null)}
     </main>
@@ -383,9 +397,9 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
       onDelete={() => { void writeTimetable(() => tableDialog.actions.delete(tableDialog.projectId,
         tableDialog.source!.id), '已刪除並儲存課表。') }} onClose={closeTimetable} />}
     {addChoiceOpen && <AddChoiceDialog initialFocus={null} canAddLesson={canAddLesson}
-      addLessonReason="請先完成目前專案、教師課表與課程基本資料。" canAddOneOff={false}
+      addLessonReason="請先完成目前專案、教師課表與課程基本資料。" canAddOneOff={canAddOneOff}
       addOneOffReason="此功能尚未接入正式 V9 資料路徑。" onAddLesson={() => openLesson(null)}
-      onAddOneOff={() => undefined} onClose={() => setAddChoiceOpen(false)} />}
+      onAddOneOff={() => openOneOff(null)} onClose={() => setAddChoiceOpen(false)} />}
     {lessonEditor && <LessonEditor key={`${lessonEditor.lessonId ?? 'new'}:${selection.projectId}:${selection.timetableId}`}
       data={lessonEditor.data} fixedLessonPort={lessonEditor.port} timetableId={selection.timetableId ?? undefined}
       lessonId={lessonEditor.lessonId} occurrenceDate={lessonEditor.occurrenceDate}
@@ -400,6 +414,19 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
         setResource(mode)
       }} onClose={() => { if (!lessonPort?.pending && !resource) setLessonEditor(null) }}
       onSaved={() => setLessonEditor(null)} />}
+    {oneOffEditor && selection.projectId && selection.timetableId && <OneOffLessonEditor
+      key={`${oneOffEditor.oneOffLessonId ?? 'new'}:${selection.projectId}:${selection.timetableId}`}
+      data={oneOffEditor.data} projectId={selection.projectId} timetableId={selection.timetableId}
+      oneOffLessonId={oneOffEditor.oneOffLessonId ?? undefined} persistencePort={oneOffEditor.port}
+      onManageResource={(mode, context, onCreated) => {
+        if (!subjectPort || !classPort || pending) return
+        lessonResourceCreated.current = { mode, projectId: context.projectId,
+          timetableId: selection.timetableId!, teachingUnitId: context.teachingUnitId, select: onCreated }
+        if (mode === 'subjects') subjectPort.selectTeachingUnit(context.teachingUnitId)
+        else classPort.selectTeachingUnit(context.teachingUnitId)
+        setResource(mode)
+      }} onClose={() => { if (!lessonPort?.pending && !resource) setOneOffEditor(null) }}
+      onSaved={() => setOneOffEditor(null)} />}
     {resource === 'subjects' && subjectPort && <CourseResourceManagerDialog mode="subjects" subjectPort={subjectPort}
       onCreated={(mode, id, scope) => {
         const pending = lessonResourceCreated.current
