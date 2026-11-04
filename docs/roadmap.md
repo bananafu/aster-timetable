@@ -1,5 +1,9 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R4-1D-1 — Formal V9 effective-dated permanent update（接線完成，待瀏覽器驗收）
+
+正式 V9 `LessonEditor` 已沿用既有預覽／確認介面接上自指定日期永久修改。新舊版本以 effective-dated split 保留歷史，合法 future override 改指向新版本，EVERY／A／B 週型沿用既有錨點；寫入必須通過單一 V9 Host 的 revision、selection、validator、receipt/readback 及 `permanently-update-lesson` pre-mutation backup 驗證。永久交換、永久結束、單日交換與額外單日課程不在本階段。自動測試與真實瀏覽器驗收狀態分開記錄；Recovery 的真實瀏覽器操作仍未驗收。
+
 ## Phase 4D R4-1C-3 — Formal V9 full-page recovery（接線完成，待瀏覽器驗收）
 
 正式入口已接上 V8 轉換、已驗證中斷續接、唯一孤立備份續接與安全原始匯出；跨分頁 evidence 變動會撤銷舊快照。整合測試涵蓋入口分流、確認與匯出、失效快照、損壞及多筆備份、復原後 Runtime Gate。真實瀏覽器操作尚待驗收。

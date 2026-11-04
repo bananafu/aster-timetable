@@ -1,5 +1,11 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R4-1D-1 — Formal V9 effective-dated permanent update
+
+正式 `LessonEditor` 沿用既有「從指定日期起」預覽與確認流程，透過 `FixedLessonPersistencePort.permanentlyUpdate`、`useFormalLessonManagementV9Adapter` 及既有 `createFormalLessonManagementV9Controller.permanentlyUpdateFromDate` 接入單一 V9 Host。寫入仍由 `persistAppDataV9` 在既有 Web Lock／revision transaction 內執行 `permanently-update-lesson` 高風險操作，先保存並讀回驗證綁定 `mutationAttemptId`、operation、舊 revision、digest 與完整舊文件的 pre-mutation backup，確認新文件及 receipt readback 後才回報成功。
+
+版本切分保留相同 `seriesId`，舊版本在生效日前一日結束，新版本自明確日期生效；生效日前的 override 保持原引用，生效日及之後的合法 override 才改指向新版本。Lesson editor identity、選取範圍與非資源文件 baseline 維持固定；已確認的 Subject／Class 資源可在既有草稿中即時投影，其他 revision、selection、writable 或 receipt 變化一律 fail closed。本階段只開放永久修改，不接入永久交換、永久結束、單日交換或額外單日課程，也不新增 schema、Host、persistence 或 UI 元件。
+
 ## Phase 4D R4-1C-3 — Formal V9 recovery entry
 
 `FormalAppEntry` 在 Fresh、純 V7 舊資料及 active V9 之外，使用 `createFormalV9RecoveryCoordinator` 的唯讀快照導向全頁 `FormalV9RecoveryPage`。畫面只持有快照與決策狀態；所有原始匯出由 `createFormalV9RecoveryExportPort` 提供，轉換、續接與孤立備份續接均由 coordinator 呼叫既有 verified service。相關 storage event 立即 invalidate 舊快照、卸載舊畫面並重新盤點，不沿用決策或確認。verified service 成功後 coordinator 再次執行正式 Runtime Gate；只有 `runtime === 'v9'` 可掛載既有單一 `FormalV9Composition`。
@@ -20,7 +26,7 @@ ACT-4 已在正式入口的 V7 掛載前加入明確確認 Modal；舊 V7／V8 �
 
 `useAppDataV9` 每次寫入前重新驗證 active metadata、目前文件 digest／revision、備份與原 V8／activation／V7 基準，執行 validator 及 safe-update，寫入兩個新 key 並讀回後才核發 raw＋revision receipt。storage event 撤銷資格；來源 V8 若被舊分頁改動，V9 停寫並保留匯出／採用外部版本入口。新版 V8 Host 在偵測 V9 文件、metadata 或孤立備份時亦停寫。若只有備份寫入成功，介面僅在唯一備份且來源未變時允許明確續接；多筆孤立備份必須人工處理。已載入不遵守協定的舊版分頁無法即時強制阻止；Web Locks 只協調遵守相同鎖的分頁，並非真正 CAS。同版本多分頁已完成隔離瀏覽器驗收；舊版分頁寫入的是 V7／V8 舊 key，不能直接覆寫 active V9 文件，但可能使來源基準失效，與正在進行的非原子 V9 寫入競爭時仍須人工檢查資料及 receipt。
 
-V8 Preview 啟用後改掛新 Host，提供 Project 新增／切換、教師課表新增／改名／僅設定複製／引用保護刪除，以及按教師隔離的科目新增／改名／安全刪除與跨任教單位配置。D2 管理整合使用 `managementV9` 將既有 V8 學校、任教單位、班級及 Project 複製規則套用於唯讀 V8 驗證投影，只將經 V9 validator／safe-update 通過的結果交給 `useAppDataV9.update`；沒有直接寫入舊 key。新學期複製按來源課表重建 Subject 的 `timetableId` 與所有相關 ID，僅選取各任教單位指定來源日期有效的固定課程；不複製 OneOff、Change、Event、Progress。Project 封存／重新啟用保留資料；永久刪除只有在無教師課表、科目、班級或其他教學依賴時開放，絕不以 V8 的級聯刪除處理有內容的新版專案。來源 Project 尚無教師課表時，管理 adapter 的狹義空白複製分支只複製學校、任教單位與班級設定，不虛構教師或課程；有教師課表時仍沿用既有 V8 copy policy。正式課程、事件與進度編輯器仍未接入新路徑。
+V8 Preview 啟用後改掛新 Host，提供 Project 新增／切換、教師課表新增／改名／僅設定複製／引用保護刪除，以及按教師隔離的科目新增／改名／安全刪除與跨任教單位配置。D2 管理整合使用 `managementV9` 將既有 V8 學校、任教單位、班級及 Project 複製規則套用於唯讀 V8 驗證投影，只將經 V9 validator／safe-update 通過的結果交給 `useAppDataV9.update`；沒有直接寫入舊 key。新學期複製按來源課表重建 Subject 的 `timetableId` 與所有相關 ID，僅選取各任教單位指定來源日期有效的固定課程；不複製 OneOff、Change、Event、Progress。Project 封存／重新啟用保留資料；永久刪除只有在無教師課表、科目、班級或其他教學依賴時開放，絕不以 V8 的級聯刪除處理有內容的新版專案。來源 Project 尚無教師課表時，管理 adapter 的狹義空白複製分支只複製學校、任教單位與班級設定，不虛構教師或課程；有教師課表時仍沿用既有 V8 copy policy。後續 Formal V9 已接入固定課程 CRUD、單日取消／移動／替換及自指定日期永久修改；事件、進度、永久交換／結束、單日交換與額外單日課程仍未接入正式 V9 寫入路徑。
 
 ## Phase 4D R2-D2-B1 — Timetable-owned Subject 資料契約與唯讀盤點（歷史階段）
 

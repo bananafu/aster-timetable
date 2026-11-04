@@ -580,13 +580,74 @@ describe('formal V9 management composition', () => {
     expect(useAppDataV4).not.toHaveBeenCalled()
   })
 
+  it('permanently updates a fixed lesson through the high-risk Host path and preserves history', async () => {
+    const f = occurrenceFixture()
+    await initializeFresh(f.data)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
+    fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
+    expect([...screen.getByLabelText<HTMLSelectElement>('課程異動類型').options]
+      .map((option) => option.value)).toEqual(['permanent'])
+    fireEvent.change(screen.getByLabelText('課程輪週'), { target: { value: 'B' } })
+    const beforeRaw = localStorage.getItem(APP_DATA_V9_KEY)
+    const beforeRevision = revision()
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+
+    const versions = stored().recurringLessons.filter((item) => item.seriesId === 'occurrence-lesson')
+    expect(versions).toMatchObject([
+      { id: 'occurrence-lesson', weekPattern: 'A', effectiveEnd: toDateKey(addDays(f.monday, -1)) },
+      { weekPattern: 'B', effectiveStart: f.mondayKey },
+    ])
+    expect(resolveV9Day(stored(), { projectId: f.projectA, timetableId: 'teacher-a',
+      teachingUnitId: f.senior.id }, addDays(f.monday, -14))).toMatchObject([
+      { id: 'occurrence-lesson' },
+    ])
+    expect(resolveV9Day(stored(), { projectId: f.projectA, timetableId: 'teacher-a',
+      teachingUnitId: f.senior.id }, addDays(f.monday, 7))).toMatchObject([
+      { id: versions[1].id },
+    ])
+    expect(revision()).toBe(beforeRevision + 1)
+    const backups = autoBackupKeys()
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(backups[0])!)).toMatchObject({
+      operation: 'permanently-update-lesson', revision: beforeRevision, rawDocument: beforeRaw,
+    })
+  })
+
+  it('keeps the permanent-update draft and document when its backup cannot be persisted', async () => {
+    const f = occurrenceFixture()
+    await initializeFresh(f.data)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
+    fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
+    fireEvent.change(screen.getByLabelText('課程輪週'), { target: { value: 'B' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    const beforeRaw = localStorage.getItem(APP_DATA_V9_KEY)
+    const beforeRevision = revision()
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key.startsWith(V9_AUTO_BACKUP_PREFIX)) throw new Error('backup quota')
+      return originalSetItem.call(this, key, value)
+    })
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.getByText(
+      'Host 未完成並驗證這次操作；資料未回報為成功，草稿已保留。')).toBeTruthy())
+    expect(screen.getByRole('dialog', { name: '編輯課程' })).toBeTruthy()
+    expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(beforeRaw)
+    expect(revision()).toBe(beforeRevision)
+    expect(stored().recurringLessons).toEqual(f.data.recurringLessons)
+    expect(autoBackupKeys()).toEqual([])
+  })
+
   it('cancels one occurrence through the Fresh V9 Host and keeps other dates unchanged after remount', async () => {
     const f = occurrenceFixture()
     await initializeFresh(f.data)
     const view = await mount()
     fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
     expect(screen.queryByLabelText('異動日期')).toBeNull()
-    expect(screen.queryByRole('button', { name: /從指定日期起/ })).toBeNull()
+    expect(screen.getByRole('button', { name: /從指定日期起/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
     expect((screen.getByLabelText('異動日期') as HTMLInputElement).value).toBe(f.mondayKey)
     expect([...screen.getByLabelText<HTMLSelectElement>('課程異動類型').options]

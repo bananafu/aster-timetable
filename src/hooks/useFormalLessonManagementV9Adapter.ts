@@ -144,6 +144,8 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
         (controller) => controller.createRecurring(toDraft(draft))),
       update: (id, draft) => execute(projectedTarget?.teachingUnitId ?? draft.teachingUnitId,
         (controller) => controller.updateRecurring(id, toDraft(draft))),
+      permanentlyUpdate: (id, date, draft) => execute(projectedTarget?.teachingUnitId ?? draft.teachingUnitId,
+        (controller) => controller.permanentlyUpdateFromDate(id, date, toDraft(draft))),
       delete: (id) => {
         if (!projectedTarget) return Promise.reject(new Error('Lesson does not exist.'))
         return execute(projectedTarget.teachingUnitId, (controller) => controller.deleteRecurring(id, true))

@@ -254,18 +254,36 @@ describe('V9 Lesson domain mutation', () => {
   it('splits a series without rewriting history and reassigns only future override references', () => {
     const { data, scope, draft } = lessonFixture()
     const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
-    const changed = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-23', 'future')
+    const historical = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-09', 'historical')
+    const changed = cancelOccurrenceV9(historical, scope, 'l1', '2026-03-23', 'future')
     const split = permanentlyUpdateLessonV9(changed, scope, 'l1', '2026-03-16',
       { ...draft, subjectId: 'english' }, 'l2')
     expect(split.recurringLessons).toMatchObject([
       { id: 'l1', effectiveEnd: '2026-03-15' }, { id: 'l2', seriesId: 'l1', effectiveStart: '2026-03-16' }])
-    expect(split.overrides[0].originalLessonId).toBe('l2')
+    expect(split.overrides).toMatchObject([
+      { id: 'historical', originalLessonId: 'l1' }, { id: 'future', originalLessonId: 'l2' },
+    ])
     expect(resolveV9Day(split, scope, fromDateKey('2026-03-09'))[0].subjectId).toBe('math')
     expect(resolveV9Day(split, scope, fromDateKey('2026-03-16'))[0].subjectId).toBe('english')
     expect(() => permanentlyUpdateLessonV9(fixed, scope, 'l1', '2026-03-01', draft, 'bad')).toThrow()
     expect(() => permanentlyUpdateLessonV9(fixed, scope, 'l1', '2026-07-01', draft, 'bad')).toThrow()
     expect(() => permanentlyUpdateLessonV9(changed, scope, 'l1', '2026-03-16',
       { ...draft, day: 2 }, 'bad')).toThrow(expect.objectContaining({ code: 'referenced' }))
+  })
+
+  it.each([
+    ['every', 'A', '2026-03-16'],
+    ['A', 'B', '2026-03-16'],
+    ['B', 'every', '2026-03-09'],
+  ] as const)('splits week pattern %s to %s on a real anchored occurrence', (before, after, date) => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, { ...draft, weekPattern: before }, 'l1')
+    const split = permanentlyUpdateLessonV9(fixed, scope, 'l1', date,
+      { ...draft, weekPattern: after }, 'l2')
+    expect(split.recurringLessons).toMatchObject([
+      { id: 'l1', weekPattern: before }, { id: 'l2', weekPattern: after, effectiveStart: date },
+    ])
+    expect(isCompatibleAppDataV9(split)).toBe(true)
   })
 })
 

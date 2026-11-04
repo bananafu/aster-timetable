@@ -44,6 +44,7 @@ export interface FixedLessonPersistencePort {
   occurrence?: OccurrenceChangePersistencePort
   create: (draft: LessonDraftV4) => Promise<unknown>
   update: (lessonId: string, draft: LessonDraftV4) => Promise<unknown>
+  permanentlyUpdate: (lessonId: string, date: string, draft: LessonDraftV4) => Promise<unknown>
   delete: (lessonId: string) => Promise<unknown>
 }
 interface Props {
@@ -72,6 +73,7 @@ type V9OccurrenceOperation =
     replacement: { subjectId: string; classId: string; room?: string } }
   | { kind: 'replace-change'; overrideId: string; change: OccurrenceChangeRequest }
   | { kind: 'revoke'; overrideId: string }
+  | { kind: 'permanent-update'; lessonId: string; date: string; draft: LessonDraftV4 }
 
 function messageFor(error: unknown) {
   if (!(error instanceof Error)) return '無法儲存課程，請確認欄位內容。'
@@ -238,7 +240,13 @@ export function LessonEditor({ data, setData, fixedLessonPort, timetableId: sele
     const partner = candidates.find((item) => item.id === swapLessonId)
     if (mode === 'swap') return { data: swapLessonOccurrences(changeBase, lesson.id, changeDate, swapLessonId, swapDate, uid, timetableId), summary: '僅交換指定日期', details: [`課程 A：${original}`, `課程 B：${swapDate}・${partner?.startTime ?? ''}–${partner?.endTime ?? ''}・${partner?.subjectName ?? swapLessonId}・${partner?.className ?? ''}`], warnings: partner?.schoolId !== lessonSchool?.id ? ['跨校交換會依雙方實際時間映射各自節次，不會混用 periodId'] : [] }
     const futureOverrides = relatedOverrides.filter((item) => item.date >= changeDate).length
-    if (mode === 'permanent') return { data: permanentlyUpdateLesson(data, lesson.id, changeDate, draft, uid), summary: '從指定日期起永久修改', details: [`生效日期：${changeDate}`, `新時段：${dayLabel[day]}・${periods.find((item) => item.id === periodId)?.label ?? periodId}`, '舊版本將在生效日前一日結束'], warnings: futureOverrides ? [`${futureOverrides} 筆生效日後 override 會安全改指向新版本`] : [] }
+    if (mode === 'permanent') {
+      const v9Operation: V9OccurrenceOperation | undefined = fixedLessonPort
+        ? { kind: 'permanent-update', lessonId: lesson.id, date: changeDate, draft } : undefined
+      return { data: fixedLessonPort ? data : permanentlyUpdateLesson(data, lesson.id, changeDate, draft, uid),
+        summary: '從指定日期起永久修改', details: [`生效日期：${changeDate}`, `新時段：${dayLabel[day]}・${periods.find((item) => item.id === periodId)?.label ?? periodId}`, '舊版本將在生效日前一日結束'], warnings: futureOverrides ? [`${futureOverrides} 筆生效日後 override 會安全改指向新版本`] : [],
+        v9Operation }
+    }
     if (mode === 'permanent-swap') return { data: permanentlySwapLessons(data, lesson.id, swapLessonId, changeDate, uid, timetableId), summary: '從指定日期起永久交換', details: [`生效日期：${changeDate}`, `交換對象：${partner?.subjectName ?? swapLessonId}・${partner?.className ?? ''}`], warnings: ['雙方都會建立新版本；生效日前歷史不變', ...(partner?.schoolId !== lessonSchool?.id ? ['跨校交換必須有相同實際起訖時間的安全節次映射'] : [])] }
     if (mode === 'end') return { data: endLessonFromDate(data, lesson.id, changeDate, timetableId), summary: '從指定日期起結束課程', details: [`結束日期：${changeDate}`, '生效日前的歷史課表仍保留'], warnings: futureOverrides ? [`仍有 ${futureOverrides} 筆未處理 override，操作將被阻止`] : [] }
     throw new Error('Unsupported change')
@@ -321,7 +329,8 @@ export function LessonEditor({ data, setData, fixedLessonPort, timetableId: sele
           operation.replacement)
         else if (operation.kind === 'replace-change') await occurrencePort.replaceChange(operation.overrideId,
           operation.change)
-        else await occurrencePort.revoke(operation.overrideId)
+        else if (operation.kind === 'revoke') await occurrencePort.revoke(operation.overrideId)
+        else await fixedLessonPort!.permanentlyUpdate(operation.lessonId, operation.date, operation.draft)
         onSaved(projectId); onClose()
       } catch (reason) { setError(messageFor(reason)) }
       return
@@ -361,8 +370,8 @@ export function LessonEditor({ data, setData, fixedLessonPort, timetableId: sele
     {lesson && <><section className="lesson-context full" aria-label="目前課程資訊"><div><span>學校／學制</span><strong>{lessonSchool?.name}・{lessonUnit?.schoolLevel === 'junior-high' ? '國中部' : lessonUnit?.schoolLevel === 'senior-high' ? '高中部' : lessonUnit?.name}</strong></div><div><span>科目／班級</span><strong>{occurrence?.subjectName ?? lessonSubject?.name}・{occurrence?.className ?? (lessonClass ? classDisplayName(lessonClass) : '')}</strong></div><div><span>日期／週型</span><strong>{occurrenceDate ?? '未指定日期'}・{lesson.weekPattern === 'every' ? '每週' : `${lesson.weekPattern} 週`}</strong></div><div><span>節次／實際時間</span><strong>{occurrence?.periodLabel ?? lessonPeriod?.label}・{occurrence?.startTime ?? lessonPeriod?.startTime}–{occurrence?.endTime ?? lessonPeriod?.endTime}</strong></div><p><span className={`lesson-status ${occurrenceStatus}`}>{statusLabel[occurrenceStatus]}</span>{occurrence?.note && <em>{occurrence.note}</em>}</p></section>
     {canChangeOccurrences && activeOverride && !historicalVersion && (!fixedLessonPort || !activeOverride.groupId) && <section className="lesson-override-manager full" aria-label="現有單日異動"><div><span>此日期已有異動</span><strong>{activeOverride.groupId ? '單日交換' : statusLabel[occurrenceStatus]}</strong><small>{activeOverride.date}{activeOverride.target ? ` → ${activeOverride.target.date}・節次 ${activeOverride.target.periodId}` : ''}</small></div><div><button type="button" onClick={beginOverrideEdit}>修改此異動</button><button type="button" className="danger-button" onClick={previewOverrideRevoke}>撤銷異動</button></div></section>}
     {canChangeOccurrences && editingOverrideId && <p className="lesson-editing-override full" role="status">正在改寫既有單日異動；確認後會以新異動取代原紀錄，不會建立重複 override。</p>}
-    {canChangeOccurrences && (historicalVersion ? <p className="lesson-risk-warning full" role="status">目前選取的是已結束的歷史版本，只能查看，不可直接修改或新增異動。</p> : <nav className="lesson-scope-switch full" aria-label="課程編輯範圍"><button type="button" className={scope === 'basic' ? 'active' : ''} aria-pressed={scope === 'basic'} onClick={() => { setMode('basic'); resetPreview() }}>固定版本資料<small>直接修正目前版本</small></button><button type="button" className={scope === 'single' ? 'active' : ''} aria-pressed={scope === 'single'} onClick={() => { setMode('cancel'); resetPreview() }}>僅此日期<small>不影響其他週</small></button>{!fixedLessonPort && <button type="button" className={scope === 'permanent' ? 'active' : ''} aria-pressed={scope === 'permanent'} onClick={() => { setMode('permanent'); resetPreview() }}>從指定日期起<small>建立新歷史版本</small></button>}</nav>)}
-    {!historicalVersion && scope !== 'basic' && <label className="full">異動方式<select aria-label="課程異動類型" value={mode} onChange={(event) => { setMode(event.target.value as ChangeMode); resetPreview() }}>{scope === 'single' ? <><option value="cancel">取消課程</option><option value="move">移動課程</option><option value="replace">替換內容</option>{!fixedLessonPort && <option value="swap">交換兩堂課</option>}</> : <><option value="permanent">永久修改</option><option value="permanent-swap">永久交換</option><option value="end">結束課程</option></>}</select></label>}
+    {canChangeOccurrences && (historicalVersion ? <p className="lesson-risk-warning full" role="status">目前選取的是已結束的歷史版本，只能查看，不可直接修改或新增異動。</p> : <nav className="lesson-scope-switch full" aria-label="課程編輯範圍"><button type="button" className={scope === 'basic' ? 'active' : ''} aria-pressed={scope === 'basic'} onClick={() => { setMode('basic'); resetPreview() }}>固定版本資料<small>直接修正目前版本</small></button><button type="button" className={scope === 'single' ? 'active' : ''} aria-pressed={scope === 'single'} onClick={() => { setMode('cancel'); resetPreview() }}>僅此日期<small>不影響其他週</small></button><button type="button" className={scope === 'permanent' ? 'active' : ''} aria-pressed={scope === 'permanent'} onClick={() => { setMode('permanent'); resetPreview() }}>從指定日期起<small>建立新歷史版本</small></button></nav>)}
+    {!historicalVersion && scope !== 'basic' && <label className="full">異動方式<select aria-label="課程異動類型" value={mode} onChange={(event) => { setMode(event.target.value as ChangeMode); resetPreview() }}>{scope === 'single' ? <><option value="cancel">取消課程</option><option value="move">移動課程</option><option value="replace">替換內容</option>{!fixedLessonPort && <option value="swap">交換兩堂課</option>}</> : fixedLessonPort ? <option value="permanent">永久修改</option> : <><option value="permanent">永久修改</option><option value="permanent-swap">永久交換</option><option value="end">結束課程</option></>}</select></label>}
     {relatedOverrides.length > 0 && <p className="lesson-risk-warning full" role="status">此版本已有 {relatedOverrides.length} 筆單日異動。新增同日異動、結束課程或版本切分時會驗證引用，無法安全處理便會阻止寫入。</p>}</>}
     {canChangeOccurrences && lesson && mode !== 'basic' && <label className="full">指定／生效日期<input aria-label="異動日期" type="date" value={changeDate} onChange={(event) => { setChangeDate(event.target.value); setTargetDate(event.target.value); setSwapLessonId(''); resetPreview() }} required /></label>}
     {mode === 'move' && <><label>移至日期<input aria-label="移至日期" type="date" value={targetDate} onChange={(event) => { setTargetDate(event.target.value); resetPreview() }} required /></label><label>移至節次<select aria-label="移至節次" value={targetPeriodId} onChange={(event) => { setTargetPeriodId(Number(event.target.value)); resetPreview() }}>{periods.map((period) => <option key={period.id} value={period.id}>{period.label}（{period.startTime}–{period.endTime}）</option>)}</select></label><label className="full checkbox-row"><input type="checkbox" checked={allowConflict} onChange={(event) => { setAllowConflict(event.target.checked); resetPreview() }} />目標已有課程時仍保留雙方並顯示衝堂警告</label></>}
