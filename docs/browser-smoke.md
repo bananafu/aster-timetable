@@ -3,6 +3,9 @@
 Formal V9 browser smoke uses Playwright's bundled Chromium on the dedicated origin
 `http://127.0.0.1:41739`. The configuration does not select an installed Chrome or Edge channel,
 does not use `launchPersistentContext`, and does not provide a user data directory.
+The suite remains fully parallel with four workers; eight concurrent Chromium workers exceeded the
+verified Windows runner capacity and caused scattered default-timeout terminations without a shared
+product path, while the same batches passed at one to four workers. Assertions and timeouts are unchanged.
 
 Every test receives a newly created `BrowserContext`. Test setup proves context isolation by writing
 a non-product sentinel in a separate disposable context and confirming it is absent from the test
@@ -18,13 +21,21 @@ The fixture follows the production contracts:
 5. Reload and require the production Runtime Gate and V9 Host to become active again.
 
 The initial smoke covers OneOff create, reload, edit, reload, high-risk delete, reload, exact
-pre-mutation backup evidence, and active Runtime Gate evidence. Run it with:
+pre-mutation backup evidence, and active Runtime Gate evidence. The regression suite additionally covers:
+
+- fixed, moved, cancelled and OneOff conflict previews and submissions;
+- all three OneOff purposes, period/custom time, and non-blocking Meeting/Activity overlap;
+- two-page stale revision protection inside one disposable context;
+- EVERY/A/B anchor resolution, cross-year term boundaries and Timetable isolation;
+- permanent-update history, future override rebinding and high-risk backup evidence; and
+- Recovery exact-raw export, focus, cross-page storage events and snapshot invalidation.
+
+Run all browser tests with:
 
 ```sh
 npm run test:browser
 ```
 
 Playwright closes only its disposable contexts and temporary browser profile. Generated traces,
-screenshots and reports are ignored by Git. Recovery, multi-tab revision conflicts, conflict policy,
-term boundaries, all OneOff purposes/time modes, live resource editing, and comprehensive A/B
-resolution remain separate follow-up coverage.
+screenshots and reports are ignored by Git. Live Subject/Class resource editing, corrupted or
+ambiguous Recovery evidence, and legacy-browser compatibility remain separate follow-up coverage.

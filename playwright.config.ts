@@ -5,6 +5,7 @@ const browserSmokePort = 41739
 export default defineConfig({
   testDir: './tests/browser',
   fullyParallel: true,
+  workers: 4,
   forbidOnly: true,
   reporter: [['list'], ['html', { open: 'never' }]],
   outputDir: 'test-results/playwright',
