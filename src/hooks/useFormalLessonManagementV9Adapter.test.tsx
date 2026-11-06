@@ -6,7 +6,7 @@ import type { LessonDraftV4 } from '../data/lessonsV4'
 import { createEmptyAppDataV8 } from '../data/storageV8'
 import { configureTeacherSubjectV9, createBlankProjectV9, createTeacherSubjectV9,
   createTeacherTimetableV9 } from '../data/teacherSubjectsV9'
-import { createRecurringLessonV9 } from '../data/lessonMutationsV9'
+import { cancelOccurrenceV9, createRecurringLessonV9 } from '../data/lessonMutationsV9'
 import type { FormalProjectTimetableV9Selection } from '../formalProjectTimetableV9'
 import type { FormalV9HostPort } from '../formalRuntime'
 import type { AppDataV9 } from '../types/v9'
@@ -56,6 +56,94 @@ function hostFixture(initial: AppDataV9) {
 }
 
 describe('useFormalLessonManagementV9Adapter live session', () => {
+  it('resolves cross-A/B swap candidates from the latest scoped V9 document and excludes occupied occurrences', () => {
+    const source = fixture()
+    const alternating = {
+      ...source.data,
+      teachingUnits: source.data.teachingUnits.map((item) => item.id === source.unit.id
+        ? { ...item, weekCycle: { enabled: true, anchorDate: '2027-08-02', anchorPattern: 'A' as const } }
+        : item),
+      recurringLessons: source.data.recurringLessons.map((item) => item.id === 'lesson-a'
+        ? { ...item, weekPattern: 'A' as const } : item),
+    }
+    const withPartner = createRecurringLessonV9(alternating, {
+      ...source.selection, teachingUnitId: source.unit.id }, {
+      projectId: source.projectId, timetableId: 'teacher-a', teachingUnitId: source.unit.id,
+      subjectId: 'subject-a', classId: 'class-a', day: 1,
+      periodId: source.unit.periods[1].id, weekPattern: 'B', room: '',
+    }, 'lesson-b')
+
+    const host = hostFixture(withPartner)
+    const hook = renderHook(() => useFormalLessonManagementV9Adapter(host.host, source.selection))
+    const aSession = hook.result.current.open('lesson-a', '2027-08-02')!
+    expect(aSession.port.occurrence!.swapCandidates!('2027-08-02')).toEqual([])
+    expect(aSession.port.occurrence!.swapCandidates!('2027-08-09'))
+      .toMatchObject([{ id: 'lesson-b', date: '2027-08-09', teachingUnitId: source.unit.id }])
+    expect(aSession.port.occurrence!.swapCandidates!('2028-02-07')).toEqual([])
+    expect(aSession.port.occurrence!.swapCandidates!('2027-02-31')).toEqual([])
+
+    const bSession = hook.result.current.open('lesson-b', '2027-08-09')!
+    expect(bSession.port.occurrence!.swapCandidates!('2027-08-02'))
+      .toMatchObject([{ id: 'lesson-a', date: '2027-08-02', teachingUnitId: source.unit.id }])
+
+    const occupied = cancelOccurrenceV9(withPartner, { ...source.selection,
+      teachingUnitId: source.unit.id }, 'lesson-b', '2027-08-09', 'cancel-b')
+    const occupiedHost = hostFixture(occupied)
+    const occupiedHook = renderHook(() => useFormalLessonManagementV9Adapter(
+      occupiedHost.host, source.selection))
+    const occupiedSession = occupiedHook.result.current.open('lesson-a', '2027-08-02')!
+    expect(occupiedSession.port.occurrence!.swapCandidates!('2027-08-09')).toEqual([])
+  })
+
+  it('previews without writing and commits, replaces, then revokes an atomic swap group', async () => {
+    const source = fixture()
+    const withPartner = createRecurringLessonV9(source.data, {
+      ...source.selection, teachingUnitId: source.unit.id }, {
+      projectId: source.projectId, timetableId: 'teacher-a', teachingUnitId: source.unit.id,
+      subjectId: 'subject-a', classId: 'class-a', day: 1,
+      periodId: source.unit.periods[1].id, weekPattern: 'every', room: '',
+    }, 'lesson-b')
+    const host = hostFixture(withPartner)
+    const ids = ['swap-group-a', 'swap-override-a', 'swap-override-b',
+      'swap-group-b', 'swap-override-c', 'swap-override-d']
+    const hook = renderHook(() => useFormalLessonManagementV9Adapter(
+      host.host, source.selection, () => ids.shift() ?? 'unused'))
+    const session = hook.result.current.open('lesson-a', '2027-08-02')!
+    const sameDay = { firstLessonId: 'lesson-a', firstDate: '2027-08-02',
+      secondLessonId: 'lesson-b', secondDate: '2027-08-02' }
+    session.port.occurrence!.previewSwap!(sameDay)
+    expect(host.update).not.toHaveBeenCalled()
+    await act(async () => { await session.port.occurrence!.swap!(sameDay) })
+    expect(host.update).toHaveBeenCalledOnce()
+    expect(host.host.document?.overrides).toHaveLength(2)
+    expect(host.host.document?.overrides.map((item) => item.groupId))
+      .toEqual(['swap-group-a', 'swap-group-a'])
+
+    hook.rerender()
+    const grouped = hook.result.current.open('lesson-a', '2027-08-02', 'swap-override-a')!
+    expect(grouped.port.occurrence!.swapCandidates!('2027-08-02', 'swap-override-a'))
+      .toMatchObject([{ id: 'lesson-b', date: '2027-08-02' }])
+    const crossDate = { ...sameDay, secondDate: '2027-08-09' }
+    grouped.port.occurrence!.previewSwap!(crossDate, 'swap-override-a')
+    expect(host.update).toHaveBeenCalledOnce()
+    await act(async () => {
+      await grouped.port.occurrence!.replaceSwapGroup!('swap-override-a', crossDate)
+    })
+    expect(host.update).toHaveBeenCalledTimes(2)
+    expect(host.host.document?.overrides).toHaveLength(2)
+    expect(host.host.document?.overrides.map((item) => item.groupId))
+      .toEqual(['swap-group-b', 'swap-group-b'])
+
+    hook.rerender()
+    const replacement = hook.result.current.open('lesson-a', '2027-08-02', 'swap-override-c')!
+    replacement.port.occurrence!.previewRevokeSwapGroup!('swap-override-c')
+    expect(host.update).toHaveBeenCalledTimes(2)
+    await act(async () => { await replacement.port.occurrence!.revokeSwapGroup!('swap-override-c') })
+    expect(host.update).toHaveBeenCalledTimes(3)
+    expect(host.host.document?.overrides).toEqual([])
+    expect(host.revision()).toBe(3)
+  })
+
   it('keeps exact occurrence context and atomically modifies then revokes its override', async () => {
     const source = fixture()
     const host = hostFixture(source.data)

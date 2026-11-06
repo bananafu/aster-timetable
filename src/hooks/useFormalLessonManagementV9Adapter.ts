@@ -6,11 +6,14 @@ import type { FormalV9HostPort } from '../formalRuntime'
 import type { FormalProjectTimetableV9Selection } from '../formalProjectTimetableV9'
 import type { AppDataV8 } from '../types'
 import type { AppDataV9 } from '../types/v9'
-import type { FixedLessonPersistencePort } from '../components/LessonEditor'
+import type { FixedLessonPersistencePort, SwapOccurrenceCandidate,
+  SwapOccurrenceRequest } from '../components/LessonEditor'
 import type { OneOffLessonPersistencePort, OneOffSaveRequest } from '../components/OneOffLessonEditor'
-import { fromDateKey } from '../lib/date'
+import { fromDateKey, toDateKey } from '../lib/date'
 import { resolveV9Day } from '../lib/scheduleV9'
-import { getOneOffLessonConflictsV9 } from '../data/lessonMutationsV9'
+import { getOneOffLessonConflictsV9, replaceSwapGroupV9, revokeSwapGroupV9,
+  validateSwapGroupV9,
+  swapOccurrencesV9 } from '../data/lessonMutationsV9'
 
 const uid = () => crypto.randomUUID?.() ?? 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (value) => {
   const random = Math.floor(Math.random() * 16)
@@ -124,6 +127,50 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
       const current = hostRef.current.document
       return current ? toFormalLessonEditorDataV9(current, capturedSelection, lessonId) ?? initialData : initialData
     }
+    const previewDocument = (unitId: string) => {
+      const current = hostRef.current.document
+      const currentSelection = selectionRef.current
+      if (!current || lessonSessionBaseline(current) !== baseline
+        || currentSelection.projectId !== capturedSelection.projectId
+        || currentSelection.timetableId !== capturedSelection.timetableId
+        || !toFormalLessonEditorDataV9(current, capturedSelection, lessonId)) {
+        throw new FormalLessonV9Error('stale-document', 'Lesson session data changed before preview.')
+      }
+      return { current, scope: { projectId: capturedSelection.projectId!,
+        timetableId: capturedSelection.timetableId!, teachingUnitId: unitId } }
+    }
+    const previewSwap = (request: SwapOccurrenceRequest, replacingOverrideId?: string) => {
+      if (!projectedTarget) throw new FormalLessonV9Error('invalid-scope', 'Swap source is unavailable.')
+      const { current, scope } = previewDocument(projectedTarget.teachingUnitId)
+      const ids = { groupId: uid(), firstOverrideId: uid(), secondOverrideId: uid() }
+      if (replacingOverrideId) replaceSwapGroupV9(current, scope, replacingOverrideId, request, ids)
+      else swapOccurrencesV9(current, scope, request, ids)
+    }
+    const swapCandidates = (date: string,
+      replacingOverrideId?: string): readonly SwapOccurrenceCandidate[] => {
+      if (!projectedTarget || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return []
+      const targetDate = fromDateKey(date)
+      if (toDateKey(targetDate) !== date) return []
+      let candidateDocument: AppDataV9
+      try {
+        const { current, scope } = previewDocument(projectedTarget.teachingUnitId)
+        if (!replacingOverrideId) candidateDocument = current
+        else {
+          const group = validateSwapGroupV9(current, scope, replacingOverrideId)
+          const groupIds = new Set(group.map((item) => item.id))
+          candidateDocument = { ...current,
+            overrides: current.overrides.filter((item) => !groupIds.has(item.id)) }
+        }
+      } catch { return [] }
+      return resolveV9Day(candidateDocument, { projectId: capturedSelection.projectId!,
+        timetableId: capturedSelection.timetableId!, teachingUnitId: projectedTarget.teachingUnitId }, targetDate)
+        .filter((item) => item.kind === 'recurring'
+          && item.id !== projectedTarget.id && item.sourceDate === date && item.date === date
+          && item.status === 'regular' && item.overrideId === undefined && item.movementRole === undefined)
+        .map((item) => ({ id: item.id, date: item.date, startTime: item.startTime,
+          endTime: item.endTime, teachingUnitId: item.teachingUnitId, schoolId: item.schoolId,
+          schoolName: item.schoolName, subjectName: item.subjectName, className: item.className }))
+    }
     const execute = async (unitId: string, operation: (controller: ReturnType<typeof createFormalLessonManagementV9Controller>) =>
     Promise<FormalLessonV9Result>) => {
       if (submittingRef.current) throw new Error('V9 Host write is already in progress.')
@@ -182,6 +229,19 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
             (controller) => controller.replaceOccurrenceChange(id, change)),
         revoke: (id: string) => execute(projectedTarget.teachingUnitId,
           (controller) => controller.revokeOccurrenceOverride(id)),
+        swapCandidates,
+        previewSwap,
+        swap: (request: SwapOccurrenceRequest) => execute(projectedTarget.teachingUnitId,
+          (controller) => controller.swapOccurrences(request)),
+        replaceSwapGroup: (id: string, request: SwapOccurrenceRequest) =>
+          execute(projectedTarget.teachingUnitId,
+            (controller) => controller.replaceSwapGroup(id, request)),
+        previewRevokeSwapGroup: (id: string) => {
+          const { current, scope } = previewDocument(projectedTarget.teachingUnitId)
+          revokeSwapGroupV9(current, scope, id)
+        },
+        revokeSwapGroup: (id: string) => execute(projectedTarget.teachingUnitId,
+          (controller) => controller.revokeSwapGroup(id)),
       } }),
     }
     return { get data() { return readData() }, lessonId, occurrenceDate, occurrenceOverrideId,

@@ -14,6 +14,7 @@ export const FORMAL_V9_FIXTURE_IDS = {
   subjectRelation: 'browser-smoke-subject-relation',
   schoolClass: 'browser-smoke-class',
   recurringLesson: 'browser-smoke-recurring-lesson',
+  swapPartner: 'browser-smoke-swap-partner',
 } as const
 
 interface FormalV9BrowserFixtures {
@@ -163,6 +164,67 @@ export async function createFormalV9BrowserFixture(page: Page,
       v9Status: 'v9Status' in decision ? decision.v9Status : null,
     }
   }, { ids: FORMAL_V9_FIXTURE_IDS, fixtureOptions: options })
+}
+
+export async function seedFormalV9SwapPartner(page: Page, day: 1 | 2,
+  weekPattern: 'every' | 'A' | 'B' = 'every') {
+  return page.evaluate(async ({ ids, partnerDay, partnerWeekPattern }) => {
+    const moduleUrl = (path: string) => `/aster-timetable/src/${path}`
+    const [storage, lessons, validators, runtime] = await Promise.all([
+      import(moduleUrl('data/storageV9.ts')),
+      import(moduleUrl('data/lessonMutationsV9.ts')),
+      import(moduleUrl('data/validators/v9.ts')),
+      import(moduleUrl('formalRuntime.ts')),
+    ])
+    const loaded = storage.loadAppDataV9(localStorage)
+    if (loaded.status !== 'active' || !loaded.document || !loaded.metadata
+      || !loaded.rawDocument || !loaded.rawMetadata) throw new Error(`swap-runtime-${loaded.status}`)
+    const periods = loaded.document.teachingUnits
+      .find((item: { id: string }) => item.id === ids.teachingUnit)!.periods
+    const scope = { projectId: ids.project, timetableId: ids.timetable, teachingUnitId: ids.teachingUnit }
+    const next = lessons.createRecurringLessonV9(loaded.document, scope, {
+      ...scope, subjectId: ids.subject, classId: ids.schoolClass, day: partnerDay,
+      periodId: periods[1].id, weekPattern: partnerWeekPattern,
+      effectiveStart: '2020-01-01', room: 'Swap-B',
+    }, ids.swapPartner)
+    if (!validators.isCompatibleAppDataV9(next)) throw new Error('swap-fixture-validator-rejected')
+    const receipt = await storage.persistAppDataV9(localStorage, loaded.document, next, {
+      raw: loaded.rawDocument, metadataRaw: loaded.rawMetadata, revision: loaded.metadata.documentRevision,
+    })
+    const decision = await runtime.inspectFormalRuntime(localStorage)
+    return { revision: receipt.revision, attemptId: receipt.attemptId,
+      writeEvidenceValid: await storage.checkV9WriteEvidence(localStorage, receipt.raw,
+        localStorage.getItem(storage.V9_ACTIVATION_KEY) ?? ''),
+      runtime: decision.runtime, v9Status: 'v9Status' in decision ? decision.v9Status : null }
+  }, { ids: FORMAL_V9_FIXTURE_IDS, partnerDay: day, partnerWeekPattern: weekPattern })
+}
+
+export async function seedFormalV9SwapOneOffBlocker(page: Page, date: string) {
+  return page.evaluate(async ({ ids, blockerDate }) => {
+    const moduleUrl = (path: string) => `/aster-timetable/src/${path}`
+    const [storage, lessons, validators] = await Promise.all([
+      import(moduleUrl('data/storageV9.ts')),
+      import(moduleUrl('data/lessonMutationsV9.ts')),
+      import(moduleUrl('data/validators/v9.ts')),
+    ])
+    const loaded = storage.loadAppDataV9(localStorage)
+    if (loaded.status !== 'active' || !loaded.document || !loaded.metadata
+      || !loaded.rawDocument || !loaded.rawMetadata) throw new Error(`swap-one-off-runtime-${loaded.status}`)
+    const periods = loaded.document.teachingUnits
+      .find((item: { id: string }) => item.id === ids.teachingUnit)!.periods
+    const scope = { projectId: ids.project, timetableId: ids.timetable, teachingUnitId: ids.teachingUnit }
+    const next = lessons.createOneOffLessonV9(loaded.document, scope, {
+      ...scope, subjectId: ids.subject, classId: ids.schoolClass, date: blockerDate,
+      purpose: 'extra', time: { mode: 'period', periodId: periods[1].id }, room: 'Swap-OneOff',
+    }, '33333333-3333-4333-8333-333333333333', true)
+    if (!validators.isCompatibleAppDataV9(next)) throw new Error('swap-one-off-validator-rejected')
+    const receipt = await storage.persistAppDataV9(localStorage, loaded.document, next, {
+      raw: loaded.rawDocument, metadataRaw: loaded.rawMetadata, revision: loaded.metadata.documentRevision,
+    })
+    return { revision: receipt.revision,
+      writeEvidenceValid: await storage.checkV9WriteEvidence(localStorage, receipt.raw,
+        localStorage.getItem(storage.V9_ACTIVATION_KEY) ?? '') }
+  }, { ids: FORMAL_V9_FIXTURE_IDS, blockerDate: date })
 }
 
 export interface ConflictMatrixDates {

@@ -6,9 +6,11 @@ import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './data/storageV
 import { cancelOccurrenceV9, createOneOffLessonV9, createRecurringLessonV9,
   deleteOneOffLessonV9, deleteRecurringLessonV9, getRecurringLessonV9Impact, moveOccurrenceV9,
   permanentlyUpdateLessonV9, replaceOccurrenceChangeV9, replaceOccurrenceV9,
-  revokeOccurrenceOverrideV9, updateOneOffLessonV9, updateRecurringLessonV9,
+  replaceSwapGroupV9, revokeOccurrenceOverrideV9, revokeSwapGroupV9, swapOccurrencesV9,
+  updateOneOffLessonV9, updateRecurringLessonV9,
   type LessonV9Scope, type OccurrenceChangeV9Draft,
-  type OneOffLessonV9Draft, type RecurringLessonV9Draft } from './data/lessonMutationsV9'
+  type OneOffLessonV9Draft, type RecurringLessonV9Draft,
+  type SwapGroupV9Ids, type SwapOccurrencesV9Draft } from './data/lessonMutationsV9'
 
 export type FormalLessonV9ErrorCode = 'invalid-document' | 'invalid-scope' | 'not-writable'
   | 'duplicate-submit' | 'stale-document' | 'invalid-result' | 'receipt-mismatch' | 'backup-required'
@@ -37,6 +39,10 @@ export interface FormalLessonV9Actions {
   replaceOccurrenceChange: (overrideId: string,
     change: OccurrenceChangeV9Draft) => Promise<FormalLessonV9Result>
   revokeOccurrenceOverride: (overrideId: string) => Promise<FormalLessonV9Result>
+  swapOccurrences: (draft: SwapOccurrencesV9Draft) => Promise<FormalLessonV9Result>
+  replaceSwapGroup: (overrideId: string,
+    draft: SwapOccurrencesV9Draft) => Promise<FormalLessonV9Result>
+  revokeSwapGroup: (overrideId: string) => Promise<FormalLessonV9Result>
   permanentlyUpdateFromDate: (lessonId: string, date: string,
     draft: RecurringLessonV9Draft) => Promise<FormalLessonV9Result>
   createOneOff: (draft: OneOffLessonV9Draft, allowConflict?: boolean) => Promise<FormalLessonV9Result>
@@ -55,6 +61,8 @@ export function createFormalLessonManagementV9Controller(host: FormalV9HostPort,
   const initialRaw = JSON.stringify(initial)
   const initialRevision = host.revision
   let submitting = false
+  const swapIds = (): SwapGroupV9Ids => ({ groupId: createId(), firstOverrideId: createId(),
+    secondOverrideId: createId() })
   const requireSelection = () => {
     const current = readCurrentSelection()
     if (current.projectId !== captured.projectId || current.timetableId !== captured.timetableId
@@ -134,6 +142,23 @@ export function createFormalLessonManagementV9Controller(host: FormalV9HostPort,
         id, change, overrideId) }, () => overrideId)
     },
     revokeOccurrenceOverride: (id) => commit((current) => revokeOccurrenceOverrideV9(current, captured, id), () => id),
+    swapOccurrences: (draft) => {
+      let groupId = ''
+      return commit((current) => {
+        const ids = swapIds()
+        groupId = ids.groupId
+        return swapOccurrencesV9(current, captured, draft, ids)
+      }, () => groupId)
+    },
+    replaceSwapGroup: (id, draft) => {
+      let groupId = ''
+      return commit((current) => {
+        const ids = swapIds()
+        groupId = ids.groupId
+        return replaceSwapGroupV9(current, captured, id, draft, ids)
+      }, () => groupId)
+    },
+    revokeSwapGroup: (id) => commit((current) => revokeSwapGroupV9(current, captured, id), () => id),
     permanentlyUpdateFromDate: (id, date, draft) => {
       let newId = ''
       return commit((current) => {

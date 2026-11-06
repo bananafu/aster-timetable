@@ -21,6 +21,8 @@ export type ScheduleDisplayOccurrence = Readonly<{
   status?: 'regular' | 'cancelled' | 'replaced' | 'moved'
   movementRole?: 'source' | 'target'
   overrideId?: string
+  sourceDate?: string
+  periodId?: number
   periodLabel?: string
   purpose?: 'extra' | 'make-up' | 'substitute'
   timeMode?: 'period' | 'custom'
@@ -69,6 +71,9 @@ function occurrence(lesson: V9ReadOccurrence): ScheduleDisplayOccurrence {
     status: lesson.kind === 'recurring' ? lesson.status : undefined,
     movementRole: lesson.kind === 'recurring' ? lesson.movementRole : undefined,
     overrideId: lesson.kind === 'recurring' ? lesson.overrideId : undefined,
+    sourceDate: lesson.kind === 'recurring' ? lesson.sourceDate : undefined,
+    periodId: lesson.kind === 'recurring' ? lesson.periodId
+      : lesson.timeMode === 'period' ? lesson.periodId : undefined,
     periodLabel: 'periodLabel' in lesson ? lesson.periodLabel : undefined,
     purpose: lesson.kind === 'one-off' ? lesson.purpose : undefined,
     timeMode: lesson.kind === 'one-off' ? lesson.timeMode : undefined,

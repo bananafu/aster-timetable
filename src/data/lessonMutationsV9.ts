@@ -12,11 +12,23 @@ type Override = AppDataV9['overrides'][number]
 export type RecurringLessonV9Draft = RecurringLessonV8Draft
 export type LessonV9Scope = { projectId: string; timetableId: string; teachingUnitId: string }
 type OneOffLesson = AppDataV9['oneOffLessons'][number]
+type RecurringOccurrence = Extract<V9ReadOccurrence, { kind: 'recurring' }>
 export type OneOffLessonV9Draft = Omit<OneOffLesson, 'id'>
 export type OccurrenceChangeV9Draft =
   | { action: 'cancel' }
   | { action: 'move'; target: { date: string; periodId: number }; allowConflict?: boolean }
   | { action: 'replace'; replacement: { subjectId: string; classId: string; room?: string } }
+export type SwapOccurrencesV9Draft = {
+  firstLessonId: string
+  firstDate: string
+  secondLessonId: string
+  secondDate: string
+}
+export type SwapGroupV9Ids = {
+  groupId: string
+  firstOverrideId: string
+  secondOverrideId: string
+}
 export type LessonV9ErrorCode = 'invalid-document' | 'invalid-scope' | 'invalid-reference' | 'invalid-date'
   | 'invalid-draft' | 'id-collision' | 'not-found' | 'already-changed' | 'conflict' | 'referenced' | 'unsafe-update'
 export class LessonV9Error extends Error {
@@ -210,20 +222,26 @@ export function deleteOneOffLessonV9(data: AppDataV9, selected: LessonV9Scope,
   return safe(data, { ...data, oneOffLessons: data.oneOffLessons.filter((item) => item.id !== oneOffId) })
 }
 
-function occurrence(data: AppDataV9, selected: LessonV9Scope, lessonId: string, date: string) {
+function occurrenceDetails(data: AppDataV9, selected: LessonV9Scope, lessonId: string, date: string) {
   const current = lesson(data, selected, lessonId)
   const unit = scope(data, selected)
   if (!dateValid(date) || date < unit.startDate || date > unit.endDate
     || date < current.effectiveStart || date > (current.effectiveEnd ?? unit.endDate)) {
     fail('invalid-date', 'Occurrence is outside the Lesson version or TeachingUnit term.')
   }
-  const found = resolveV9Day(data, selected, fromDateKey(date)).find((item) => item.kind === 'recurring'
-    && item.id === current.id && item.sourceDate === date)
-  if (!found) fail('invalid-date', 'Lesson does not occur on the selected date or week pattern.')
+  const found = resolveV9Day(data, selected, fromDateKey(date)).find((item): item is RecurringOccurrence =>
+    item.kind === 'recurring' && item.id === current.id && item.sourceDate === date)
+  if (!found) return fail('invalid-date', 'Lesson does not occur on the selected date or week pattern.')
   if (data.overrides.some((item) => item.originalLessonId === lessonId && item.date === date)) {
     fail('already-changed', 'Occurrence already has an override.')
   }
-  return current
+  if (found.kind !== 'recurring' || found.status !== 'regular' || found.overrideId || found.movementRole) {
+    fail('already-changed', 'Occurrence already has an override.')
+  }
+  return { lesson: current, occurrence: found }
+}
+function occurrence(data: AppDataV9, selected: LessonV9Scope, lessonId: string, date: string) {
+  return occurrenceDetails(data, selected, lessonId, date).lesson
 }
 function addOverride(data: AppDataV9, selected: LessonV9Scope, lessonId: string,
   date: string, id: string, change: Pick<Override, 'action' | 'target' | 'replacement'>): AppDataV9 {
@@ -271,6 +289,102 @@ export function moveOccurrenceV9(data: AppDataV9, selected: LessonV9Scope,
     && timeIntervalsOverlap(item, period!))
   if (occupied && allowConflict !== true) fail('conflict', 'Move target overlaps another active lesson.')
   return addOverride(data, selected, lessonId, date, id, { action: 'move', target })
+}
+
+function assertFreshSwapIds(data: AppDataV9, ids: SwapGroupV9Ids) {
+  const values = [ids.groupId, ids.firstOverrideId, ids.secondOverrideId]
+  if (values.some((id) => !id || id !== id.trim()) || new Set(values).size !== values.length
+    || values.some((id) => !idAvailable(data, id))
+    || data.overrides.some((item) => item.groupId === ids.groupId)) {
+    fail('id-collision', 'Swap group and Override IDs must be distinct and unused.')
+  }
+}
+
+function resolvedSwapTarget(data: AppDataV9, selected: LessonV9Scope, override: Override) {
+  return override.target && resolveV9Day(data, selected, fromDateKey(override.target.date))
+    .find((item): item is RecurringOccurrence => item.kind === 'recurring' && item.overrideId === override.id
+      && item.movementRole === 'target' && item.id === override.originalLessonId)
+}
+
+/** Builds both reciprocal move overrides in one validated V9 candidate document. */
+export function swapOccurrencesV9(data: AppDataV9, selected: LessonV9Scope,
+  draft: SwapOccurrencesV9Draft, ids: SwapGroupV9Ids): AppDataV9 {
+  if (draft.firstLessonId === draft.secondLessonId) fail('invalid-draft', 'Two different Lessons are required.')
+  assertFreshSwapIds(data, ids)
+  const first = occurrenceDetails(data, selected, draft.firstLessonId, draft.firstDate)
+  const second = occurrenceDetails(data, selected, draft.secondLessonId, draft.secondDate)
+  if (first.lesson.projectId !== second.lesson.projectId
+    || first.lesson.timetableId !== second.lesson.timetableId
+    || first.lesson.teachingUnitId !== second.lesson.teachingUnitId) {
+    fail('invalid-scope', 'Swap Lessons must belong to the same Project, Timetable and TeachingUnit.')
+  }
+  const overrides: [Override, Override] = [
+    { id: ids.firstOverrideId, groupId: ids.groupId, projectId: selected.projectId,
+      timetableId: selected.timetableId, teachingUnitId: selected.teachingUnitId,
+      date: draft.firstDate, periodId: first.occurrence.periodId, action: 'move',
+      originalLessonId: first.lesson.id,
+      target: { date: draft.secondDate, periodId: second.occurrence.periodId }, origin: 'user' },
+    { id: ids.secondOverrideId, groupId: ids.groupId, projectId: selected.projectId,
+      timetableId: selected.timetableId, teachingUnitId: selected.teachingUnitId,
+      date: draft.secondDate, periodId: second.occurrence.periodId, action: 'move',
+      originalLessonId: second.lesson.id,
+      target: { date: draft.firstDate, periodId: first.occurrence.periodId }, origin: 'user' },
+  ]
+  const next = safe(data, { ...data, overrides: [...data.overrides, ...overrides] })
+  for (const override of overrides) {
+    const target = resolvedSwapTarget(next, selected, override)
+    if (!target) return fail('unsafe-update', 'Swap target could not be resolved from the complete group.')
+    if (target.hasConflict) fail('conflict', 'Swap target overlaps another active Lesson or OneOff Lesson.')
+  }
+  return next
+}
+
+/** Accepts only an exact, reciprocal two-member swap group in the selected scope. */
+export function validateSwapGroupV9(data: AppDataV9, selected: LessonV9Scope,
+  overrideId: string): readonly [Override, Override] {
+  scope(data, selected)
+  const anchor = data.overrides.find((item) => item.id === overrideId
+    && item.projectId === selected.projectId && item.timetableId === selected.timetableId
+    && item.teachingUnitId === selected.teachingUnitId)
+  if (!anchor?.groupId) return fail('not-found', 'Swap group is outside the selected scope or no longer exists.')
+  const groupId = anchor.groupId
+  const members = data.overrides.filter((item) => item.groupId === groupId)
+  if (members.length !== 2) fail('referenced', 'Swap group must contain exactly two Overrides.')
+  const [first, second] = members
+  if (first.action !== 'move' || second.action !== 'move' || !first.target || !second.target
+    || !first.originalLessonId || !second.originalLessonId
+    || first.id === second.id || first.originalLessonId === second.originalLessonId
+    || members.some((item) => item.projectId !== selected.projectId
+      || item.timetableId !== selected.timetableId || item.teachingUnitId !== selected.teachingUnitId)
+    || first.target.date !== second.date || first.target.periodId !== second.periodId
+    || second.target.date !== first.date || second.target.periodId !== first.periodId) {
+    fail('referenced', 'Swap group is incomplete or not reciprocal.')
+  }
+  for (const member of members) {
+    const source = resolveV9Day(data, selected, fromDateKey(member.date)).find((item) =>
+      item.kind === 'recurring' && item.overrideId === member.id && item.movementRole === 'source'
+      && item.id === member.originalLessonId && item.periodId === member.periodId)
+    const target = resolvedSwapTarget(data, selected, member)
+    if (!source || !target) fail('referenced', 'Swap group cannot resolve both source and target occurrences.')
+  }
+  return [first, second]
+}
+
+export function revokeSwapGroupV9(data: AppDataV9, selected: LessonV9Scope,
+  overrideId: string): AppDataV9 {
+  const group = validateSwapGroupV9(data, selected, overrideId)
+  const removed = new Set(group.map((item) => item.id))
+  const next = safe(data, { ...data, overrides: data.overrides.filter((item) => !removed.has(item.id)) })
+  for (const item of group) assertOccurrenceHasNoConflict(next, selected, item.originalLessonId!, item.date)
+  return next
+}
+
+export function replaceSwapGroupV9(data: AppDataV9, selected: LessonV9Scope,
+  overrideId: string, draft: SwapOccurrencesV9Draft, ids: SwapGroupV9Ids): AppDataV9 {
+  const group = validateSwapGroupV9(data, selected, overrideId)
+  const removed = new Set(group.map((item) => item.id))
+  const base = { ...data, overrides: data.overrides.filter((item) => !removed.has(item.id)) }
+  return safe(data, swapOccurrencesV9(base, selected, draft, ids))
 }
 
 function selectedOverride(data: AppDataV9, selected: LessonV9Scope, overrideId: string): Override {

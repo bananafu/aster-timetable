@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cancelLessonOnDate, moveLessonOnDate, permanentlyUpdateLesson } from '../data/lessonChangesV4'
+import { cancelLessonOnDate, moveLessonOnDate, permanentlyUpdateLesson,
+  swapLessonOccurrences } from '../data/lessonChangesV4'
 import { migrateV3ToV4 } from '../data/migrationsV4'
 import { migrateV4ToV5 } from '../data/migrationsV5'
 import { initialData } from '../data/seed'
 import { addClass, addSchool, addTeachingUnit } from '../data/academicSettingsV4'
+import { fromDateKey } from '../lib/date'
+import { resolveProjectDay } from '../lib/scheduleV4'
 import { LessonEditor } from './LessonEditor'
 
 afterEach(cleanup)
@@ -15,6 +18,116 @@ function setup() {
 }
 
 describe('LessonEditor integrated experience', () => {
+  const fixedPort = (occurrence: NonNullable<Parameters<typeof LessonEditor>[0]['fixedLessonPort']>['occurrence']) => ({
+    fixedOnly: true as const, pending: false, configuredSubjectIds: {}, occurrence,
+    create: vi.fn(), update: vi.fn(), permanentlyUpdate: vi.fn(), delete: vi.fn(),
+  })
+
+  const ordinaryOccurrencePort = () => ({ cancel: vi.fn(), move: vi.fn(), replace: vi.fn(),
+    replaceChange: vi.fn(), revoke: vi.fn() })
+
+  it('only exposes Formal V9 swap when the occurrence port has the atomic group capability', () => {
+    const data = setup()
+    const first = render(<LessonEditor data={data} fixedLessonPort={fixedPort(ordinaryOccurrencePort())}
+      lessonId="c1" occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    expect(screen.queryByRole('option', { name: '交換兩堂課' })).toBeNull()
+    first.unmount()
+    const capable = { ...ordinaryOccurrencePort(), swapCandidates: vi.fn(() => []),
+      previewSwap: vi.fn(), swap: vi.fn(),
+      replaceSwapGroup: vi.fn(), previewRevokeSwapGroup: vi.fn(), revokeSwapGroup: vi.fn() }
+    render(<LessonEditor data={data} fixedLessonPort={fixedPort(capable)} lessonId="c1"
+      occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    expect(screen.getByRole('option', { name: '交換兩堂課' })).toBeTruthy()
+  })
+
+  it('uses the Formal V9 port for swap preview and only writes on confirm', async () => {
+    const data = setup()
+    const partner = resolveProjectDay(data, data.activeProjectId!, fromDateKey('2026-09-07'))
+      .find((item) => item.kind === 'recurring' && item.id !== 'c1')!
+    const occurrence = { ...ordinaryOccurrencePort(), swapCandidates: vi.fn(() => [partner]),
+      previewSwap: vi.fn(), swap: vi.fn().mockResolvedValue(undefined),
+      replaceSwapGroup: vi.fn(), previewRevokeSwapGroup: vi.fn(), revokeSwapGroup: vi.fn() }
+    render(<LessonEditor data={data} fixedLessonPort={fixedPort(occurrence)} lessonId="c1"
+      occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'swap' } })
+    const select = screen.getByLabelText('交換課程') as HTMLSelectElement
+    const partnerId = [...select.options].find((item) => item.value)?.value
+    expect(partnerId).toBeTruthy()
+    fireEvent.change(select, { target: { value: partnerId } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(occurrence.previewSwap).toHaveBeenCalledWith({ firstLessonId: 'c1', firstDate: '2026-09-07',
+      secondLessonId: partnerId, secondDate: '2026-09-07' }, undefined)
+    expect(occurrence.swap).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(occurrence.swap).toHaveBeenCalledOnce())
+  })
+
+  it('reuses the existing target-date control for Formal V9 cross-week swap and clears an invalid prior choice', async () => {
+    const data = setup()
+    const partner = resolveProjectDay(data, data.activeProjectId!, fromDateKey('2026-09-07'))
+      .find((item) => item.kind === 'recurring' && item.id !== 'c1')!
+    const occurrence = { ...ordinaryOccurrencePort(),
+      swapCandidates: vi.fn((date: string) => date === '2026-09-14' ? [{ ...partner, date }] : []),
+      previewSwap: vi.fn(), swap: vi.fn().mockResolvedValue(undefined), replaceSwapGroup: vi.fn(),
+      previewRevokeSwapGroup: vi.fn(), revokeSwapGroup: vi.fn() }
+    render(<LessonEditor data={data} fixedLessonPort={fixedPort(occurrence)} lessonId="c1"
+      occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'swap' } })
+
+    expect(screen.getByLabelText('移至日期')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('移至日期'), { target: { value: '2026-09-14' } })
+    fireEvent.change(screen.getByLabelText('交換課程'), { target: { value: partner.id } })
+    expect((screen.getByLabelText('交換課程') as HTMLSelectElement).value).toBe(partner.id)
+
+    fireEvent.change(screen.getByLabelText('移至日期'), { target: { value: '2026-09-21' } })
+    expect((screen.getByLabelText('交換課程') as HTMLSelectElement).value).toBe('')
+    expect((screen.getByRole('button', { name: '預覽異動' }) as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText('移至日期'), { target: { value: '2026-09-14' } })
+    fireEvent.change(screen.getByLabelText('交換課程'), { target: { value: partner.id } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(occurrence.previewSwap).toHaveBeenCalledWith({ firstLessonId: 'c1',
+      firstDate: '2026-09-07', secondLessonId: partner.id, secondDate: '2026-09-14' }, undefined)
+    expect(occurrence.swap).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(occurrence.swap).toHaveBeenCalledOnce())
+  })
+
+  it('keeps the legacy non-drag swap on the occurrence date without adding a target-date control', () => {
+    const data = setup()
+    render(<LessonEditor data={data} setData={vi.fn()} lessonId="c1" occurrenceDate="2026-09-07"
+      onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'swap' } })
+    expect(screen.queryByLabelText('移至日期')).toBeNull()
+    expect(screen.getByRole('option', { name: /請選擇 2026-09-07 的課程/ })).toBeTruthy()
+  })
+
+  it('previews and confirms grouped revoke through the atomic Formal V9 port', async () => {
+    const base = setup()
+    const partner = resolveProjectDay(base, base.activeProjectId!, fromDateKey('2026-09-07'))
+      .find((item) => item.kind === 'recurring' && item.id !== 'c1')!
+    const data = swapLessonOccurrences(base, 'c1', '2026-09-07', partner.id, '2026-09-07',
+      (() => { const ids = ['group-a', 'override-a', 'override-b']; return () => ids.shift() ?? 'unused' })())
+    const occurrence = { ...ordinaryOccurrencePort(), swapCandidates: vi.fn(() => []),
+      previewSwap: vi.fn(), swap: vi.fn(),
+      replaceSwapGroup: vi.fn(), previewRevokeSwapGroup: vi.fn(),
+      revokeSwapGroup: vi.fn().mockResolvedValue(undefined) }
+    render(<LessonEditor data={data} fixedLessonPort={fixedPort(occurrence)} lessonId="c1"
+      occurrenceDate="2026-09-07" occurrenceOverrideId="override-a"
+      onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(screen.getByLabelText('現有單日異動').textContent).toContain('單日交換')
+    fireEvent.click(screen.getByRole('button', { name: '撤銷異動' }))
+    expect(occurrence.previewRevokeSwapGroup).toHaveBeenCalledWith('override-a')
+    expect(occurrence.revokeSwapGroup).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(occurrence.revokeSwapGroup).toHaveBeenCalledWith('override-a'))
+  })
+
   it('唯一的國中高中學制只顯示學制名稱，other 使用原自訂名稱', () => {
     const data = migrateV4ToV5(setup())
     data.teachingUnits[0].schoolLevel = 'senior-high'

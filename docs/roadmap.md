@@ -1,5 +1,17 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R4-1D-3C — Formal V9 cross-A/B week swap（完成）
+
+既有 LessonEditor 交換流程已重用原有「移至日期」欄位，依目標日期從最新 confirmed V9 document 查詢同一 Project／Timetable／TeachingUnit 的有效固定 occurrence；A/B anchor、學期範圍、既有 override 與來源自身均 fail closed，日期變更不保留失效候選。未新增 UI、文案、schema、Host、persistence 或拖曳跨週操作。
+
+既有 atomic swap 的 preview／單次 Host confirm、兩筆 reciprocal group、group replace／revoke、OneOff period/custom 阻擋、revision／receipt／Runtime Gate 與 stale editor 契約維持不變。Targeted adapter／React 測試已覆蓋 A→B、B→A、候選更新與 V7 行為；Playwright disposable Chromium 已實際通過 A→B reload/revoke、B→A、跨 A/B OneOff fail-closed 與多分頁 stale，並保留同日及顯示週 drag regression。
+
+## Phase 4D R4-1D-3B — Formal V9 atomic one-day Lesson swap（部分完成）
+
+已完成同一 Project／Timetable／TeachingUnit 內兩個固定 occurrence 的 atomic swap domain、exact two-member group validator、單次 Host transaction 的建立／替換／撤銷，以及既有 LessonEditor、resolved week card drag intent 與 grouped manager 接線。Preview 不寫入，confirm 依最新 confirmed document 重驗；OneOff period/custom 重疊一律拒絕，Meeting／Activity 不阻擋；所有成功操作仍由既有 receipt、revision、Runtime Gate 與 persistence readback 證明，且未新增 schema、Host、persistence 或 high-risk operation。
+
+自動測試已覆蓋同日／跨日期、A/B anchor、學期邊界、malformed group、OneOff、stale editor、單次 revision 與 reload/revoke。Playwright disposable Chromium 已實際通過同日 swap → reload → revoke、顯示週內跨日期 drag swap、OneOff fail-closed 與多分頁 stale editor。此階段原有的跨 A/B 週 UI 缺口已由 R4-1D-3C 使用既有表單日期欄位補齊；拖曳本身仍只作用於目前顯示週。
+
 ## Phase 4D R4-1D-2B — Formal V9 OneOff Lesson CRUD（接線完成，待瀏覽器驗收）
 
 正式 V9 已重用既有 `OneOffLessonEditor`、新增入口及總覽／週課表卡片，接入 OneOff 新增、保留 ID 的編輯與刪除；既有三種 purpose、明確允許衝突 checkbox、Meeting／Activity 非阻擋政策、Project／Timetable／學期邊界及 A/B 解析維持不變。新增與編輯走既有 Host 普通更新，刪除走 `delete-one-off-lesson` 高風險 pre-mutation backup；editor identity、selection／revision staleness、receipt/readback、Runtime Gate 與資源即時投影均 fail closed。未新增 schema、Host、persistence 或 UI 元件，也未改變固定課程、override、永久修改及引用保護。

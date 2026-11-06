@@ -30,6 +30,7 @@ const empty = (): AppDataV9 => ({ ...createEmptyAppDataV8(), schemaVersion: 9, s
 const stored = (): AppDataV9 => JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!)
 const revision = () => JSON.parse(localStorage.getItem(V9_ACTIVATION_KEY)!).documentRevision as number
 const locks = { request: async (_name: string, _options: unknown, operation: (lock: unknown) => Promise<unknown>) => operation({}) }
+const transfer = () => ({ effectAllowed: '', setData: vi.fn(), getData: vi.fn() })
 
 beforeEach(() => {
   localStorage.clear()
@@ -706,7 +707,7 @@ describe('formal V9 management composition', () => {
     fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
     expect((screen.getByLabelText('異動日期') as HTMLInputElement).value).toBe(f.mondayKey)
     expect([...screen.getByLabelText<HTMLSelectElement>('課程異動類型').options]
-      .map((option) => option.value)).toEqual(['cancel', 'move', 'replace'])
+      .map((option) => option.value)).toEqual(['cancel', 'move', 'replace', 'swap'])
     fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
     fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
@@ -720,6 +721,69 @@ describe('formal V9 management composition', () => {
     view.unmount()
     await mount()
     expect(screen.getByText('已取消')).toBeTruthy()
+  })
+
+  it('previews, persists, reloads and atomically revokes a same-day Formal V9 swap', async () => {
+    const f = occurrenceFixture({ blocker: true })
+    await initializeFresh(f.data)
+    const view = await mount()
+    fireEvent.click(screen.getAllByRole('button', { name: /編輯 甲專用・甲班/ })[0])
+    fireEvent.click(screen.getByRole('button', { name: /僅此日期/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'swap' } })
+    fireEvent.change(screen.getByLabelText('交換課程'), { target: { value: 'occurrence-blocker' } })
+    const beforeSwap = revision()
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(revision()).toBe(beforeSwap)
+    expect(stored().overrides).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(revision()).toBe(beforeSwap + 1)
+    expect(stored().overrides).toHaveLength(2)
+    expect(new Set(stored().overrides.map((item) => item.groupId)).size).toBe(1)
+    expect(stored().overrides.every((item) => item.action === 'move')).toBe(true)
+
+    view.unmount()
+    await mount()
+    fireEvent.click(screen.getAllByText('調入')[0].closest('button')!)
+    expect(screen.getByLabelText('現有單日異動').textContent).toContain('單日交換')
+    const beforeRevoke = revision()
+    fireEvent.click(screen.getByRole('button', { name: '撤銷異動' }))
+    expect(revision()).toBe(beforeRevoke)
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(revision()).toBe(beforeRevoke + 1)
+    expect(stored().overrides).toEqual([])
+  })
+
+  it('reuses the resolved week card drag intent for a cross-date Formal V9 swap', async () => {
+    const f = occurrenceFixture({ blocker: true })
+    const partner = f.data.recurringLessons.find((item) => item.id === 'occurrence-blocker')!
+    partner.day = 2
+    await initializeFresh(f.data)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    const monday = within(screen.getByLabelText(`${f.mondayKey} 課表`))
+    const tuesdayKey = toDateKey(addDays(f.monday, 1))
+    const tuesday = within(screen.getByLabelText(`${tuesdayKey} 課表`))
+    const sourceCard = monday.getByRole('button', { name: /編輯 甲專用・甲班/ })
+    const targetCard = tuesday.getByRole('button', { name: /編輯 甲專用・甲班/ })
+    fireEvent.dragStart(sourceCard, { dataTransfer: transfer() })
+    fireEvent.drop(targetCard, { dataTransfer: transfer() })
+    expect((screen.getByLabelText('移至日期') as HTMLInputElement).value).toBe(tuesdayKey)
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'swap' } })
+    fireEvent.change(screen.getByLabelText('交換課程'), { target: { value: 'occurrence-blocker' } })
+    const before = revision()
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(screen.getByLabelText('異動預覽').textContent).toContain(tuesdayKey)
+    expect(revision()).toBe(before)
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '編輯課程' })).toBeNull())
+    expect(revision()).toBe(before + 1)
+    expect(stored().overrides.map((item) => [item.originalLessonId, item.date, item.target?.date]))
+      .toEqual([
+        ['occurrence-lesson', f.mondayKey, tuesdayKey],
+        ['occurrence-blocker', tuesdayKey, f.mondayKey],
+      ])
   })
 
   it('modifies a cancelled occurrence into same-day and cross-A/B moves, then revokes it from the moved target', async () => {
@@ -836,8 +900,10 @@ describe('formal V9 management composition', () => {
     await initializeFresh(grouped.data)
     await mount()
     fireEvent.click(screen.getByText('已取消').closest('button')!)
-    expect(screen.queryByRole('button', { name: '修改此異動' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '撤銷異動' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '撤銷異動' }))
+    expect(screen.queryByLabelText('異動預覽')).toBeNull()
+    expect(screen.getByRole('alert')).toBeTruthy()
+    expect(stored().overrides).toMatchObject([{ id: 'existing-cancel', groupId: 'unsupported-group' }])
   })
 
   it('keeps a Fresh V9 lesson draft while confirmed Subject resources become live', async () => {

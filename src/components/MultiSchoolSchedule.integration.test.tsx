@@ -346,6 +346,30 @@ const displayUnits = [
 ]
 
 describe('MultiSchoolSchedule resolved V9 read-only data', () => {
+  it('reuses card-to-card drag to emit a cross-date Formal V9 swap intent without mutating display data', () => {
+    const source = displayOccurrence({ key: 'source', id: 'lesson-a', date: '2026-09-07',
+      sourceDate: '2026-09-07', periodId: 1, subjectName: '來源課程' })
+    const target = displayOccurrence({ key: 'target', id: 'lesson-b', date: '2026-09-08',
+      sourceDate: '2026-09-08', periodId: 2, startTime: '09:00', endTime: '09:50',
+      subjectName: '目標課程' })
+    const days = displayDays({ '2026-09-07': [source], '2026-09-08': [target] })
+    const before = JSON.stringify(days)
+    const onLessonDrop = vi.fn()
+    render(<MultiSchoolSchedule mode="resolved" projectId="project-a" timetableId="timetable-a"
+      weekDays={week} readStatus="ready" days={days} schools={displaySchools}
+      teachingUnits={displayUnits} onLessonClick={vi.fn()} onLessonDrop={onLessonDrop} />)
+    const sourceCard = screen.getByRole('button', { name: /編輯 來源課程/ })
+    const targetCard = screen.getByRole('button', { name: /編輯 目標課程/ })
+    expect(sourceCard.getAttribute('draggable')).toBe('true')
+    fireEvent.dragStart(sourceCard, { dataTransfer: transfer() })
+    fireEvent.drop(targetCard, { dataTransfer: transfer() })
+    expect(onLessonDrop).toHaveBeenCalledWith({ lessonId: 'lesson-a', projectId: 'project-a',
+      timetableId: 'timetable-a', sourceDate: '2026-09-07', targetDate: '2026-09-08',
+      targetPeriodId: 2, targetStartTime: '09:00', targetEndTime: '09:50',
+      conflictLessonIds: ['lesson-b'] })
+    expect(JSON.stringify(days)).toBe(before)
+  })
+
   it('keeps source/cancelled placeholders visible but out of teaching counts, conflicts, and short breaks', () => {
     const source = displayOccurrence({ key: 'source', status: 'moved', movementRole: 'source', hasConflict: true })
     const regular = displayOccurrence({ key: 'regular', id: 'regular', startTime: '09:00', endTime: '09:50',

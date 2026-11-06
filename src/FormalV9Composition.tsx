@@ -23,6 +23,7 @@ import { useFormalProjectTimetableV9Adapter } from './hooks/useFormalProjectTime
 import { useFormalSubjectManagementV9Adapter } from './hooks/useFormalSubjectManagementV9Adapter'
 import type { StorageStatus } from './hooks/useLocalStorage'
 import { addDays, startOfWeek, toDateKey } from './lib/date'
+import type { LessonDragIntent } from './lib/lessonDrag'
 import { toScheduleDisplayDays, toScheduleDisplayEvents } from './lib/scheduleDisplay'
 import { resolveV9WeekResult, selectV9HeaderWeekPatternResult,
   selectV9ResolvedEventsResult, type V9ReadStatus } from './lib/scheduleV9'
@@ -155,6 +156,7 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
   const [tableDialog, setTableDialog] = useState<TimetableDialog | null>(null)
   const [addChoiceOpen, setAddChoiceOpen] = useState(false)
   const [lessonEditor, setLessonEditor] = useState<FormalLessonEditorV9Session | null>(null)
+  const [lessonDragIntent, setLessonDragIntent] = useState<LessonDragIntent | null>(null)
   const [oneOffEditor, setOneOffEditor] = useState<FormalOneOffLessonEditorV9Session | null>(null)
   const [tableError, setTableError] = useState('')
   const [tableNotice, setTableNotice] = useState('')
@@ -309,11 +311,12 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
     setAddChoiceOpen(true)
   }
   const openLesson = (lessonId: string | null, occurrenceDate: string | null = null,
-    occurrenceOverrideId: string | null = null) => {
+    occurrenceOverrideId: string | null = null, dragIntent: LessonDragIntent | null = null) => {
     if (!lessonPort || !writable || pending) return
     const session = lessonPort.open(lessonId, occurrenceDate, occurrenceOverrideId)
     if (!session) return
     setAddChoiceOpen(false)
+    setLessonDragIntent(dragIntent)
     setLessonEditor(session)
   }
   const openOneOff = (oneOffLessonId: string | null) => {
@@ -376,10 +379,13 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
             {source.kind === 'formal' && timetable && <button className="primary-button" data-course-add
               onClick={openAddChoice} disabled={!canAddLesson && !canAddOneOff}><Plus size={16} />新增課程</button>}</div>
           <MultiSchoolSchedule key={timetable?.id ?? project.id} mode="resolved" weekDays={weekDays}
+            projectId={project.id} timetableId={timetable?.id ?? ''}
             readStatus={weekResult.status} days={displayDays} schools={displaySchools}
             teachingUnits={displayUnits} onHeaderTeachingUnitChange={selectHeaderUnit}
             onLessonClick={source.kind === 'formal' && writable
               ? (id, date, overrideId) => openLesson(id, date, overrideId ?? null) : undefined}
+            onLessonDrop={source.kind === 'formal' && writable && timetable
+              ? (intent) => openLesson(intent.lessonId, intent.sourceDate, null, intent) : undefined}
             onOneOffClick={source.kind === 'formal' && writable ? (id) => openOneOff(id) : undefined} />
         </section>}
         </div> : null)}
@@ -404,6 +410,7 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
       data={lessonEditor.data} fixedLessonPort={lessonEditor.port} timetableId={selection.timetableId ?? undefined}
       lessonId={lessonEditor.lessonId} occurrenceDate={lessonEditor.occurrenceDate}
       occurrenceOverrideId={lessonEditor.occurrenceOverrideId}
+      dragIntent={lessonDragIntent}
       storageStatus={writable ? 'saved' : 'conflict'}
       onManageResource={(mode, context, onCreated) => {
         if (!subjectPort || !classPort || pending) return
@@ -412,8 +419,8 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
         if (mode === 'subjects') subjectPort.selectTeachingUnit(context.teachingUnitId)
         else classPort.selectTeachingUnit(context.teachingUnitId)
         setResource(mode)
-      }} onClose={() => { if (!lessonPort?.pending && !resource) setLessonEditor(null) }}
-      onSaved={() => setLessonEditor(null)} />}
+	      }} onClose={() => { if (!lessonPort?.pending && !resource) { setLessonEditor(null); setLessonDragIntent(null) } }}
+	      onSaved={() => { setLessonEditor(null); setLessonDragIntent(null) }} />}
     {oneOffEditor && selection.projectId && selection.timetableId && <OneOffLessonEditor
       key={`${oneOffEditor.oneOffLessonId ?? 'new'}:${selection.projectId}:${selection.timetableId}`}
       data={oneOffEditor.data} projectId={selection.projectId} timetableId={selection.timetableId}

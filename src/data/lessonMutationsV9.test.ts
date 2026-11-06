@@ -10,7 +10,8 @@ import { isCompatibleAppDataV9 } from './validators/v9'
 import { cancelOccurrenceV9, createOneOffLessonV9, createRecurringLessonV9,
   deleteOneOffLessonV9, deleteRecurringLessonV9, getOneOffLessonConflictsV9,
   getRecurringLessonV9Impact, moveOccurrenceV9, permanentlyUpdateLessonV9,
-  replaceOccurrenceChangeV9, replaceOccurrenceV9, revokeOccurrenceOverrideV9,
+  replaceOccurrenceChangeV9, replaceOccurrenceV9, replaceSwapGroupV9,
+  revokeOccurrenceOverrideV9, revokeSwapGroupV9, swapOccurrencesV9, validateSwapGroupV9,
   updateOneOffLessonV9, updateRecurringLessonV9,
   type LessonV9Scope, type OneOffLessonV9Draft, type RecurringLessonV9Draft } from './lessonMutationsV9'
 
@@ -46,7 +47,153 @@ export function lessonFixture() {
   return { data, scope, draft }
 }
 
+const swapIds = (suffix = '') => ({ groupId: `swap-group${suffix}`,
+  firstOverrideId: `swap-first${suffix}`, secondOverrideId: `swap-second${suffix}` })
+
+function sameDaySwapFixture() {
+  const source = lessonFixture()
+  source.data.teachingUnits[0].periods.push(
+    { id: 3, order: 3, label: '第三節', startTime: '10:00', endTime: '10:50' })
+  const first = createRecurringLessonV9(source.data, source.scope, source.draft, 'swap-a')
+  const data = createRecurringLessonV9(first, source.scope,
+    { ...source.draft, subjectId: 'english', periodId: 3 }, 'swap-b')
+  return { ...source, data }
+}
+
 describe('V9 Lesson domain mutation', () => {
+  it('creates and revokes one exact same-day swap group without changing later recurrence', () => {
+    const { data, scope } = sameDaySwapFixture()
+    const swapped = swapOccurrencesV9(data, scope, {
+      firstLessonId: 'swap-a', firstDate: '2026-03-02',
+      secondLessonId: 'swap-b', secondDate: '2026-03-02',
+    }, swapIds())
+    expect(swapped.overrides).toHaveLength(2)
+    expect(validateSwapGroupV9(swapped, scope, 'swap-first')).toHaveLength(2)
+    expect(resolveV9Day(swapped, scope, fromDateKey('2026-03-02'))
+      .filter((item) => item.kind === 'recurring' && item.movementRole === 'target')
+      .map((item) => [item.id, item.kind === 'recurring' ? item.periodId : 0]))
+      .toEqual([['swap-b', 1], ['swap-a', 3]])
+    expect(resolveV9Day(swapped, scope, fromDateKey('2026-03-09'))
+      .filter((item) => item.kind === 'recurring' && ['swap-a', 'swap-b'].includes(item.id))
+      .map((item) => [item.id, item.kind === 'recurring' ? item.periodId : 0]))
+      .toEqual([['swap-a', 1], ['swap-b', 3]])
+    expect(revokeSwapGroupV9(swapped, scope, 'swap-second').overrides).toEqual([])
+    expect(data.overrides).toEqual([])
+  })
+
+  it('supports cross-date and cross-A/B swap occurrences at inclusive term boundaries', () => {
+    const { data, scope, draft } = lessonFixture()
+    const a = createRecurringLessonV9(data, scope, { ...draft, weekPattern: 'A' }, 'swap-a')
+    const both = createRecurringLessonV9(a, scope,
+      { ...draft, subjectId: 'english', periodId: 2, weekPattern: 'B' }, 'swap-b')
+    const swapped = swapOccurrencesV9(both, scope, {
+      firstLessonId: 'swap-a', firstDate: '2026-03-02',
+      secondLessonId: 'swap-b', secondDate: '2026-03-09',
+    }, swapIds())
+    expect(resolveV9Day(swapped, scope, fromDateKey('2026-03-02'))).toMatchObject([
+      { id: 'swap-a', movementRole: 'source' }, { id: 'swap-b', movementRole: 'target', periodId: 1 }])
+    expect(resolveV9Day(swapped, scope, fromDateKey('2026-03-09'))).toMatchObject([
+      { id: 'swap-a', movementRole: 'target', periodId: 2 }, { id: 'swap-b', movementRole: 'source' }])
+
+    const boundary = structuredClone(data)
+    boundary.teachingUnits[0].startDate = '2026-03-02'
+    boundary.teachingUnits[0].endDate = '2026-06-30'
+    const monday = createRecurringLessonV9(boundary, scope, draft, 'boundary-a')
+    const ready = createRecurringLessonV9(monday, scope,
+      { ...draft, subjectId: 'english', day: 2, periodId: 2 }, 'boundary-b')
+    expect(() => swapOccurrencesV9(ready, scope, {
+      firstLessonId: 'boundary-a', firstDate: '2026-03-02',
+      secondLessonId: 'boundary-b', secondDate: '2026-06-30',
+    }, swapIds('-boundary'))).not.toThrow()
+    expect(() => swapOccurrencesV9(ready, scope, {
+      firstLessonId: 'boundary-a', firstDate: '2026-02-23',
+      secondLessonId: 'boundary-b', secondDate: '2026-06-30',
+    }, swapIds('-outside'))).toThrow(expect.objectContaining({ code: 'invalid-date' }))
+
+    const crossYear = structuredClone(data)
+    crossYear.teachingUnits[0].startDate = '2026-12-28'
+    crossYear.teachingUnits[0].endDate = '2027-01-05'
+    crossYear.teachingUnits[0].weekCycle.anchorDate = '2026-12-28'
+    const yearA = createRecurringLessonV9(crossYear, scope, draft, 'year-a')
+    const yearReady = createRecurringLessonV9(yearA, scope,
+      { ...draft, subjectId: 'english', day: 2, periodId: 2 }, 'year-b')
+    expect(() => swapOccurrencesV9(yearReady, scope, {
+      firstLessonId: 'year-a', firstDate: '2026-12-28',
+      secondLessonId: 'year-b', secondDate: '2027-01-05',
+    }, swapIds('-year'))).not.toThrow()
+  })
+
+  it('rejects reused IDs, occupied occurrences and malformed swap groups', () => {
+    const { data, scope } = sameDaySwapFixture()
+    const draft = { firstLessonId: 'swap-a', firstDate: '2026-03-02',
+      secondLessonId: 'swap-b', secondDate: '2026-03-02' }
+    expect(() => swapOccurrencesV9(data, scope, { ...draft, secondLessonId: 'swap-a' }, swapIds()))
+      .toThrow(expect.objectContaining({ code: 'invalid-draft' }))
+    const swapped = swapOccurrencesV9(data, scope, draft, swapIds())
+    const collision: AppDataV9 = { ...data, overrides: [{ id: 'unrelated', groupId: 'swap-group',
+      projectId: 'p', timetableId: 't', teachingUnitId: 'u', date: '2026-03-09', periodId: 1,
+      action: 'cancel', originalLessonId: 'swap-a' }] }
+    expect(() => swapOccurrencesV9(collision, scope, draft, swapIds()))
+      .toThrow(expect.objectContaining({ code: 'id-collision' }))
+    expect(() => swapOccurrencesV9(swapped, scope, draft, swapIds('-again')))
+      .toThrow(expect.objectContaining({ code: 'already-changed' }))
+
+    const one = { ...swapped, overrides: [swapped.overrides[0]] }
+    expect(() => validateSwapGroupV9(one, scope, 'swap-first'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+    const three = { ...swapped, overrides: [...swapped.overrides,
+      { ...swapped.overrides[0], id: 'swap-third' }] }
+    expect(() => validateSwapGroupV9(three, scope, 'swap-first'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+    const nonReciprocal = { ...swapped, overrides: swapped.overrides.map((item, index) => index
+      ? { ...item, target: { ...item.target!, periodId: 2 } } : item) }
+    expect(() => validateSwapGroupV9(nonReciprocal, scope, 'swap-first'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+  })
+
+  it('atomically replaces a complete swap group and preserves it when replacement validation fails', () => {
+    const { data, scope } = sameDaySwapFixture()
+    const original = swapOccurrencesV9(data, scope, {
+      firstLessonId: 'swap-a', firstDate: '2026-03-02',
+      secondLessonId: 'swap-b', secondDate: '2026-03-02',
+    }, swapIds())
+    const replaced = replaceSwapGroupV9(original, scope, 'swap-first', {
+      firstLessonId: 'swap-a', firstDate: '2026-03-09',
+      secondLessonId: 'swap-b', secondDate: '2026-03-09',
+    }, swapIds('-new'))
+    expect(replaced.overrides.map((item) => item.groupId)).toEqual(['swap-group-new', 'swap-group-new'])
+    expect(original.overrides.map((item) => item.groupId)).toEqual(['swap-group', 'swap-group'])
+    expect(() => replaceSwapGroupV9(original, scope, 'swap-first', {
+      firstLessonId: 'swap-a', firstDate: '2026-03-03',
+      secondLessonId: 'swap-b', secondDate: '2026-03-09',
+    }, swapIds('-bad'))).toThrow(expect.objectContaining({ code: 'invalid-date' }))
+    expect(original.overrides).toHaveLength(2)
+  })
+
+  it('rejects period and custom OneOff overlap while Meeting overlap remains non-blocking', () => {
+    const { data, scope } = sameDaySwapFixture()
+    const request = { firstLessonId: 'swap-a', firstDate: '2026-03-02',
+      secondLessonId: 'swap-b', secondDate: '2026-03-02' }
+    const period: AppDataV9 = { ...data, oneOffLessons: [{ id: 'one-period', projectId: 'p', timetableId: 't',
+      teachingUnitId: 'u', subjectId: 'math', classId: 'c', date: '2026-03-02', purpose: 'extra',
+      time: { mode: 'period', periodId: 1 } }] }
+    expect(() => swapOccurrencesV9(period, scope, request, swapIds('-period')))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    const custom: AppDataV9 = { ...data, oneOffLessons: [{ id: 'one-custom', projectId: 'p', timetableId: 't',
+      teachingUnitId: 'u', subjectId: 'math', classId: 'c', date: '2026-03-02', purpose: 'extra',
+      time: { mode: 'custom', startTime: '10:05', endTime: '10:45' } }] }
+    expect(() => swapOccurrencesV9(custom, scope, request, swapIds('-custom')))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    const meeting: AppDataV9 = { ...data, events: [{ id: 'meeting', projectId: 'p', timetableId: 't',
+      teachingUnitId: 'u', ownershipStatus: 'resolved', title: 'meeting', type: 'meeting',
+      date: '2026-03-02', startTime: '08:00', endTime: '10:50', color: '#112233' }] }
+    expect(() => swapOccurrencesV9(meeting, scope, request, swapIds('-meeting'))).not.toThrow()
+    const swapped = swapOccurrencesV9(data, scope, request, swapIds('-revoke'))
+    const blockedRevoke: AppDataV9 = { ...swapped, oneOffLessons: period.oneOffLessons }
+    expect(() => revokeSwapGroupV9(blockedRevoke, scope, 'swap-first-revoke'))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    expect(blockedRevoke.overrides).toHaveLength(2)
+  })
   it('creates, edits and deletes a fixed Lesson while preserving V9 validity', () => {
     const { data, scope, draft } = lessonFixture()
     expect(isCompatibleAppDataV9(data)).toBe(true)
@@ -606,6 +753,78 @@ describe('formal V9 Lesson Host action port', () => {
     expect(resolveV9Day(result.document, scope, fromDateKey('2026-03-02'))
       .filter((item) => item.kind !== 'recurring' || item.movementRole !== 'source')
       .every((item) => item.hasConflict)).toBe(true)
+  })
+  it('commits swap create, replacement and revoke as one ordinary Host update each', async () => {
+    const { data, scope } = sameDaySwapFixture()
+    const ids = ['swap-group-a', 'swap-first-a', 'swap-second-a']
+    const createdHost = hostFixture(data)
+    const created = await createFormalLessonManagementV9Controller(createdHost.host,
+      () => ids.shift() ?? 'unused', scope).swapOccurrences({
+      firstLessonId: 'swap-a', firstDate: '2026-03-02',
+      secondLessonId: 'swap-b', secondDate: '2026-03-02',
+    })
+    expect(createdHost.update).toHaveBeenCalledOnce()
+    expect(created).toMatchObject({ affectedId: 'swap-group-a', receipt: {
+      revision: 1, attemptId: 'host-attempt' } })
+    expect(created.document.overrides).toHaveLength(2)
+
+    const replacementIds = ['swap-group-b', 'swap-first-b', 'swap-second-b']
+    const replacementHost = hostFixture(created.document)
+    const replaced = await createFormalLessonManagementV9Controller(replacementHost.host,
+      () => replacementIds.shift() ?? 'unused', scope).replaceSwapGroup('swap-first-a', {
+      firstLessonId: 'swap-a', firstDate: '2026-03-09',
+      secondLessonId: 'swap-b', secondDate: '2026-03-09',
+    })
+    expect(replacementHost.update).toHaveBeenCalledOnce()
+    expect(replaced.document.overrides).toHaveLength(2)
+    expect(replaced.document.overrides.map((item) => item.groupId))
+      .toEqual(['swap-group-b', 'swap-group-b'])
+
+    const revokeHost = hostFixture(replaced.document)
+    const revoked = await createFormalLessonManagementV9Controller(revokeHost.host,
+      () => 'unused', scope).revokeSwapGroup('swap-second-b')
+    expect(revokeHost.update).toHaveBeenCalledOnce()
+    expect(revoked.document.overrides).toEqual([])
+  })
+
+  it('fails swap closed for readonly, pending, stale selection, duplicate and receipt mismatch', async () => {
+    const { data, scope } = sameDaySwapFixture()
+    const draft = { firstLessonId: 'swap-a', firstDate: '2026-03-02',
+      secondLessonId: 'swap-b', secondDate: '2026-03-02' }
+    const readonly = hostFixture(data)
+    await expect(createFormalLessonManagementV9Controller({ ...readonly.host, writable: false },
+      () => 'unused', scope).swapOccurrences(draft)).rejects.toMatchObject({ code: 'not-writable' })
+    expect(readonly.update).not.toHaveBeenCalled()
+    const busy = hostFixture(data)
+    await expect(createFormalLessonManagementV9Controller({ ...busy.host, pending: true },
+      () => 'unused', scope).swapOccurrences(draft)).rejects.toMatchObject({ code: 'duplicate-submit' })
+    expect(busy.update).not.toHaveBeenCalled()
+
+    let selected = { ...scope }
+    const stale = hostFixture(data)
+    const staleActions = createFormalLessonManagementV9Controller(stale.host,
+      () => 'unused', scope, () => selected)
+    selected = { ...scope, timetableId: 'other' }
+    await expect(staleActions.swapOccurrences(draft)).rejects.toMatchObject({ code: 'invalid-scope' })
+    expect(stale.update).not.toHaveBeenCalled()
+
+    const held = hostFixture(data, { hold: true })
+    const heldIds = ['swap-group', 'swap-first', 'swap-second']
+    const heldActions = createFormalLessonManagementV9Controller(held.host,
+      () => heldIds.shift() ?? 'unused', scope)
+    const pending = heldActions.swapOccurrences(draft)
+    await expect(heldActions.swapOccurrences(draft)).rejects.toMatchObject({ code: 'duplicate-submit' })
+    held.release()
+    await pending
+    expect(held.update).toHaveBeenCalledOnce()
+
+    const mismatch = hostFixture(data, { badReceipt: true })
+    const mismatchIds = ['swap-group', 'swap-first', 'swap-second']
+    await expect(createFormalLessonManagementV9Controller(mismatch.host,
+      () => mismatchIds.shift() ?? 'unused', scope).swapOccurrences(draft))
+      .rejects.toMatchObject({ code: 'receipt-mismatch' })
+    expect(mismatch.document()).toBe(data)
+    expect(mismatch.host.revision).toBe(0)
   })
   it('passes validation and transaction-staleness failures through without reporting a receipt', async () => {
     const { data, scope, draft } = lessonFixture()

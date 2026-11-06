@@ -30,6 +30,15 @@ pre-mutation backup evidence, and active Runtime Gate evidence. The regression s
 - permanent-update history, future override rebinding and high-risk backup evidence; and
 - Recovery exact-raw export, focus, cross-page storage events and snapshot invalidation.
 
+R4-1D-3B adds `formal-v9-swap.spec.ts` on the same isolated fixture. It proves same-day UI
+swap → reload → grouped revoke, one revision per atomic operation, card-to-card cross-date intent
+in the displayed resolved week, OneOff fail-closed preview, verified V9 readback/Runtime Gate
+evidence, and a stale swap editor after another page commits. R4-1D-3C reuses the existing
+LessonEditor target-date field to add cross-A/B selection without changing the drag interaction.
+The isolated browser spec additionally proves A→B swap → reload → grouped revoke → reload, B→A,
+cross-A/B OneOff rejection, stale-page fail-closed behavior, reciprocal overrides, exact +1 revisions,
+verified persistence evidence and an active Runtime Gate.
+
 Run all browser tests with:
 
 ```sh

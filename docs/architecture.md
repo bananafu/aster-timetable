@@ -1,5 +1,19 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R4-1D-3C — Formal V9 cross-A/B week swap
+
+Formal V9 的既有 `LessonEditor` 在單日交換模式重用原有「移至日期」欄位與第二堂課 select；不新增 UI、文案、拖曳週次導覽或任教單位顯示。目標日期變更會清除舊候選，adapter 再由最新 confirmed V9 document 以 `resolveV9Day` 查詢同一 Project／Timetable／TeachingUnit 的實際固定 occurrence。候選必須符合學期與 A/B anchor、尚無 override、不是 move source／target，且不得為來源課程；列表不依賴目前畫面顯示週。
+
+Preview 與 confirm 沿用 R4-1D-3B 的 atomic swap domain：preview 只在記憶體執行完整 validator，confirm 重新檢查固定 editor baseline 與 selection，並在單次既有 Host update 中產生兩筆 reciprocal grouped overrides。Group replace／revoke、OneOff period/custom overlap、receipt/readback、revision 與 Runtime Gate 契約不變。既有同日交換、顯示週 card drag、V7 non-drag swap 及其他 LessonEditor 操作維持原流程。
+
+## Phase 4D R4-1D-3B — Formal V9 atomic one-day Lesson swap
+
+Formal V9 單日交換沿用既有 `LessonOverride` 的兩筆 reciprocal `move` 與非空 `groupId`，不新增 schema。`swapOccurrencesV9` 先以 V9 resolver 驗證同一 Project／Timetable／TeachingUnit 的兩個未異動固定課 occurrence，再在同一 candidate document 建立恰好兩筆 override；完整 candidate 必須通過 V9 validator／safe-update，且兩個 target 都不得與第三方固定課、其他 override 或 OneOff 的 period/custom 實際時間重疊。Meeting／Activity 維持非阻擋。`validateSwapGroupV9` 拒絕孤立、第三筆、非 move、非 reciprocal、跨 scope 或無法解析的 group；replace 與 revoke 均先重驗完整 group，然後在一份 candidate 中一次替換或移除雙方，撤銷後若原位置形成衝突亦 fail closed。
+
+`createFormalLessonManagementV9Controller` 的 swap／replace group／revoke group 各只呼叫一次既有 `FormalV9HostPort.update()`，使用普通 mutation，不新增 high-risk operation。Adapter 的 preview 直接呼叫同一 domain mutation但丟棄結果，不觸發 Host；confirm 仍由最新 confirmed document 重新執行 domain 驗證，並沿用 selection、document/revision staleness、duplicate/pending/writable、validator、receipt raw/revision/activation attemptId、Web Lock/readback 與 Runtime Gate 契約。`LessonEditor` 僅在 port 完整提供 atomic swap capability 時顯示既有交換選項，並重用既有第二堂課、preview/confirm、group 修改與撤銷流程。
+
+週課表 resolved view 只重用既有桌面卡片對卡片 drag intent；drop 仍只開啟同一 `LessonEditor`，不直接寫入。此接線支援目前顯示週內的跨日期交換；後續 R4-1D-3C 已使用既有表單日期欄位完成跨 A/B 週選取，未改變拖曳互動。
+
 ## Phase 4D R4-1D-2B — Formal V9 OneOff Lesson CRUD
 
 正式 V9 沿用既有 `OneOffLesson` schema、validator、`OneOffLessonEditor` 與課表卡片，不新增資料模型、Host、persistence 或 UI 元件。`lessonMutationsV9` 在既有 Project／Timetable／TeachingUnit／Subject／Class 關聯與日期範圍內提供新增、保留 ID 的跨日期編輯及精確刪除；三種既有 purpose 均保留。衝突預覽以 `resolveV9Day` 的實際結果為準：同一教師課表的固定課程、有效 move target 與其他 OneOff 預設阻擋，取消及 move source 不阻擋，Meeting／Activity 可同時顯示但不阻擋；使用者只能透過既有明確 checkbox 接受衝突。
@@ -32,7 +46,7 @@ ACT-4 已在正式入口的 V7 掛載前加入明確確認 Modal；舊 V7／V8 �
 
 `useAppDataV9` 每次寫入前重新驗證 active metadata、目前文件 digest／revision、備份與原 V8／activation／V7 基準，執行 validator 及 safe-update，寫入兩個新 key 並讀回後才核發 raw＋revision receipt。storage event 撤銷資格；來源 V8 若被舊分頁改動，V9 停寫並保留匯出／採用外部版本入口。新版 V8 Host 在偵測 V9 文件、metadata 或孤立備份時亦停寫。若只有備份寫入成功，介面僅在唯一備份且來源未變時允許明確續接；多筆孤立備份必須人工處理。已載入不遵守協定的舊版分頁無法即時強制阻止；Web Locks 只協調遵守相同鎖的分頁，並非真正 CAS。同版本多分頁已完成隔離瀏覽器驗收；舊版分頁寫入的是 V7／V8 舊 key，不能直接覆寫 active V9 文件，但可能使來源基準失效，與正在進行的非原子 V9 寫入競爭時仍須人工檢查資料及 receipt。
 
-V8 Preview 啟用後改掛新 Host，提供 Project 新增／切換、教師課表新增／改名／僅設定複製／引用保護刪除，以及按教師隔離的科目新增／改名／安全刪除與跨任教單位配置。D2 管理整合使用 `managementV9` 將既有 V8 學校、任教單位、班級及 Project 複製規則套用於唯讀 V8 驗證投影，只將經 V9 validator／safe-update 通過的結果交給 `useAppDataV9.update`；沒有直接寫入舊 key。新學期複製按來源課表重建 Subject 的 `timetableId` 與所有相關 ID，僅選取各任教單位指定來源日期有效的固定課程；不複製 OneOff、Change、Event、Progress。Project 封存／重新啟用保留資料；永久刪除只有在無教師課表、科目、班級或其他教學依賴時開放，絕不以 V8 的級聯刪除處理有內容的新版專案。來源 Project 尚無教師課表時，管理 adapter 的狹義空白複製分支只複製學校、任教單位與班級設定，不虛構教師或課程；有教師課表時仍沿用既有 V8 copy policy。後續 Formal V9 已接入固定課程 CRUD、單日取消／移動／替換、自指定日期永久修改及 OneOff 新增／編輯／刪除；事件、進度、永久交換／結束與單日交換仍未接入正式 V9 寫入路徑。
+V8 Preview 啟用後改掛新 Host，提供 Project 新增／切換、教師課表新增／改名／僅設定複製／引用保護刪除，以及按教師隔離的科目新增／改名／安全刪除與跨任教單位配置。D2 管理整合使用 `managementV9` 將既有 V8 學校、任教單位、班級及 Project 複製規則套用於唯讀 V8 驗證投影，只將經 V9 validator／safe-update 通過的結果交給 `useAppDataV9.update`；沒有直接寫入舊 key。新學期複製按來源課表重建 Subject 的 `timetableId` 與所有相關 ID，僅選取各任教單位指定來源日期有效的固定課程；不複製 OneOff、Change、Event、Progress。Project 封存／重新啟用保留資料；永久刪除只有在無教師課表、科目、班級或其他教學依賴時開放，絕不以 V8 的級聯刪除處理有內容的新版專案。來源 Project 尚無教師課表時，管理 adapter 的狹義空白複製分支只複製學校、任教單位與班級設定，不虛構教師或課程；有教師課表時仍沿用既有 V8 copy policy。後續 Formal V9 已接入固定課程 CRUD、單日取消／移動／替換／原子交換、自指定日期永久修改及 OneOff 新增／編輯／刪除；事件、進度與永久交換／結束仍未接入正式 V9 寫入路徑。
 
 ## Phase 4D R2-D2-B1 — Timetable-owned Subject 資料契約與唯讀盤點（歷史階段）
 

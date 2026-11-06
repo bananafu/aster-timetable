@@ -5,7 +5,7 @@ import { createLessonDragIntent, type LessonDragIntent } from '../lib/lessonDrag
 import { isActualTeachingOccurrence, scheduleReadStatusMessage, type ScheduleDisplayDay,
   type ScheduleDisplayOccurrence, type ScheduleDisplaySchool,
   type ScheduleDisplayTeachingUnit } from '../lib/scheduleDisplay'
-import { resolveProjectWeek, type ResolvedLessonV4, type ResolvedScheduleOccurrence } from '../lib/scheduleV4'
+import { resolveProjectWeek, type ResolvedScheduleOccurrence } from '../lib/scheduleV4'
 import type { V9ReadStatus } from '../lib/scheduleV9'
 import type { AppDataV4, TeachingUnit } from '../types'
 
@@ -31,6 +31,8 @@ interface LegacyProps {
 
 interface ResolvedProps {
   mode: 'resolved'
+  projectId?: string
+  timetableId?: string
   weekDays: Date[]
   readStatus: V9ReadStatus
   days: readonly ScheduleDisplayDay[]
@@ -38,6 +40,7 @@ interface ResolvedProps {
   teachingUnits: readonly ScheduleDisplayTeachingUnit[]
   onHeaderTeachingUnitChange?: (teachingUnitId: string | null) => void
   onLessonClick?: (lessonId: string, date: string, overrideId?: string) => void
+  onLessonDrop?: (intent: LessonDragIntent) => void
   onOneOffClick?: (oneOffId: string) => void
 }
 
@@ -105,15 +108,16 @@ export function MultiSchoolSchedule(props: Props) {
   const resolvedSchools = resolved ? props.schools : null
   const resolvedUnits = resolved ? props.teachingUnits : null
   const weekDays = props.weekDays
-  const requestedProjectId = resolved ? undefined : props.projectId
-  const timetableId = resolved ? undefined : props.timetableId
+  const requestedProjectId = props.projectId
+  const timetableId = props.timetableId
   const onLessonClick = props.onLessonClick
-  const onLessonDrop = resolved ? undefined : props.onLessonDrop
+  const onLessonDrop = props.onLessonDrop
   const onOneOffClick = props.onOneOffClick
   const onHeaderTeachingUnitChange = resolved ? props.onHeaderTeachingUnitChange : undefined
   const [scope, setScope] = useState<ScheduleScope>('all')
   const [showWeekend, setShowWeekend] = useState(false)
-  const projectId = resolved ? null : requestedProjectId === undefined ? legacyData!.activeProjectId : requestedProjectId
+  const projectId = resolved ? requestedProjectId
+    : requestedProjectId === undefined ? legacyData!.activeProjectId : requestedProjectId
   const schools = useMemo<readonly ScheduleDisplaySchool[]>(() => resolved ? resolvedSchools!
     : legacyData!.schools.filter((item) => item.projectId === projectId).map(({ id, name }) => ({ id, name })),
   [legacyData, projectId, resolved, resolvedSchools])
@@ -122,7 +126,7 @@ export function MultiSchoolSchedule(props: Props) {
   [legacyData, projectId, resolved, resolvedUnits])
   const [schoolId, setSchoolId] = useState(() => schools[0]?.id ?? '')
   const [unitId, setUnitId] = useState('all')
-  const [draggedLesson, setDraggedLesson] = useState<ResolvedLessonV4 | null>(null)
+  const [draggedLesson, setDraggedLesson] = useState<LessonView | null>(null)
   const [dragFeedback, setDragFeedback] = useState('')
 
   useEffect(() => {
@@ -162,10 +166,29 @@ export function MultiSchoolSchedule(props: Props) {
   const schedule = showWeekend ? fullSchedule : fullSchedule.slice(1, 6)
   const conflictCount = schedule.flatMap((day) => day.lessons)
     .filter(({ lesson }) => isActualTeachingOccurrence(lesson) && lesson.hasConflict).length
-  const draggedUnit = draggedLesson ? legacyData?.teachingUnits.find((item) => item.id === draggedLesson.teachingUnitId) : undefined
-  const dropLesson = (date: string, startTime: string, endTime: string) => {
-    if (!draggedLesson || !onLessonDrop || !legacyData) return
-    const result = createLessonDragIntent(legacyData, draggedLesson, { date, startTime, endTime, timetableId })
+  const draggedUnit = draggedLesson?.legacy
+    ? legacyData?.teachingUnits.find((item) => item.id === draggedLesson.legacy!.teachingUnitId) : undefined
+  const dropLesson = (date: string, startTime: string, endTime: string,
+    target?: ScheduleDisplayOccurrence) => {
+    if (!draggedLesson || !onLessonDrop) return
+    if (resolved) {
+      const source = draggedLesson.lesson
+      if (!projectId || !timetableId || source.kind !== 'recurring' || source.status !== 'regular' || source.overrideId
+        || source.movementRole || target?.kind !== 'recurring' || target.status !== 'regular'
+        || target.overrideId || target.movementRole || target.teachingUnitId !== source.teachingUnitId
+        || target.id === source.id || target.periodId === undefined) {
+        setDraggedLesson(null); return
+      }
+      const intent: LessonDragIntent = { lessonId: source.id, projectId, timetableId,
+        sourceDate: source.sourceDate ?? source.date, targetDate: date, targetPeriodId: target.periodId,
+        targetStartTime: startTime, targetEndTime: endTime, conflictLessonIds: [target.id] }
+      setDraggedLesson(null)
+      setDragFeedback('目標已有課程，請在預覽中選擇交換、保留衝堂或取消。')
+      onLessonDrop(intent)
+      return
+    }
+    if (!legacyData || !draggedLesson.legacy) return
+    const result = createLessonDragIntent(legacyData, draggedLesson.legacy, { date, startTime, endTime, timetableId })
     setDraggedLesson(null)
     if (!result.valid) { setDragFeedback(result.reason); return }
     setDragFeedback(result.intent.conflictLessonIds.length > 0 ? '目標已有課程，請在預覽中選擇交換、保留衝堂或取消。' : '')
@@ -194,25 +217,27 @@ export function MultiSchoolSchedule(props: Props) {
       {conflictCount > 0 && <p className="schedule-conflict-summary" role="status"><AlertTriangle size={14} />本週有 {conflictCount} 堂課涉及時間衝突</p>}
     </div>
     {!showWeekend && weekendLessonCount > 0 && <div className="weekend-lesson-notice" role="status"><span>本週週末有 {weekendLessonCount} 堂課</span><button type="button" onClick={() => setShowWeekend(true)}>顯示週末</button></div>}
-    {(draggedLesson || dragFeedback) && <div className={`drag-status ${dragFeedback ? 'warning' : ''}`} role="status">{draggedLesson ? `正在拖曳：${draggedLesson.subjectName}・${draggedLesson.className}；按 Escape 取消。` : dragFeedback}<button type="button" onClick={() => setDragFeedback('')}>關閉</button></div>}
+	    {(draggedLesson || dragFeedback) && <div className={`drag-status ${dragFeedback ? 'warning' : ''}`} role="status">{draggedLesson ? `正在拖曳：${draggedLesson.lesson.subjectName}・${draggedLesson.lesson.className}；按 Escape 取消。` : dragFeedback}<button type="button" onClick={() => setDragFeedback('')}>關閉</button></div>}
 
     <div className="multi-schedule-scroll">
       <div className={`multi-week-grid ${showWeekend ? 'seven-days' : ''}`}>
         {schedule.map(({ date, lessons }, dayIndex) => <section className="multi-day-column" key={date.toISOString()} aria-label={`${toDateKey(date)} 課表`}>
           <header><span>{showWeekend ? weekDayLabels[dayIndex] : dayNames[dayIndex]}</span><strong>{formatShortDate(date)}</strong></header>
           <div className="multi-day-lessons">
-            {draggedLesson && draggedUnit && legacyData && <div className="lesson-drop-targets" aria-label={`${toDateKey(date)} 可放置節次`}>{[...draggedUnit.periods].sort((left, right) => left.order - right.order).map((period) => { const result = createLessonDragIntent(legacyData, draggedLesson, { date: toDateKey(date), startTime: period.startTime, endTime: period.endTime, timetableId }); return <div key={period.id} className={`lesson-drop-target ${result.valid ? 'valid' : 'invalid'} ${result.valid && result.intent.conflictLessonIds.length ? 'occupied' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dropLesson(toDateKey(date), period.startTime, period.endTime) }}><strong>{period.label}</strong><span>{period.startTime}–{period.endTime}</span><em>{result.valid ? result.intent.conflictLessonIds.length ? '已有課程' : '放置於此' : '不可放置'}</em></div> })}</div>}
+            {draggedLesson?.legacy && draggedUnit && legacyData && <div className="lesson-drop-targets" aria-label={`${toDateKey(date)} 可放置節次`}>{[...draggedUnit.periods].sort((left, right) => left.order - right.order).map((period) => { const result = createLessonDragIntent(legacyData, draggedLesson.legacy!, { date: toDateKey(date), startTime: period.startTime, endTime: period.endTime, timetableId }); return <div key={period.id} className={`lesson-drop-target ${result.valid ? 'valid' : 'invalid'} ${result.valid && result.intent.conflictLessonIds.length ? 'occupied' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dropLesson(toDateKey(date), period.startTime, period.endTime) }}><strong>{period.label}</strong><span>{period.startTime}–{period.endTime}</span><em>{result.valid ? result.intent.conflictLessonIds.length ? '已有課程' : '放置於此' : '不可放置'}</em></div> })}</div>}
             {lessons.length === 0
               ? <p className="cross-school-empty">無有效課程</p>
               : lessons.map(({ lesson, legacy }, index) => <LessonCard key={lesson.key} lesson={lesson}
                 previous={lessons[index - 1]?.lesson} readOnly={resolved && !onLessonClick}
                 onClick={lesson.kind === 'one-off' ? onOneOffClick ? () => onOneOffClick(lesson.id) : undefined
                   : onLessonClick ? () => onLessonClick(lesson.id, lesson.date, lesson.overrideId) : undefined}
-                draggable={!resolved && lesson.kind === 'recurring' && Boolean(onLessonDrop)}
-                onDragStart={!resolved && lesson.kind === 'recurring' && legacy?.kind === 'recurring' ? (event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', lesson.id); setDraggedLesson(legacy); setDragFeedback('') } : undefined}
-                onDragEnd={!resolved && lesson.kind === 'recurring' ? () => setDraggedLesson(null) : undefined}
-                onDragOver={!resolved && lesson.kind === 'recurring' && draggedLesson ? (event) => event.preventDefault() : undefined}
-                onDrop={!resolved && lesson.kind === 'recurring' ? (event) => { event.preventDefault(); dropLesson(lesson.date, lesson.startTime, lesson.endTime) } : undefined} />)}
+                draggable={lesson.kind === 'recurring' && Boolean(onLessonDrop)
+                  && (!resolved || (lesson.status === 'regular' && !lesson.overrideId && !lesson.movementRole))}
+                onDragStart={lesson.kind === 'recurring' && (resolved || legacy?.kind === 'recurring') ? (event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', lesson.id); setDraggedLesson({ lesson, legacy }); setDragFeedback('') } : undefined}
+                onDragEnd={lesson.kind === 'recurring' ? () => setDraggedLesson(null) : undefined}
+                onDragOver={lesson.kind === 'recurring' && draggedLesson ? (event) => event.preventDefault() : undefined}
+                onDrop={lesson.kind === 'recurring' ? (event) => { event.preventDefault(); dropLesson(lesson.date,
+                  lesson.startTime, lesson.endTime, lesson) } : undefined} />)}
           </div>
         </section>)}
       </div>
