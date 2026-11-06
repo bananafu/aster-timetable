@@ -28,6 +28,8 @@ pre-mutation backup evidence, and active Runtime Gate evidence. The regression s
 - two-page stale revision protection inside one disposable context;
 - EVERY/A/B anchor resolution, cross-year term boundaries and Timetable isolation;
 - permanent-update history, future override rebinding and high-risk backup evidence; and
+- permanent-end history, inclusive cessation, future-override rejection, stale editor protection,
+  exact high-risk backup evidence and active Runtime Gate after reload; and
 - Recovery exact-raw export, focus, cross-page storage events and snapshot invalidation.
 
 R4-1D-3B adds `formal-v9-swap.spec.ts` on the same isolated fixture. It proves same-day UI
@@ -38,6 +40,14 @@ LessonEditor target-date field to add cross-A/B selection without changing the d
 The isolated browser spec additionally proves A→B swap → reload → grouped revoke → reload, B→A,
 cross-A/B OneOff rejection, stale-page fail-closed behavior, reciprocal overrides, exact +1 revisions,
 verified persistence evidence and an active Runtime Gate.
+
+R4-1D-4B adds `formal-v9-permanent-end.spec.ts` without changing the fixture or browser profile.
+It proves the existing LessonEditor end flow writes exactly one revision, retains a resolvable
+historical occurrence, removes occurrences from the inclusive end date, reloads with valid write
+evidence and active Runtime Gate, and records the exact old V9 raw under
+`permanently-end-lesson`. Separate cases prove that a future Override is rejected at preview with
+no revision or backup, and that a preview opened before another page's verified mutation becomes
+read-only without overwriting the newer document.
 
 Run all browser tests with:
 

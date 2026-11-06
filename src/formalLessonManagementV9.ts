@@ -4,7 +4,8 @@ import { isCompatibleAppDataV9 } from './data/validators/v9'
 import { fingerprintV7Raw } from './data/activationV8'
 import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './data/storageV9'
 import { cancelOccurrenceV9, createOneOffLessonV9, createRecurringLessonV9,
-  deleteOneOffLessonV9, deleteRecurringLessonV9, getRecurringLessonV9Impact, moveOccurrenceV9,
+  deleteOneOffLessonV9, deleteRecurringLessonV9, endRecurringLessonFromDateV9,
+  getRecurringLessonV9Impact, moveOccurrenceV9,
   permanentlyUpdateLessonV9, replaceOccurrenceChangeV9, replaceOccurrenceV9,
   replaceSwapGroupV9, revokeOccurrenceOverrideV9, revokeSwapGroupV9, swapOccurrencesV9,
   updateOneOffLessonV9, updateRecurringLessonV9,
@@ -45,6 +46,7 @@ export interface FormalLessonV9Actions {
   revokeSwapGroup: (overrideId: string) => Promise<FormalLessonV9Result>
   permanentlyUpdateFromDate: (lessonId: string, date: string,
     draft: RecurringLessonV9Draft) => Promise<FormalLessonV9Result>
+  permanentlyEndFromDate: (lessonId: string, date: string) => Promise<FormalLessonV9Result>
   createOneOff: (draft: OneOffLessonV9Draft, allowConflict?: boolean) => Promise<FormalLessonV9Result>
   updateOneOff: (oneOffId: string, draft: OneOffLessonV9Draft,
     allowConflict?: boolean) => Promise<FormalLessonV9Result>
@@ -166,6 +168,9 @@ export function createFormalLessonManagementV9Controller(host: FormalV9HostPort,
         return permanentlyUpdateLessonV9(current, captured, id, date, draft, newId)
       }, () => newId, 'permanently-update-lesson')
     },
+    permanentlyEndFromDate: (id, date) => commit(
+      (current) => endRecurringLessonFromDateV9(current, captured, id, date),
+      () => id, 'permanently-end-lesson'),
     createOneOff: (draft, allowConflict = false) => {
       let id = ''
       return commit((current) => {

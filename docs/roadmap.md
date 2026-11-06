@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R4-1D-4B — Formal V9 permanent end（完成）
+
+正式 V9 已沿用既有 LessonEditor 的「從指定日期起 → 結束課程」preview／confirm 流程，透過單一 `permanently-end-lesson` high-risk Host transaction 實作 inclusive cessation。最新版本於 D 前一日結束；D 等於版本起日時只在沒有 Override／OneOff 引用下移除版本。歷史資料、OneOff 與進度不重寫；future source／move target、跨界或 malformed grouped swap、歷史版本、重複與 term 外操作均 fail closed。未新增 schema、Host、persistence、storage key、Runtime Gate 或 UI 設計。
+
+Domain、controller、adapter、React 與真實 persistence targeted tests 已覆蓋日期邊界、跨年、引用與完整 group、safe-update、單次 high-risk update、backup／receipt mismatch 及 stale／selection 契約。Playwright disposable Chromium 已實際通過 end → reload、歷史／未來解析、revision +1、exact pre-mutation backup、Runtime Gate active、future override 非寫入拒絕與多分頁 stale editor。完整平行／序列 Vitest、全 browser suite、lint 與 build 的執行結果須與本功能 targeted evidence 分開記錄。
+
 ## Phase 4D R4-1D-3C — Formal V9 cross-A/B week swap（完成）
 
 既有 LessonEditor 交換流程已重用原有「移至日期」欄位，依目標日期從最新 confirmed V9 document 查詢同一 Project／Timetable／TeachingUnit 的有效固定 occurrence；A/B anchor、學期範圍、既有 override 與來源自身均 fail closed，日期變更不保留失效候選。未新增 UI、文案、schema、Host、persistence 或拖曳跨週操作。

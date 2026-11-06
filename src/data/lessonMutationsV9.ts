@@ -387,6 +387,47 @@ export function replaceSwapGroupV9(data: AppDataV9, selected: LessonV9Scope,
   return safe(data, swapOccurrencesV9(base, selected, draft, ids))
 }
 
+/** Ends the latest Lesson version from an inclusive date without deleting related records. */
+export function endRecurringLessonFromDateV9(data: AppDataV9, selected: LessonV9Scope,
+  lessonId: string, date: string): AppDataV9 {
+  const current = lesson(data, selected, lessonId)
+  const unit = scope(data, selected)
+  if (!dateValid(date) || date < current.effectiveStart
+    || date > (current.effectiveEnd ?? unit.endDate)
+    || date < unit.startDate || date > unit.endDate) {
+    fail('invalid-date', 'End date must be inside the latest Lesson version and TeachingUnit term.')
+  }
+  if (data.recurringLessons.some((item) => item.seriesId === current.seriesId
+    && item.effectiveStart > current.effectiveStart)) {
+    fail('referenced', 'Historical Lesson version cannot be ended again.')
+  }
+  occurrenceDetails(data, selected, lessonId, date)
+  const related = data.overrides.filter((item) => item.originalLessonId === lessonId)
+  const checkedGroups = new Set<string>()
+  for (const override of related) {
+    if (override.groupId && !checkedGroups.has(override.groupId)) {
+      const group = validateSwapGroupV9(data, selected, override.id)
+      checkedGroups.add(override.groupId)
+      if (group.some((item) => item.date >= date || (item.target?.date ?? '') >= date)) {
+        fail('referenced', 'A complete swap group crosses the permanent end date.')
+      }
+    } else if (!override.groupId
+      && (override.date >= date || (override.target?.date ?? '') >= date)) {
+      fail('referenced', 'A Lesson override crosses the permanent end date.')
+    }
+  }
+  if (date === current.effectiveStart && (related.length || data.oneOffLessons.some((item) =>
+    item.relatedRecurringLessonId === lessonId))) {
+    fail('referenced', 'The first Lesson version date cannot be removed while related records reference it.')
+  }
+  const previousEnd = toDateKey(addDays(fromDateKey(date), -1))
+  const recurringLessons = date === current.effectiveStart
+    ? data.recurringLessons.filter((item) => item.id !== lessonId)
+    : data.recurringLessons.map((item) => item.id === lessonId
+      ? { ...item, effectiveEnd: previousEnd } : item)
+  return safe(data, { ...data, recurringLessons })
+}
+
 function selectedOverride(data: AppDataV9, selected: LessonV9Scope, overrideId: string): Override {
   scope(data, selected)
   const found = data.overrides.find((item) => item.id === overrideId && item.projectId === selected.projectId

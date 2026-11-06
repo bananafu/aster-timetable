@@ -11,7 +11,7 @@ import type { FixedLessonPersistencePort, SwapOccurrenceCandidate,
 import type { OneOffLessonPersistencePort, OneOffSaveRequest } from '../components/OneOffLessonEditor'
 import { fromDateKey, toDateKey } from '../lib/date'
 import { resolveV9Day } from '../lib/scheduleV9'
-import { getOneOffLessonConflictsV9, replaceSwapGroupV9, revokeSwapGroupV9,
+import { endRecurringLessonFromDateV9, getOneOffLessonConflictsV9, replaceSwapGroupV9, revokeSwapGroupV9,
   validateSwapGroupV9,
   swapOccurrencesV9 } from '../data/lessonMutationsV9'
 
@@ -146,6 +146,13 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
       if (replacingOverrideId) replaceSwapGroupV9(current, scope, replacingOverrideId, request, ids)
       else swapOccurrencesV9(current, scope, request, ids)
     }
+    const previewPermanentEnd = (id: string, date: string) => {
+      if (!projectedTarget || projectedTarget.id !== id) {
+        throw new FormalLessonV9Error('invalid-scope', 'Permanent end source is unavailable.')
+      }
+      const { current, scope } = previewDocument(projectedTarget.teachingUnitId)
+      endRecurringLessonFromDateV9(current, scope, id, date)
+    }
     const swapCandidates = (date: string,
       replacingOverrideId?: string): readonly SwapOccurrenceCandidate[] => {
       if (!projectedTarget || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return []
@@ -209,6 +216,12 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
         (controller) => controller.updateRecurring(id, toDraft(draft))),
       permanentlyUpdate: (id, date, draft) => execute(projectedTarget?.teachingUnitId ?? draft.teachingUnitId,
         (controller) => controller.permanentlyUpdateFromDate(id, date, toDraft(draft))),
+      previewPermanentEnd,
+      permanentlyEnd: (id, date) => {
+        if (!projectedTarget) return Promise.reject(new Error('Lesson does not exist.'))
+        return execute(projectedTarget.teachingUnitId,
+          (controller) => controller.permanentlyEndFromDate(id, date))
+      },
       delete: (id) => {
         if (!projectedTarget) return Promise.reject(new Error('Lesson does not exist.'))
         return execute(projectedTarget.teachingUnitId, (controller) => controller.deleteRecurring(id, true))

@@ -8,7 +8,7 @@ import { fingerprintV7Raw } from './activationV8'
 import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './storageV9'
 import { isCompatibleAppDataV9 } from './validators/v9'
 import { cancelOccurrenceV9, createOneOffLessonV9, createRecurringLessonV9,
-  deleteOneOffLessonV9, deleteRecurringLessonV9, getOneOffLessonConflictsV9,
+  deleteOneOffLessonV9, deleteRecurringLessonV9, endRecurringLessonFromDateV9, getOneOffLessonConflictsV9,
   getRecurringLessonV9Impact, moveOccurrenceV9, permanentlyUpdateLessonV9,
   replaceOccurrenceChangeV9, replaceOccurrenceV9, replaceSwapGroupV9,
   revokeOccurrenceOverrideV9, revokeSwapGroupV9, swapOccurrencesV9, validateSwapGroupV9,
@@ -418,6 +418,112 @@ describe('V9 Lesson domain mutation', () => {
     expect(() => permanentlyUpdateLessonV9(fixed, scope, 'l1', '2026-07-01', draft, 'bad')).toThrow()
     expect(() => permanentlyUpdateLessonV9(changed, scope, 'l1', '2026-03-16',
       { ...draft, day: 2 }, 'bad')).toThrow(expect.objectContaining({ code: 'referenced' }))
+  })
+
+  it('ends the latest series inclusively while preserving history and past overrides', () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    const historical = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-09', 'historical')
+    const ended = endRecurringLessonFromDateV9(historical, scope, 'l1', '2026-03-16')
+    expect(ended.recurringLessons).toMatchObject([{ id: 'l1', effectiveEnd: '2026-03-15' }])
+    expect(ended.overrides).toEqual(historical.overrides)
+    expect(resolveV9Day(ended, scope, fromDateKey('2026-03-09'))[0]).toMatchObject({
+      id: 'l1', status: 'cancelled', overrideId: 'historical',
+    })
+    expect(resolveV9Day(ended, scope, fromDateKey('2026-03-16'))).toEqual([])
+    expect(isCompatibleAppDataV9(ended)).toBe(true)
+    expect(fixed.recurringLessons[0].effectiveEnd).toBe('2026-06-30')
+  })
+
+  it('removes an initial version without creating an empty range and supports inclusive term boundaries', () => {
+    const { data, scope, draft } = lessonFixture()
+    const firstDay = structuredClone(data)
+    firstDay.teachingUnits[0].startDate = '2026-03-02'
+    const fixed = createRecurringLessonV9(firstDay, scope, draft, 'first')
+    const removed = endRecurringLessonFromDateV9(fixed, scope, 'first', '2026-03-02')
+    expect(removed.recurringLessons).toEqual([])
+    expect(isCompatibleAppDataV9(removed)).toBe(true)
+
+    const lastDayDraft = { ...draft, day: 2 as const }
+    const lastDay = createRecurringLessonV9(data, scope, lastDayDraft, 'last')
+    const endedLast = endRecurringLessonFromDateV9(lastDay, scope, 'last', '2026-06-30')
+    expect(endedLast.recurringLessons[0].effectiveEnd).toBe('2026-06-29')
+    expect(resolveV9Day(endedLast, scope, fromDateKey('2026-06-30'))).toEqual([])
+
+    const crossYear = structuredClone(data)
+    crossYear.teachingUnits[0].startDate = '2026-12-28'
+    crossYear.teachingUnits[0].endDate = '2027-01-04'
+    crossYear.teachingUnits[0].weekCycle.anchorDate = '2026-12-28'
+    const yearLesson = createRecurringLessonV9(crossYear, scope, draft, 'year')
+    expect(endRecurringLessonFromDateV9(yearLesson, scope, 'year', '2027-01-04')
+      .recurringLessons[0].effectiveEnd).toBe('2027-01-03')
+  })
+
+  it('rejects invalid, repeated, historical-version, and cross-boundary override ends without mutation', () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    expect(() => endRecurringLessonFromDateV9(fixed, scope, 'l1', '2026-02-23'))
+      .toThrow(expect.objectContaining({ code: 'invalid-date' }))
+    expect(() => endRecurringLessonFromDateV9(fixed, scope, 'l1', '2026-03-03'))
+      .toThrow(expect.objectContaining({ code: 'invalid-date' }))
+    const ended = endRecurringLessonFromDateV9(fixed, scope, 'l1', '2026-03-16')
+    expect(() => endRecurringLessonFromDateV9(ended, scope, 'l1', '2026-03-16'))
+      .toThrow(expect.objectContaining({ code: 'invalid-date' }))
+    const split = permanentlyUpdateLessonV9(fixed, scope, 'l1', '2026-03-16',
+      { ...draft, subjectId: 'english' }, 'l2')
+    expect(() => endRecurringLessonFromDateV9(split, scope, 'l1', '2026-03-09'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+
+    const futureSource = cancelOccurrenceV9(fixed, scope, 'l1', '2026-03-23', 'future')
+    expect(() => endRecurringLessonFromDateV9(futureSource, scope, 'l1', '2026-03-16'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+    const futureTarget = moveOccurrenceV9(fixed, scope, 'l1', '2026-03-09',
+      { date: '2026-03-16', periodId: 2 }, 'future-target', true)
+    expect(() => endRecurringLessonFromDateV9(futureTarget, scope, 'l1', '2026-03-16'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+    expect(futureSource.recurringLessons[0].effectiveEnd).toBe('2026-06-30')
+    expect(futureTarget.recurringLessons[0].effectiveEnd).toBe('2026-06-30')
+  })
+
+  it('validates complete swap groups across the end boundary and fails closed on malformed groups', () => {
+    const { data, scope } = sameDaySwapFixture()
+    const crossing = swapOccurrencesV9(data, scope, {
+      firstLessonId: 'swap-a', firstDate: '2026-03-09',
+      secondLessonId: 'swap-b', secondDate: '2026-03-16',
+    }, swapIds('-crossing'))
+    expect(() => endRecurringLessonFromDateV9(crossing, scope, 'swap-a', '2026-03-16'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+    const historical = swapOccurrencesV9(data, scope, {
+      firstLessonId: 'swap-a', firstDate: '2026-03-02',
+      secondLessonId: 'swap-b', secondDate: '2026-03-02',
+    }, swapIds('-historical'))
+    const malformed = { ...historical, overrides: historical.overrides.slice(0, 1) }
+    expect(() => endRecurringLessonFromDateV9(malformed, scope, 'swap-a', '2026-03-16'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+    expect(crossing.recurringLessons.every((item) => item.effectiveEnd === '2026-06-30')).toBe(true)
+  })
+
+  it('preserves OneOff lessons, make-up references, and teaching progress byte-for-byte', () => {
+    const { data, scope, draft } = lessonFixture()
+    const fixed = createRecurringLessonV9(data, scope, draft, 'l1')
+    const withOneOff = createOneOffLessonV9(fixed, scope, {
+      ...scope, subjectId: 'math', classId: 'c', date: '2026-03-10', purpose: 'make-up',
+      relatedRecurringLessonId: 'l1', time: { mode: 'period', periodId: 2 },
+    }, '11111111-1111-4111-8111-111111111111')
+    const progress = { ...withOneOff, teachingProgress: [{
+      id: '22222222-2222-4222-8222-222222222222', projectId: 'p', timetableId: 't', teachingUnitId: 'u',
+      classId: 'c', subjectId: 'math', content: { chapter: '1', unit: '1', note: 'kept' },
+      previousProgress: null, createdAt: '2026-03-09T00:00:00.000Z', updatedAt: '2026-03-09T00:00:00.000Z',
+    }] }
+    const ended = endRecurringLessonFromDateV9(progress, scope, 'l1', '2026-03-16')
+    expect(ended.oneOffLessons).toEqual(progress.oneOffLessons)
+    expect(ended.teachingProgress).toEqual(progress.teachingProgress)
+    expect(isCompatibleAppDataV9(ended)).toBe(true)
+    const startsAtFirstOccurrence = { ...progress, recurringLessons: progress.recurringLessons.map((item) => ({
+      ...item, effectiveStart: '2026-03-02',
+    })) }
+    expect(() => endRecurringLessonFromDateV9(startsAtFirstOccurrence, scope, 'l1', '2026-03-02'))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
   })
 
   it.each([
@@ -876,6 +982,14 @@ describe('formal V9 Lesson Host action port', () => {
       .permanentlyUpdateFromDate('l1', '2026-03-16', { ...draft, subjectId: 'english' })
     expect(split.document.recurringLessons.map((item) => item.id)).toEqual(['l1', 'l2'])
     expect(split.receipt.preMutationBackup?.operation).toBe('permanently-update-lesson')
+    const permanentEnd = backedHost(fixed)
+    const ended = await createFormalLessonManagementV9Controller(permanentEnd.host, () => 'unused', scope)
+      .permanentlyEndFromDate('l1', '2026-03-16')
+    expect(ended.document.recurringLessons).toMatchObject([{ id: 'l1', effectiveEnd: '2026-03-15' }])
+    expect(ended.receipt.preMutationBackup).toMatchObject({
+      operation: 'permanently-end-lesson', revision: 0, mutationAttemptId: 'mutation-1',
+    })
+    expect(permanentEnd.updateHighRisk).toHaveBeenCalledOnce()
     const oneOff = createOneOffLessonV9(data, scope, {
       ...scope, subjectId: 'math', classId: 'c', date: '2026-03-02', purpose: 'extra',
       time: { mode: 'period', periodId: 2 },
@@ -888,7 +1002,7 @@ describe('formal V9 Lesson Host action port', () => {
     for (const fault of ['operation', 'revision', 'mutation-attempt'] as const) {
       const mismatch = backedHost(fixed, fault)
       await expect(createFormalLessonManagementV9Controller(mismatch.host, () => 'unused', scope)
-        .deleteRecurring('l1', true)).rejects.toMatchObject({ code: 'receipt-mismatch' })
+        .permanentlyEndFromDate('l1', '2026-03-16')).rejects.toMatchObject({ code: 'receipt-mismatch' })
     }
   })
   it('rejects a referenced deletion before the Host reaches backup storage', async () => {

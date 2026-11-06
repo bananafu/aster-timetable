@@ -20,11 +20,43 @@ function setup() {
 describe('LessonEditor integrated experience', () => {
   const fixedPort = (occurrence: NonNullable<Parameters<typeof LessonEditor>[0]['fixedLessonPort']>['occurrence']) => ({
     fixedOnly: true as const, pending: false, configuredSubjectIds: {}, occurrence,
-    create: vi.fn(), update: vi.fn(), permanentlyUpdate: vi.fn(), delete: vi.fn(),
+    create: vi.fn(), update: vi.fn(), permanentlyUpdate: vi.fn(),
+    previewPermanentEnd: vi.fn(), permanentlyEnd: vi.fn(), delete: vi.fn(),
   })
 
   const ordinaryOccurrencePort = () => ({ cancel: vi.fn(), move: vi.fn(), replace: vi.fn(),
     replaceChange: vi.fn(), revoke: vi.fn() })
+
+  it('exposes the existing Formal permanent-end flow, previews without writing, and confirms through the port', async () => {
+    const port = fixedPort(ordinaryOccurrencePort())
+    render(<LessonEditor data={setup()} fixedLessonPort={port} lessonId="c1"
+      occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
+    expect(screen.getByRole('option', { name: '結束課程' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'end' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(port.previewPermanentEnd).toHaveBeenCalledWith('c1', '2026-09-07')
+    expect(port.permanentlyEnd).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('異動預覽').textContent).toContain('從指定日期起結束課程')
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(port.permanentlyEnd).toHaveBeenCalledWith('c1', '2026-09-07'))
+  })
+
+  it('keeps the Formal permanent-end editor open when preview validation fails', () => {
+    const port = fixedPort(ordinaryOccurrencePort())
+    port.previewPermanentEnd.mockImplementation(() => { throw Object.assign(new Error('future override'), {
+      code: 'referenced',
+    }) })
+    render(<LessonEditor data={setup()} fixedLessonPort={port} lessonId="c1"
+      occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'end' } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(screen.getByRole('alert')).toBeTruthy()
+    expect(screen.queryByLabelText('異動預覽')).toBeNull()
+    expect(port.permanentlyEnd).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('課程異動類型')).toBeTruthy()
+  })
 
   it('only exposes Formal V9 swap when the occurrence port has the atomic group capability', () => {
     const data = setup()

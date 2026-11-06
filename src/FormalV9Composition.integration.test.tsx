@@ -643,7 +643,7 @@ describe('formal V9 management composition', () => {
     fireEvent.click(screen.getByRole('button', { name: /編輯 甲專用・甲班/ }))
     fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
     expect([...screen.getByLabelText<HTMLSelectElement>('課程異動類型').options]
-      .map((option) => option.value)).toEqual(['permanent'])
+      .map((option) => option.value)).toEqual(['permanent', 'end'])
     fireEvent.change(screen.getByLabelText('課程輪週'), { target: { value: 'B' } })
     const beforeRaw = localStorage.getItem(APP_DATA_V9_KEY)
     const beforeRevision = revision()

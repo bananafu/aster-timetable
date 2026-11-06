@@ -7,6 +7,8 @@ import { createEmptyAppDataV8 } from '../data/storageV8'
 import { configureTeacherSubjectV9, createBlankProjectV9, createTeacherSubjectV9,
   createTeacherTimetableV9 } from '../data/teacherSubjectsV9'
 import { cancelOccurrenceV9, createRecurringLessonV9 } from '../data/lessonMutationsV9'
+import { fingerprintV7Raw } from '../data/activationV8'
+import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from '../data/storageV9'
 import type { FormalProjectTimetableV9Selection } from '../formalProjectTimetableV9'
 import type { FormalV9HostPort } from '../formalRuntime'
 import type { AppDataV9 } from '../types/v9'
@@ -47,15 +49,43 @@ function hostFixture(initial: AppDataV9) {
     revision += 1
     return { raw: JSON.stringify(next), revision, attemptId: `lesson-${revision}` }
   })
+  const updateHighRisk = vi.fn(async (produce: (current: AppDataV9) => AppDataV9,
+    operation: V9HighRiskOperation) => {
+    const rawDocument = JSON.stringify(document)
+    const backupRevision = revision
+    const receipt = await update(produce)
+    const mutationAttemptId = `mutation-${receipt.revision}`
+    return { ...receipt, mutationAttemptId, preMutationBackup: {
+      key: `${V9_AUTO_BACKUP_PREFIX}${mutationAttemptId}`, mutationAttemptId, operation,
+      revision: backupRevision, digest: await fingerprintV7Raw(rawDocument), rawDocument,
+    } }
+  })
   const host = {
     get document() { return document }, status: 'active' as const, get writable() { return writable },
-    pending: false, receipt: null, get revision() { return revision }, errorCode: null, update,
+    pending: false, receipt: null, get revision() { return revision }, errorCode: null, update, updateHighRisk,
   } satisfies FormalV9HostPort
-  return { host, update, replace(next: AppDataV9) { document = next; revision += 1 },
+  return { host, update, updateHighRisk, replace(next: AppDataV9) { document = next; revision += 1 },
     revoke() { writable = false }, mismatch() { receiptMismatch = true }, revision: () => revision }
 }
 
 describe('useFormalLessonManagementV9Adapter live session', () => {
+  it('previews permanent end without writing and confirms through one high-risk Host transaction', async () => {
+    const source = fixture()
+    const host = hostFixture(source.data)
+    const hook = renderHook(() => useFormalLessonManagementV9Adapter(host.host, source.selection))
+    const session = hook.result.current.open('lesson-a', '2027-08-02')!
+    session.port.previewPermanentEnd('lesson-a', '2027-08-16')
+    expect(host.update).not.toHaveBeenCalled()
+    expect(host.updateHighRisk).not.toHaveBeenCalled()
+    await act(async () => { await session.port.permanentlyEnd('lesson-a', '2027-08-16') })
+    expect(host.updateHighRisk).toHaveBeenCalledOnce()
+    expect(host.updateHighRisk).toHaveBeenCalledWith(expect.any(Function), 'permanently-end-lesson')
+    expect(host.host.document?.recurringLessons).toMatchObject([
+      { id: 'lesson-a', effectiveEnd: '2027-08-15' },
+    ])
+    expect(host.revision()).toBe(1)
+  })
+
   it('resolves cross-A/B swap candidates from the latest scoped V9 document and excludes occupied occurrences', () => {
     const source = fixture()
     const alternating = {
