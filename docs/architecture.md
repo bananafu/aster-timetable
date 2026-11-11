@@ -1,5 +1,13 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R4-1D-4C — Formal V9 effective-dated permanent Lesson swap
+
+Formal V9 沿用既有 `LessonEditor` 的「從指定日期起 → 永久交換」、生效日期、第二堂課、preview 與 confirmation。Adapter 只列出同一 Project／Timetable／TeachingUnit、不同 series、且生效日落在雙方最新版本有效區間交集內的候選；preview 以 `permanentlySwapLessonsV9` 建立並丟棄完整 candidate，不寫入。Confirm 由固定的 editor identity、selection 與 document baseline 重新驗證最新 confirmed document，再呼叫既有 controller。
+
+Domain 以同一 candidate 同時切分或安全取代兩個最新 series version，只交換 `day` 與 `periodId`，各自的 `seriesId`、`weekPattern`、Subject、Class、room 與其他內容不變。生效日不必是任一方 occurrence，但必須位於 TeachingUnit term 與雙方有效區間交集；舊版本於前一日結束，生效日等於版本起日時不得留下空區間。歷史 Override 維持原 ID 並重新驗證；future Override 依新 weekday／period 重綁到新版本，完整 grouped swap 必須整組可解析、可 reciprocal 重建且不跨生效日。任一 fixed／Override／OneOff 衝突、無法映射、malformed group、引用或 validator／safe-update 失敗都拒絕整份 candidate，Meeting／Activity 仍不阻擋。
+
+Controller 只執行一次既有 `FormalV9HostPort.updateHighRisk('permanently-swap-lessons')`，不以兩次 permanent update 模擬交換。寫入沿用相同 Web Lock／revision transaction、verified receipt、activation attempt ID、獨立 `mutationAttemptId`，以及綁定 operation、舊 revision、digest、exact raw 的 pre-mutation backup；backup、readback、rotation、receipt、selection 或 stale 驗證失敗均不提交或回報成功。未新增 schema、Host、persistence、storage key、Runtime Gate、UI 元件或文案，LocalStorage 多 key 寫入仍不宣稱資料庫式原子 rollback。
+
 ## Phase 4D R4-1D-4B — Formal V9 permanent end
 
 Formal V9 的既有 `LessonEditor` 已開放原有「從指定日期起 → 結束課程」選項；日期欄位、preview、confirmation、錯誤呈現與 modal 生命週期均維持原設計。Preview 以 `endRecurringLessonFromDateV9` 對 confirmed V9 document 產生並丟棄完整 candidate，不寫入；confirm 由 adapter 固定的 editor identity、selection 與 document baseline 重新驗證，再呼叫既有 controller。

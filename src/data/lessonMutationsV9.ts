@@ -29,6 +29,15 @@ export type SwapGroupV9Ids = {
   firstOverrideId: string
   secondOverrideId: string
 }
+export type PermanentSwapLessonsV9Draft = {
+  firstLessonId: string
+  secondLessonId: string
+  date: string
+}
+export type PermanentSwapLessonsV9Ids = {
+  firstLessonId: string
+  secondLessonId: string
+}
 export type LessonV9ErrorCode = 'invalid-document' | 'invalid-scope' | 'invalid-reference' | 'invalid-date'
   | 'invalid-draft' | 'id-collision' | 'not-found' | 'already-changed' | 'conflict' | 'referenced' | 'unsafe-update'
 export class LessonV9Error extends Error {
@@ -517,4 +526,149 @@ export function permanentlyUpdateLessonV9(data: AppDataV9, selected: LessonV9Sco
   const overrides = data.overrides.map((item) => item.originalLessonId === lessonId && item.date >= date
     ? { ...item, originalLessonId: newId } : item)
   return safe(data, { ...data, recurringLessons, overrides })
+}
+
+function resolvedOverride(data: AppDataV9, selected: LessonV9Scope, override: Override) {
+  const day = resolveV9Day(data, selected, fromDateKey(override.date))
+  const source = day.find((item) => item.kind === 'recurring' && item.overrideId === override.id
+    && item.id === override.originalLessonId && item.sourceDate === override.date)
+  const target = override.action === 'move' && override.target
+    ? resolveV9Day(data, selected, fromDateKey(override.target.date)).find((item) =>
+      item.kind === 'recurring' && item.overrideId === override.id && item.movementRole === 'target'
+      && item.id === override.originalLessonId)
+    : undefined
+  if (!source || (override.action === 'move' && !target)) {
+    fail('referenced', 'Lesson override cannot be resolved against its recurring source.')
+  }
+  return { source: source!, target }
+}
+
+function sourceDateForDay(date: string, day: Lesson['day']) {
+  const source = fromDateKey(date)
+  return toDateKey(addDays(source, day - source.getDay()))
+}
+
+/** Builds both effective-dated replacement versions and every safe override rebind in one candidate. */
+export function permanentlySwapLessonsV9(data: AppDataV9, selected: LessonV9Scope,
+  draft: PermanentSwapLessonsV9Draft, ids: PermanentSwapLessonsV9Ids): AppDataV9 {
+  if (draft.firstLessonId === draft.secondLessonId) fail('invalid-draft', 'Two different Lesson series are required.')
+  const first = lesson(data, selected, draft.firstLessonId)
+  const second = lesson(data, selected, draft.secondLessonId)
+  const unit = scope(data, selected)
+  if (first.seriesId === second.seriesId) fail('invalid-draft', 'Two different Lesson series are required.')
+  if (first.projectId !== second.projectId || first.timetableId !== second.timetableId
+    || first.teachingUnitId !== second.teachingUnitId) {
+    fail('invalid-scope', 'Permanent swap Lessons must share Project, Timetable and TeachingUnit.')
+  }
+  if (data.recurringLessons.some((item) => (item.seriesId === first.seriesId
+      && item.effectiveStart > first.effectiveStart)
+    || (item.seriesId === second.seriesId && item.effectiveStart > second.effectiveStart))) {
+    fail('referenced', 'Historical Lesson versions cannot be permanently swapped.')
+  }
+  const firstEnd = first.effectiveEnd ?? unit.endDate
+  const secondEnd = second.effectiveEnd ?? unit.endDate
+  const commonStart = first.effectiveStart > second.effectiveStart ? first.effectiveStart : second.effectiveStart
+  const commonEnd = firstEnd < secondEnd ? firstEnd : secondEnd
+  if (!dateValid(draft.date) || draft.date < commonStart || draft.date > commonEnd
+    || draft.date < unit.startDate || draft.date > unit.endDate) {
+    fail('invalid-date', 'Permanent swap date must be inside both latest Lesson versions and the TeachingUnit term.')
+  }
+  if (ids.firstLessonId === ids.secondLessonId || !idAvailable(data, ids.firstLessonId)
+    || !idAvailable(data, ids.secondLessonId)) fail('id-collision', 'Permanent swap Lesson IDs must be distinct and unused.')
+  for (const current of [first, second]) {
+    if (draft.date === current.effectiveStart && (data.oneOffLessons.some((item) =>
+      item.relatedRecurringLessonId === current.id) || data.migrationWarnings.some((item) =>
+      item.entityType === 'lesson' && item.entityId === current.id))) {
+      fail('referenced', 'A replaced initial Lesson version still has records that require its ID.')
+    }
+  }
+
+  const firstNext: Lesson = { ...first, id: ids.firstLessonId, seriesId: first.seriesId,
+    day: second.day, periodId: second.periodId, weekPattern: first.weekPattern,
+    effectiveStart: draft.date, effectiveEnd: first.effectiveEnd, origin: 'user' }
+  const secondNext: Lesson = { ...second, id: ids.secondLessonId, seriesId: second.seriesId,
+    day: first.day, periodId: first.periodId, weekPattern: second.weekPattern,
+    effectiveStart: draft.date, effectiveEnd: second.effectiveEnd, origin: 'user' }
+  const replacements = new Map([[first.id, firstNext], [second.id, secondNext]])
+  const previousEnd = toDateKey(addDays(fromDateKey(draft.date), -1))
+  const recurringLessons = data.recurringLessons.flatMap((item) => {
+    const next = replacements.get(item.id)
+    if (!next) return [item]
+    return draft.date === item.effectiveStart ? [next] : [{ ...item, effectiveEnd: previousEnd }, next]
+  })
+
+  const relatedGroupIds = new Set(data.overrides.filter((item) => item.originalLessonId
+    && replacements.has(item.originalLessonId) && item.groupId).map((item) => item.groupId!))
+  const grouped = new Map<string, readonly [Override, Override]>()
+  for (const groupId of relatedGroupIds) {
+    const anchor = data.overrides.find((item) => item.groupId === groupId)!
+    grouped.set(groupId, validateSwapGroupV9(data, selected, anchor.id))
+  }
+  const rebind = (override: Override): Override => {
+    if (!override.originalLessonId) return override
+    const next = replacements.get(override.originalLessonId)
+    if (!next) return override
+    resolvedOverride(data, selected, override)
+    if (override.date < draft.date) return override
+    const date = sourceDateForDay(override.date, next.day)
+    const projected = asV8ValidationProjection({ ...data, recurringLessons })
+    if (date < draft.date || date < next.effectiveStart || date > (next.effectiveEnd ?? unit.endDate)
+      || !recurringLessonAppliesV8(projected, next, fromDateKey(date))) {
+      fail('referenced', 'Future override cannot be mapped to the swapped Lesson recurrence.')
+    }
+    return { ...override, date, periodId: next.periodId, originalLessonId: next.id }
+  }
+  const groupRebinds = new Map<string, readonly [Override, Override]>()
+  for (const [groupId, members] of grouped) {
+    const future = members.some((item) => item.date >= draft.date)
+    if (future && members.some((item) => item.date < draft.date)) {
+      fail('referenced', 'A grouped override crosses the permanent swap date.')
+    }
+    if (!future) continue
+    const [firstMember, secondMember] = members.map(rebind) as [Override, Override]
+    groupRebinds.set(groupId, [
+      { ...firstMember, target: { date: secondMember.date, periodId: secondMember.periodId } },
+      { ...secondMember, target: { date: firstMember.date, periodId: firstMember.periodId } },
+    ])
+  }
+  const overrides = data.overrides.map((item) => {
+    if (item.groupId && groupRebinds.has(item.groupId)) {
+      return groupRebinds.get(item.groupId)!.find((member) => member.id === item.id)!
+    }
+    if (item.groupId) return item
+    return rebind(item)
+  })
+  const candidate = { ...data, recurringLessons, overrides }
+  const projected = asV8ValidationProjection(candidate)
+  for (const next of [firstNext, secondNext]) {
+    if (candidate.recurringLessons.some((item) => item.id !== next.id
+      && recurringLessonsConflictV8(projected, item, next))) {
+      fail('conflict', 'Permanent swap conflicts with another recurring Lesson.')
+    }
+  }
+  const affectedOverrideIds = new Set(overrides.filter((item) => item.originalLessonId
+    && (item.originalLessonId === firstNext.id || item.originalLessonId === secondNext.id
+      || relatedGroupIds.has(item.groupId ?? ''))).map((item) => item.id))
+  for (const groupId of relatedGroupIds) {
+    const anchor = overrides.find((item) => item.groupId === groupId)!
+    validateSwapGroupV9(candidate, selected, anchor.id)
+  }
+  for (const override of overrides.filter((item) => affectedOverrideIds.has(item.id) && !item.groupId)) {
+    resolvedOverride(candidate, selected, override)
+  }
+  const dates = new Set<string>()
+  for (const item of candidate.oneOffLessons) dates.add(item.date)
+  for (const item of candidate.overrides) {
+    dates.add(item.date)
+    if (item.target) dates.add(item.target.date)
+  }
+  for (const date of dates) {
+    const occurrences = resolveV9Day(candidate, selected, fromDateKey(date))
+    if (occurrences.some((item) => item.kind === 'recurring' && item.hasConflict
+      && ([firstNext.id, secondNext.id].includes(item.id)
+        || (item.overrideId !== undefined && affectedOverrideIds.has(item.overrideId))))) {
+      fail('conflict', 'Permanent swap conflicts with a fixed, override, or OneOff Lesson.')
+    }
+  }
+  return safe(data, candidate)
 }

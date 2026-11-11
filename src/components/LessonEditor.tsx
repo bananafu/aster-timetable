@@ -34,6 +34,11 @@ export type SwapOccurrenceRequest = {
   secondLessonId: string
   secondDate: string
 }
+export type PermanentSwapRequest = {
+  firstLessonId: string
+  secondLessonId: string
+  date: string
+}
 export type SwapOccurrenceCandidate = {
   id: string
   date: string
@@ -68,6 +73,9 @@ export interface FixedLessonPersistencePort {
   create: (draft: LessonDraftV4) => Promise<unknown>
   update: (lessonId: string, draft: LessonDraftV4) => Promise<unknown>
   permanentlyUpdate: (lessonId: string, date: string, draft: LessonDraftV4) => Promise<unknown>
+  permanentSwapCandidates?: (lessonId: string, date: string) => readonly SwapOccurrenceCandidate[]
+  previewPermanentSwap?: (request: PermanentSwapRequest) => void
+  permanentlySwap?: (request: PermanentSwapRequest) => Promise<unknown>
   previewPermanentEnd: (lessonId: string, date: string) => void
   permanentlyEnd: (lessonId: string, date: string) => Promise<unknown>
   delete: (lessonId: string) => Promise<unknown>
@@ -102,6 +110,7 @@ type V9OccurrenceOperation =
   | { kind: 'replace-swap'; overrideId: string; request: SwapOccurrenceRequest }
   | { kind: 'revoke-swap'; overrideId: string }
   | { kind: 'permanent-update'; lessonId: string; date: string; draft: LessonDraftV4 }
+  | { kind: 'permanent-swap'; request: PermanentSwapRequest }
   | { kind: 'permanent-end'; lessonId: string; date: string }
 
 function messageFor(error: unknown) {
@@ -171,6 +180,8 @@ export function LessonEditor({ data, setData, fixedLessonPort, timetableId: sele
     && occurrencePort.replaceSwapGroup)
   const canManageSwapGroups = !fixedLessonPort || Boolean(occurrencePort?.previewRevokeSwapGroup
     && occurrencePort.revokeSwapGroup)
+  const canPermanentSwap = !fixedLessonPort || Boolean(fixedLessonPort.permanentSwapCandidates
+    && fixedLessonPort.previewPermanentSwap && fixedLessonPort.permanentlySwap)
 
   const projects = data.projects.filter((item) => !item.archivedAt)
   const schools = useMemo(() => data.schools.filter((item) => item.projectId === projectId), [data.schools, projectId])
@@ -208,7 +219,9 @@ export function LessonEditor({ data, setData, fixedLessonPort, timetableId: sele
   }, [data, editingOverrideId, occurrencePort, timetableId])
   const swapDate = fixedLessonPort && mode === 'swap' ? targetDate : dragIntent ? targetDate : changeDate
   const candidates = safeLesson
-    ? occurrencePort?.swapCandidates
+    ? fixedLessonPort && mode === 'permanent-swap' && fixedLessonPort.permanentSwapCandidates
+      ? fixedLessonPort.permanentSwapCandidates(lesson.id, changeDate)
+      : occurrencePort?.swapCandidates
       ? occurrencePort.swapCandidates(swapDate, editingOverrideId ?? undefined)
       : resolveProjectDay(changeBase, lesson.projectId, fromDateKey(swapDate), { timetableId })
         .filter((item) => item.kind === 'recurring' && item.id !== lesson.id && item.status !== 'cancelled')
@@ -303,7 +316,17 @@ export function LessonEditor({ data, setData, fixedLessonPort, timetableId: sele
         summary: '從指定日期起永久修改', details: [`生效日期：${changeDate}`, `新時段：${dayLabel[day]}・${periods.find((item) => item.id === periodId)?.label ?? periodId}`, '舊版本將在生效日前一日結束'], warnings: futureOverrides ? [`${futureOverrides} 筆生效日後 override 會安全改指向新版本`] : [],
         v9Operation }
     }
-    if (mode === 'permanent-swap') return { data: permanentlySwapLessons(data, lesson.id, swapLessonId, changeDate, uid, timetableId), summary: '從指定日期起永久交換', details: [`生效日期：${changeDate}`, `交換對象：${partner?.subjectName ?? swapLessonId}・${partner?.className ?? ''}`], warnings: ['雙方都會建立新版本；生效日前歷史不變', ...(partner?.schoolId !== lessonSchool?.id ? ['跨校交換必須有相同實際起訖時間的安全節次映射'] : [])] }
+    if (mode === 'permanent-swap') {
+      const request = { firstLessonId: lesson.id, secondLessonId: swapLessonId, date: changeDate }
+      if (fixedLessonPort) {
+        if (!canPermanentSwap) throw new Error('Permanent swap persistence is unavailable')
+        fixedLessonPort.previewPermanentSwap!(request)
+      }
+      return { data: fixedLessonPort ? data
+        : permanentlySwapLessons(data, lesson.id, swapLessonId, changeDate, uid, timetableId),
+      summary: '從指定日期起永久交換', details: [`生效日期：${changeDate}`, `交換對象：${partner?.subjectName ?? swapLessonId}・${partner?.className ?? ''}`], warnings: ['雙方都會建立新版本；生效日前歷史不變', ...(partner?.schoolId !== lessonSchool?.id ? ['跨校交換必須有相同實際起訖時間的安全節次映射'] : [])],
+      v9Operation: fixedLessonPort ? { kind: 'permanent-swap' as const, request } : undefined }
+    }
     if (mode === 'end') {
       if (fixedLessonPort) fixedLessonPort.previewPermanentEnd(lesson.id, changeDate)
       return { data: fixedLessonPort ? data : endLessonFromDate(data, lesson.id, changeDate, timetableId),
@@ -406,6 +429,8 @@ export function LessonEditor({ data, setData, fixedLessonPort, timetableId: sele
         else if (operation.kind === 'revoke-swap') await occurrencePort.revokeSwapGroup!(operation.overrideId)
         else if (operation.kind === 'permanent-update') {
           await fixedLessonPort!.permanentlyUpdate(operation.lessonId, operation.date, operation.draft)
+        } else if (operation.kind === 'permanent-swap') {
+          await fixedLessonPort!.permanentlySwap!(operation.request)
         } else await fixedLessonPort!.permanentlyEnd(operation.lessonId, operation.date)
         onSaved(projectId); onClose()
       } catch (reason) { setError(messageFor(reason)) }
@@ -447,7 +472,7 @@ export function LessonEditor({ data, setData, fixedLessonPort, timetableId: sele
     {canChangeOccurrences && activeOverride && !historicalVersion && (!activeOverride.groupId || canManageSwapGroups) && <section className="lesson-override-manager full" aria-label="現有單日異動"><div><span>此日期已有異動</span><strong>{activeOverride.groupId ? '單日交換' : statusLabel[occurrenceStatus]}</strong><small>{activeOverride.date}{activeOverride.target ? ` → ${activeOverride.target.date}・節次 ${activeOverride.target.periodId}` : ''}</small></div><div><button type="button" onClick={beginOverrideEdit}>修改此異動</button><button type="button" className="danger-button" onClick={previewOverrideRevoke}>撤銷異動</button></div></section>}
     {canChangeOccurrences && editingOverrideId && <p className="lesson-editing-override full" role="status">正在改寫既有單日異動；確認後會以新異動取代原紀錄，不會建立重複 override。</p>}
     {canChangeOccurrences && (historicalVersion ? <p className="lesson-risk-warning full" role="status">目前選取的是已結束的歷史版本，只能查看，不可直接修改或新增異動。</p> : <nav className="lesson-scope-switch full" aria-label="課程編輯範圍"><button type="button" className={scope === 'basic' ? 'active' : ''} aria-pressed={scope === 'basic'} onClick={() => { setMode('basic'); resetPreview() }}>固定版本資料<small>直接修正目前版本</small></button><button type="button" className={scope === 'single' ? 'active' : ''} aria-pressed={scope === 'single'} onClick={() => { setMode('cancel'); resetPreview() }}>僅此日期<small>不影響其他週</small></button><button type="button" className={scope === 'permanent' ? 'active' : ''} aria-pressed={scope === 'permanent'} onClick={() => { setMode('permanent'); resetPreview() }}>從指定日期起<small>建立新歷史版本</small></button></nav>)}
-    {!historicalVersion && scope !== 'basic' && <label className="full">異動方式<select aria-label="課程異動類型" value={mode} onChange={(event) => { setMode(event.target.value as ChangeMode); resetPreview() }}>{scope === 'single' ? <><option value="cancel">取消課程</option><option value="move">移動課程</option><option value="replace">替換內容</option>{canSwapOccurrences && <option value="swap">交換兩堂課</option>}</> : fixedLessonPort ? <><option value="permanent">永久修改</option><option value="end">結束課程</option></> : <><option value="permanent">永久修改</option><option value="permanent-swap">永久交換</option><option value="end">結束課程</option></>}</select></label>}
+    {!historicalVersion && scope !== 'basic' && <label className="full">異動方式<select aria-label="課程異動類型" value={mode} onChange={(event) => { setMode(event.target.value as ChangeMode); resetPreview() }}>{scope === 'single' ? <><option value="cancel">取消課程</option><option value="move">移動課程</option><option value="replace">替換內容</option>{canSwapOccurrences && <option value="swap">交換兩堂課</option>}</> : fixedLessonPort ? <><option value="permanent">永久修改</option>{canPermanentSwap && <option value="permanent-swap">永久交換</option>}<option value="end">結束課程</option></> : <><option value="permanent">永久修改</option><option value="permanent-swap">永久交換</option><option value="end">結束課程</option></>}</select></label>}
     {relatedOverrides.length > 0 && <p className="lesson-risk-warning full" role="status">此版本已有 {relatedOverrides.length} 筆單日異動。新增同日異動、結束課程或版本切分時會驗證引用，無法安全處理便會阻止寫入。</p>}</>}
     {canChangeOccurrences && lesson && mode !== 'basic' && <label className="full">指定／生效日期<input aria-label="異動日期" type="date" value={changeDate} onChange={(event) => { setChangeDate(event.target.value); setTargetDate(event.target.value); setSwapLessonId(''); resetPreview() }} required /></label>}
     {(mode === 'move' || (mode === 'swap' && Boolean(fixedLessonPort))) && <label>移至日期<input aria-label="移至日期" type="date" value={targetDate} onChange={(event) => { setTargetDate(event.target.value); setSwapLessonId(''); resetPreview() }} required /></label>}

@@ -7,11 +7,12 @@ import type { FormalProjectTimetableV9Selection } from '../formalProjectTimetabl
 import type { AppDataV8 } from '../types'
 import type { AppDataV9 } from '../types/v9'
 import type { FixedLessonPersistencePort, SwapOccurrenceCandidate,
-  SwapOccurrenceRequest } from '../components/LessonEditor'
+  PermanentSwapRequest, SwapOccurrenceRequest } from '../components/LessonEditor'
 import type { OneOffLessonPersistencePort, OneOffSaveRequest } from '../components/OneOffLessonEditor'
 import { fromDateKey, toDateKey } from '../lib/date'
 import { resolveV9Day } from '../lib/scheduleV9'
-import { endRecurringLessonFromDateV9, getOneOffLessonConflictsV9, replaceSwapGroupV9, revokeSwapGroupV9,
+import { endRecurringLessonFromDateV9, getOneOffLessonConflictsV9, permanentlySwapLessonsV9,
+  replaceSwapGroupV9, revokeSwapGroupV9,
   validateSwapGroupV9,
   swapOccurrencesV9 } from '../data/lessonMutationsV9'
 
@@ -153,6 +154,39 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
       const { current, scope } = previewDocument(projectedTarget.teachingUnitId)
       endRecurringLessonFromDateV9(current, scope, id, date)
     }
+    const previewPermanentSwap = (request: PermanentSwapRequest) => {
+      if (!projectedTarget || projectedTarget.id !== request.firstLessonId) {
+        throw new FormalLessonV9Error('invalid-scope', 'Permanent swap source is unavailable.')
+      }
+      const { current, scope } = previewDocument(projectedTarget.teachingUnitId)
+      permanentlySwapLessonsV9(current, scope, request,
+        { firstLessonId: uid(), secondLessonId: uid() })
+    }
+    const permanentSwapCandidates = (id: string, date: string): readonly SwapOccurrenceCandidate[] => {
+      if (!projectedTarget || projectedTarget.id !== id || !/^\d{4}-\d{2}-\d{2}$/.test(date)
+        || toDateKey(fromDateKey(date)) !== date) return []
+      try {
+        const { current } = previewDocument(projectedTarget.teachingUnitId)
+        const unit = current.teachingUnits.find((item) => item.id === projectedTarget.teachingUnitId)!
+        const school = current.schools.find((item) => item.id === unit.schoolId)!
+        return current.recurringLessons.filter((item) => item.id !== projectedTarget.id
+          && item.seriesId !== projectedTarget.seriesId
+          && item.projectId === capturedSelection.projectId
+          && item.timetableId === capturedSelection.timetableId
+          && item.teachingUnitId === projectedTarget.teachingUnitId
+          && !current.recurringLessons.some((later) => later.seriesId === item.seriesId
+            && later.effectiveStart > item.effectiveStart)
+          && date >= projectedTarget.effectiveStart && date <= (projectedTarget.effectiveEnd ?? unit.endDate)
+          && date >= item.effectiveStart && date <= (item.effectiveEnd ?? unit.endDate))
+          .map((item) => {
+            const period = unit.periods.find((candidate) => candidate.id === item.periodId)!
+            return { id: item.id, date, startTime: period.startTime, endTime: period.endTime,
+              teachingUnitId: unit.id, schoolId: school.id, schoolName: school.name,
+              subjectName: current.subjects.find((subject) => subject.id === item.subjectId)?.name ?? item.subjectId,
+              className: current.classes.find((schoolClass) => schoolClass.id === item.classId)?.name ?? item.classId }
+          })
+      } catch { return [] }
+    }
     const swapCandidates = (date: string,
       replacingOverrideId?: string): readonly SwapOccurrenceCandidate[] => {
       if (!projectedTarget || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return []
@@ -216,6 +250,13 @@ export function useFormalLessonManagementV9Adapter(host: FormalV9HostPort,
         (controller) => controller.updateRecurring(id, toDraft(draft))),
       permanentlyUpdate: (id, date, draft) => execute(projectedTarget?.teachingUnitId ?? draft.teachingUnitId,
         (controller) => controller.permanentlyUpdateFromDate(id, date, toDraft(draft))),
+      permanentSwapCandidates,
+      previewPermanentSwap,
+      permanentlySwap: (request) => {
+        if (!projectedTarget) return Promise.reject(new Error('Lesson does not exist.'))
+        return execute(projectedTarget.teachingUnitId,
+          (controller) => controller.permanentlySwapFromDate(request))
+      },
       previewPermanentEnd,
       permanentlyEnd: (id, date) => {
         if (!projectedTarget) return Promise.reject(new Error('Lesson does not exist.'))

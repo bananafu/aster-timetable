@@ -134,6 +134,27 @@ describe('V9 high-risk pre-mutation backup inside the existing transaction', () 
       revision: beforePermanentEnd.revision, rawDocument: beforePermanentEnd.raw })
     expect(JSON.parse(permanentEnd.storage.getItem(ended.receipt.preMutationBackup!.key)!).rawDocument)
       .toBe(beforePermanentEnd.raw)
+    const permanentSwap = await lessonReady()
+    const swapUnit = permanentSwap.host.document!.teachingUnits
+      .find((item) => item.id === permanentSwap.scope.teachingUnitId)!
+    await createFormalLessonManagementV9Controller(permanentSwap.host, () => 'lesson-partner', permanentSwap.scope)
+      .createRecurring({ ...permanentSwap.draft, day: 3, periodId: swapUnit.periods[1].id, weekPattern: 'B' })
+    const beforePermanentSwap = permanentSwap.expected()
+    const swapIds = ['lesson-v2', 'lesson-partner-v2']
+    const swapped = await createFormalLessonManagementV9Controller(
+      permanentSwap.host, () => swapIds.shift() ?? 'unused', permanentSwap.scope)
+      .permanentlySwapFromDate({ firstLessonId: 'lesson', secondLessonId: 'lesson-partner',
+        date: '2026-08-05' })
+    expect(swapped.document.recurringLessons).toMatchObject([
+      { id: 'lesson', effectiveEnd: '2026-08-04' },
+      { id: 'lesson-v2', day: 3, weekPattern: 'every', effectiveStart: '2026-08-05' },
+      { id: 'lesson-partner', effectiveEnd: '2026-08-04' },
+      { id: 'lesson-partner-v2', day: 1, weekPattern: 'B', effectiveStart: '2026-08-05' },
+    ])
+    expect(swapped.receipt.preMutationBackup).toMatchObject({ operation: 'permanently-swap-lessons',
+      revision: beforePermanentSwap.revision, rawDocument: beforePermanentSwap.raw })
+    expect(JSON.parse(permanentSwap.storage.getItem(swapped.receipt.preMutationBackup!.key)!).rawDocument)
+      .toBe(beforePermanentSwap.raw)
     const oneOff = await lessonReady()
     const oneOffUnit = oneOff.host.document!.teachingUnits.find((item) => item.id === oneOff.scope.teachingUnitId)!
     const oneOffId = '11111111-1111-4111-8111-111111111111'
@@ -203,7 +224,7 @@ describe('V9 high-risk pre-mutation backup inside the existing transaction', () 
       } else {
         storage.values.set(`${V9_AUTO_BACKUP_PREFIX}corrupt`, '{}')
       }
-      await expect(persistAppDataV9(storage, document, document, before, 'permanently-end-lesson'))
+      await expect(persistAppDataV9(storage, document, document, before, 'permanently-swap-lessons'))
         .rejects.toMatchObject({ code: mode === 'write' ? 'backup-failure' : 'backup-readback-failure' })
       expect(storage.getItem(APP_DATA_V9_KEY)).toBe(before.raw)
       expect(storage.getItem(V9_ACTIVATION_KEY)).toBe(before.metadataRaw)

@@ -9,7 +9,7 @@ import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './storageV9'
 import { isCompatibleAppDataV9 } from './validators/v9'
 import { cancelOccurrenceV9, createOneOffLessonV9, createRecurringLessonV9,
   deleteOneOffLessonV9, deleteRecurringLessonV9, endRecurringLessonFromDateV9, getOneOffLessonConflictsV9,
-  getRecurringLessonV9Impact, moveOccurrenceV9, permanentlyUpdateLessonV9,
+  getRecurringLessonV9Impact, moveOccurrenceV9, permanentlySwapLessonsV9, permanentlyUpdateLessonV9,
   replaceOccurrenceChangeV9, replaceOccurrenceV9, replaceSwapGroupV9,
   revokeOccurrenceOverrideV9, revokeSwapGroupV9, swapOccurrencesV9, validateSwapGroupV9,
   updateOneOffLessonV9, updateRecurringLessonV9,
@@ -540,6 +540,249 @@ describe('V9 Lesson domain mutation', () => {
     ])
     expect(isCompatibleAppDataV9(split)).toBe(true)
   })
+
+  it('permanently swaps two latest versions from a non-occurrence date in one valid candidate', () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'swap-a')
+    const ready = createRecurringLessonV9(first, scope,
+      { ...draft, subjectId: 'english', day: 3, periodId: 2 }, 'swap-b')
+    const oneOff = createOneOffLessonV9(ready, scope, {
+      ...scope, subjectId: 'math', classId: 'c', date: '2026-03-03', purpose: 'extra',
+      time: { mode: 'custom', startTime: '18:00', endTime: '18:45' },
+    }, '11111111-1111-4111-8111-111111111111')
+    const withRecords = { ...oneOff, teachingProgress: [{ id: '44444444-4444-4444-8444-444444444444', ...scope,
+      classId: 'c', subjectId: 'math', content: { chapter: '1', unit: '1', note: '' },
+      previousProgress: null, createdAt: '2026-03-01T00:00:00.000Z',
+      updatedAt: '2026-03-01T00:00:00.000Z' }] }
+    const swapped = permanentlySwapLessonsV9(withRecords, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' })
+    expect(swapped.recurringLessons).toMatchObject([
+      { id: 'swap-a', effectiveEnd: '2026-03-03', day: 1, periodId: 1 },
+      { id: 'swap-a-v2', seriesId: 'swap-a', effectiveStart: '2026-03-04', day: 3, periodId: 2,
+        weekPattern: 'every', subjectId: 'math' },
+      { id: 'swap-b', effectiveEnd: '2026-03-03', day: 3, periodId: 2 },
+      { id: 'swap-b-v2', seriesId: 'swap-b', effectiveStart: '2026-03-04', day: 1, periodId: 1,
+        weekPattern: 'every', subjectId: 'english' },
+    ])
+    expect(resolveV9Day(swapped, scope, fromDateKey('2026-03-02'))
+      .filter((item) => item.kind === 'recurring').map((item) => [item.id, item.periodId]))
+      .toEqual([['swap-a', 1]])
+    expect(resolveV9Day(swapped, scope, fromDateKey('2026-03-09'))
+      .filter((item) => item.kind === 'recurring').map((item) => [item.id, item.periodId]))
+      .toEqual([['swap-b-v2', 1]])
+    expect(resolveV9Day(swapped, scope, fromDateKey('2026-03-11'))
+      .filter((item) => item.kind === 'recurring').map((item) => [item.id, item.periodId]))
+      .toEqual([['swap-a-v2', 2]])
+    expect(isCompatibleAppDataV9(swapped)).toBe(true)
+    expect(swapped.oneOffLessons).toEqual(withRecords.oneOffLessons)
+    expect(swapped.teachingProgress).toEqual(withRecords.teachingProgress)
+    expect(ready.recurringLessons).toHaveLength(2)
+  })
+
+  it.each([
+    ['A', 'B'], ['every', 'A'], ['A', 'every'], ['B', 'every'], ['every', 'every'],
+  ] as const)('keeps %s and %s week patterns while exchanging only day and period', (firstPattern, secondPattern) => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, { ...draft, weekPattern: firstPattern }, 'swap-a')
+    const ready = createRecurringLessonV9(first, scope,
+      { ...draft, subjectId: 'english', day: 4, periodId: 2, weekPattern: secondPattern }, 'swap-b')
+    const swapped = permanentlySwapLessonsV9(ready, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' })
+    expect(swapped.recurringLessons.find((item) => item.id === 'swap-a-v2'))
+      .toMatchObject({ day: 4, periodId: 2, weekPattern: firstPattern })
+    expect(swapped.recurringLessons.find((item) => item.id === 'swap-b-v2'))
+      .toMatchObject({ day: 1, periodId: 1, weekPattern: secondPattern })
+  })
+
+  it('safely replaces versions at effectiveStart and rejects linked OneOff or colliding IDs', () => {
+    const { data, scope, draft } = lessonFixture()
+    const aligned = structuredClone(data)
+    aligned.teachingUnits[0].startDate = '2026-03-02'
+    const first = createRecurringLessonV9(aligned, scope, draft, 'swap-a')
+    const ready = createRecurringLessonV9(first, scope,
+      { ...draft, subjectId: 'english', day: 2, periodId: 2 }, 'swap-b')
+    const swapped = permanentlySwapLessonsV9(ready, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-02',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' })
+    expect(swapped.recurringLessons.map((item) => item.id)).toEqual(['swap-a-v2', 'swap-b-v2'])
+    expect(() => permanentlySwapLessonsV9(ready, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-02',
+    }, { firstLessonId: 'swap-a', secondLessonId: 'swap-b-v2' }))
+      .toThrow(expect.objectContaining({ code: 'id-collision' }))
+    const linked = createOneOffLessonV9(ready, scope, {
+      ...scope, subjectId: 'math', classId: 'c', date: '2026-03-03', purpose: 'make-up',
+      relatedRecurringLessonId: 'swap-a', time: { mode: 'period', periodId: 1 },
+    }, '11111111-1111-4111-8111-111111111111')
+    expect(() => permanentlySwapLessonsV9(linked, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-02',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' }))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+  })
+
+  it('requires two latest series in one scope and a shared effective-date interval', () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'swap-a')
+    const ready = createRecurringLessonV9(first, scope,
+      { ...draft, subjectId: 'english', day: 2, periodId: 2 }, 'swap-b')
+    expect(() => permanentlySwapLessonsV9(ready, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-a', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' }))
+      .toThrow(expect.objectContaining({ code: 'invalid-draft' }))
+    const noIntersection = { ...ready, recurringLessons: ready.recurringLessons.map((item) => item.id === 'swap-a'
+      ? { ...item, effectiveEnd: '2026-03-03' } : { ...item, effectiveStart: '2026-03-04' }) }
+    expect(() => permanentlySwapLessonsV9(noIntersection, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' }))
+      .toThrow(expect.objectContaining({ code: 'invalid-date' }))
+    const otherScope = { projectId: 'p', timetableId: 'other', teachingUnitId: 'u' }
+    const foreign = createRecurringLessonV9(ready, otherScope, {
+      ...draft, timetableId: 'other', subjectId: 'other-subject', day: 3, periodId: 2,
+    }, 'foreign')
+    expect(() => permanentlySwapLessonsV9(foreign, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'foreign', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'foreign-v2' }))
+      .toThrow(expect.objectContaining({ code: 'not-found' }))
+
+    const secondUnit = { ...ready,
+      teachingUnits: [...ready.teachingUnits, { ...ready.teachingUnits[0], id: 'u2', name: 'Second Unit' }],
+      teachingUnitSubjects: [...ready.teachingUnitSubjects,
+        { id: 'u2-math', projectId: 'p', teachingUnitId: 'u2', subjectId: 'math' }],
+      classes: [...ready.classes, { id: 'c2', projectId: 'p', teachingUnitId: 'u2', name: 'Second Class' }],
+    }
+    const otherUnit = createRecurringLessonV9(secondUnit,
+      { projectId: 'p', timetableId: 't', teachingUnitId: 'u2' }, {
+      ...draft, teachingUnitId: 'u2', classId: 'c2', day: 3, periodId: 2,
+    }, 'other-unit')
+    expect(() => permanentlySwapLessonsV9(otherUnit, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'other-unit', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'other-unit-v2' }))
+      .toThrow(expect.objectContaining({ code: 'not-found' }))
+
+    const otherProjectBase: AppDataV9 = { ...ready,
+      projects: [...ready.projects, { ...ready.projects[0], id: 'p2', name: 'Second Project' }],
+      timetables: [...ready.timetables, { id: 't2', projectId: 'p2', name: 'Second', teacherName: 'Second' }],
+      schools: [...ready.schools, { id: 's2', projectId: 'p2', name: 'Second School', color: '#556677' }],
+      teachingUnits: [...ready.teachingUnits, { ...ready.teachingUnits[0], id: 'u2', projectId: 'p2',
+        schoolId: 's2', name: 'Second Unit' }],
+      subjects: [...ready.subjects, { ...ready.subjects[0], id: 'math2', projectId: 'p2',
+        timetableId: 't2', name: 'Second Math' }],
+      teachingUnitSubjects: [...ready.teachingUnitSubjects,
+        { id: 'p2-math', projectId: 'p2', teachingUnitId: 'u2', subjectId: 'math2' }],
+      classes: [...ready.classes, { id: 'p2-class', projectId: 'p2', teachingUnitId: 'u2', name: 'Second Class' }],
+    }
+    const otherProject = createRecurringLessonV9(otherProjectBase,
+      { projectId: 'p2', timetableId: 't2', teachingUnitId: 'u2' }, {
+      projectId: 'p2', timetableId: 't2', teachingUnitId: 'u2', subjectId: 'math2',
+      classId: 'p2-class', day: 3, periodId: 2, weekPattern: 'every',
+    }, 'other-project')
+    expect(() => permanentlySwapLessonsV9(otherProject, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'other-project', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'other-project-v2' }))
+      .toThrow(expect.objectContaining({ code: 'not-found' }))
+  })
+
+  it('accepts TeachingUnit first, last, cross-month and cross-year dates and rejects outside dates', () => {
+    const source = lessonFixture()
+    source.data.teachingUnits[0].startDate = '2026-03-02'
+    source.data.teachingUnits[0].endDate = '2027-01-31'
+    const first = createRecurringLessonV9(source.data, source.scope, source.draft, 'swap-a')
+    const ready = createRecurringLessonV9(first, source.scope,
+      { ...source.draft, subjectId: 'english', day: 3, periodId: 2 }, 'swap-b')
+    expect(() => permanentlySwapLessonsV9(ready, source.scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-02',
+    }, { firstLessonId: 'start-a', secondLessonId: 'start-b' })).not.toThrow()
+    expect(() => permanentlySwapLessonsV9(ready, source.scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-04-01',
+    }, { firstLessonId: 'month-a', secondLessonId: 'month-b' })).not.toThrow()
+    expect(() => permanentlySwapLessonsV9(ready, source.scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2027-01-01',
+    }, { firstLessonId: 'year-a', secondLessonId: 'year-b' })).not.toThrow()
+    expect(() => permanentlySwapLessonsV9(ready, source.scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2027-01-31',
+    }, { firstLessonId: 'end-a', secondLessonId: 'end-b' })).not.toThrow()
+    for (const date of ['2026-03-01', '2027-02-01']) {
+      expect(() => permanentlySwapLessonsV9(ready, source.scope, {
+        firstLessonId: 'swap-a', secondLessonId: 'swap-b', date,
+      }, { firstLessonId: `outside-a-${date}`, secondLessonId: `outside-b-${date}` }))
+        .toThrow(expect.objectContaining({ code: 'invalid-date' }))
+    }
+  })
+
+  it('rebinds a legal future override to the same week and rejects an unrepresentable mapping', () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'swap-a')
+    const ready = createRecurringLessonV9(first, scope,
+      { ...draft, subjectId: 'english', day: 3, periodId: 2 }, 'swap-b')
+    const historical = cancelOccurrenceV9(ready, scope, 'swap-a', '2026-03-02', 'historical-cancel')
+    const changed = cancelOccurrenceV9(historical, scope, 'swap-a', '2026-03-09', 'future-cancel')
+    const swapped = permanentlySwapLessonsV9(changed, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' })
+    expect(swapped.overrides).toMatchObject([{
+      id: 'historical-cancel', originalLessonId: 'swap-a', date: '2026-03-02', periodId: 1,
+    }, {
+      id: 'future-cancel', originalLessonId: 'swap-a-v2', date: '2026-03-11', periodId: 2,
+    }])
+    expect(resolveV9Day(swapped, scope, fromDateKey('2026-03-11'))[0])
+      .toMatchObject({ id: 'swap-a-v2', status: 'cancelled', overrideId: 'future-cancel' })
+
+    const friday = createRecurringLessonV9(data, scope, { ...draft, day: 5 }, 'friday')
+    const monday = createRecurringLessonV9(friday, scope,
+      { ...draft, subjectId: 'english', day: 1, periodId: 2 }, 'monday')
+    const impossible = cancelOccurrenceV9(monday, scope, 'friday', '2026-03-06', 'future-friday')
+    expect(() => permanentlySwapLessonsV9(impossible, scope, {
+      firstLessonId: 'friday', secondLessonId: 'monday', date: '2026-03-06',
+    }, { firstLessonId: 'friday-v2', secondLessonId: 'monday-v2' }))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+  })
+
+  it('atomically rebinds a complete future swap group and rejects malformed or cross-boundary groups', () => {
+    const { data, scope } = sameDaySwapFixture()
+    const grouped = swapOccurrencesV9(data, scope, {
+      firstLessonId: 'swap-a', firstDate: '2026-03-09',
+      secondLessonId: 'swap-b', secondDate: '2026-03-09',
+    }, swapIds('-future'))
+    const permanent = permanentlySwapLessonsV9(grouped, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' })
+    expect(validateSwapGroupV9(permanent, scope, 'swap-first-future')).toHaveLength(2)
+    expect(new Set(permanent.overrides.map((item) => item.originalLessonId)))
+      .toEqual(new Set(['swap-a-v2', 'swap-b-v2']))
+    const malformed = { ...grouped, overrides: grouped.overrides.slice(0, 1) }
+    expect(() => permanentlySwapLessonsV9(malformed, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' }))
+      .toThrow(expect.objectContaining({ code: 'referenced' }))
+  })
+
+  it('rejects new fixed and OneOff conflicts while Meeting remains non-blocking', () => {
+    const { data, scope, draft } = lessonFixture()
+    const first = createRecurringLessonV9(data, scope, draft, 'swap-a')
+    const second = createRecurringLessonV9(first, scope,
+      { ...draft, subjectId: 'english', day: 2, periodId: 2, weekPattern: 'A' }, 'swap-b')
+    const blocked = createRecurringLessonV9(second, scope,
+      { ...draft, day: 2, periodId: 2, weekPattern: 'B' }, 'third')
+    expect(() => permanentlySwapLessonsV9(blocked, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' }))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    const oneOff = createOneOffLessonV9(second, scope, {
+      ...scope, subjectId: 'math', classId: 'c', date: '2026-03-10', purpose: 'extra',
+      time: { mode: 'period', periodId: 2 },
+    }, '11111111-1111-4111-8111-111111111111')
+    expect(() => permanentlySwapLessonsV9(oneOff, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' }))
+      .toThrow(expect.objectContaining({ code: 'conflict' }))
+    const meeting = { ...second, events: [{ id: 'meeting', projectId: 'p', timetableId: 't',
+      teachingUnitId: 'u', ownershipStatus: 'resolved' as const, title: 'Meeting', type: 'meeting' as const,
+      date: '2026-03-10', startTime: '09:00', endTime: '09:50', color: '#112233' }] }
+    expect(() => permanentlySwapLessonsV9(meeting, scope, {
+      firstLessonId: 'swap-a', secondLessonId: 'swap-b', date: '2026-03-04',
+    }, { firstLessonId: 'swap-a-v2', secondLessonId: 'swap-b-v2' })).not.toThrow()
+  })
 })
 
 describe('V9 OneOff Lesson domain mutation', () => {
@@ -990,6 +1233,24 @@ describe('formal V9 Lesson Host action port', () => {
       operation: 'permanently-end-lesson', revision: 0, mutationAttemptId: 'mutation-1',
     })
     expect(permanentEnd.updateHighRisk).toHaveBeenCalledOnce()
+    const swapReady = createRecurringLessonV9(fixed, scope, {
+      ...draft, day: 3, periodId: data.teachingUnits[0].periods[1].id, weekPattern: 'B',
+    }, 'l2')
+    const permanentSwap = backedHost(swapReady)
+    const swapIds = ['l1-v2', 'l2-v2']
+    const swapped = await createFormalLessonManagementV9Controller(
+      permanentSwap.host, () => swapIds.shift() ?? 'unused', scope)
+      .permanentlySwapFromDate({ firstLessonId: 'l1', secondLessonId: 'l2', date: '2026-03-04' })
+    expect(swapped.document.recurringLessons).toMatchObject([
+      { id: 'l1', effectiveEnd: '2026-03-03' },
+      { id: 'l1-v2', seriesId: 'l1', day: 3, weekPattern: 'every', effectiveStart: '2026-03-04' },
+      { id: 'l2', effectiveEnd: '2026-03-03' },
+      { id: 'l2-v2', seriesId: 'l2', day: 1, weekPattern: 'B', effectiveStart: '2026-03-04' },
+    ])
+    expect(swapped.receipt.preMutationBackup).toMatchObject({
+      operation: 'permanently-swap-lessons', revision: 0, mutationAttemptId: 'mutation-1',
+    })
+    expect(permanentSwap.updateHighRisk).toHaveBeenCalledOnce()
     const oneOff = createOneOffLessonV9(data, scope, {
       ...scope, subjectId: 'math', classId: 'c', date: '2026-03-02', purpose: 'extra',
       time: { mode: 'period', periodId: 2 },
@@ -1000,9 +1261,12 @@ describe('formal V9 Lesson Host action port', () => {
     expect(removed.document.oneOffLessons).toEqual([])
     expect(removed.receipt.preMutationBackup).toMatchObject({ operation: 'delete-one-off-lesson', revision: 0 })
     for (const fault of ['operation', 'revision', 'mutation-attempt'] as const) {
-      const mismatch = backedHost(fixed, fault)
-      await expect(createFormalLessonManagementV9Controller(mismatch.host, () => 'unused', scope)
-        .permanentlyEndFromDate('l1', '2026-03-16')).rejects.toMatchObject({ code: 'receipt-mismatch' })
+      const mismatch = backedHost(swapReady, fault)
+      const mismatchIds = ['l1-v2', 'l2-v2']
+      await expect(createFormalLessonManagementV9Controller(
+        mismatch.host, () => mismatchIds.shift() ?? 'unused', scope)
+        .permanentlySwapFromDate({ firstLessonId: 'l1', secondLessonId: 'l2', date: '2026-03-04' }))
+        .rejects.toMatchObject({ code: 'receipt-mismatch' })
     }
   })
   it('rejects a referenced deletion before the Host reaches backup storage', async () => {

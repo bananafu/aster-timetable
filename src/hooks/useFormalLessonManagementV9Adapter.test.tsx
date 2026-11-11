@@ -86,6 +86,49 @@ describe('useFormalLessonManagementV9Adapter live session', () => {
     expect(host.revision()).toBe(1)
   })
 
+  it('lists effective-dated partners, previews purely, and commits a permanent swap once', async () => {
+    const source = fixture()
+    const alternating = {
+      ...source.data,
+      teachingUnits: source.data.teachingUnits.map((item) => item.id === source.unit.id
+        ? { ...item, weekCycle: { enabled: true, anchorDate: '2027-08-02', anchorPattern: 'A' as const } }
+        : item),
+      recurringLessons: source.data.recurringLessons.map((item) => item.id === 'lesson-a'
+        ? { ...item, weekPattern: 'A' as const } : item),
+    }
+    const withPartner = createRecurringLessonV9(alternating, {
+      ...source.selection, teachingUnitId: source.unit.id }, {
+      projectId: source.projectId, timetableId: 'teacher-a', teachingUnitId: source.unit.id,
+      subjectId: 'subject-a', classId: 'class-a', day: 4,
+      periodId: source.unit.periods[1].id, weekPattern: 'B', room: '',
+    }, 'lesson-b')
+    const host = hostFixture(withPartner)
+    const ids = ['lesson-a-v2', 'lesson-b-v2']
+    const hook = renderHook(() => useFormalLessonManagementV9Adapter(
+      host.host, source.selection, () => ids.shift() ?? 'unused'))
+    const session = hook.result.current.open('lesson-a', '2027-08-02')!
+    expect(session.port.permanentSwapCandidates!('lesson-a', '2027-08-04'))
+      .toMatchObject([{ id: 'lesson-b', teachingUnitId: source.unit.id }])
+    expect(session.port.permanentSwapCandidates!('lesson-a', '2028-02-01')).toEqual([])
+    session.port.previewPermanentSwap!({
+      firstLessonId: 'lesson-a', secondLessonId: 'lesson-b', date: '2027-08-04',
+    })
+    expect(host.update).not.toHaveBeenCalled()
+    expect(host.updateHighRisk).not.toHaveBeenCalled()
+    await act(async () => { await session.port.permanentlySwap!({
+      firstLessonId: 'lesson-a', secondLessonId: 'lesson-b', date: '2027-08-04',
+    }) })
+    expect(host.updateHighRisk).toHaveBeenCalledOnce()
+    expect(host.updateHighRisk).toHaveBeenCalledWith(expect.any(Function), 'permanently-swap-lessons')
+    expect(host.host.document?.recurringLessons).toMatchObject([
+      { id: 'lesson-a', day: 1, weekPattern: 'A', effectiveEnd: '2027-08-03' },
+      { id: 'lesson-a-v2', day: 4, weekPattern: 'A', effectiveStart: '2027-08-04' },
+      { id: 'lesson-b', day: 4, weekPattern: 'B', effectiveEnd: '2027-08-03' },
+      { id: 'lesson-b-v2', day: 1, weekPattern: 'B', effectiveStart: '2027-08-04' },
+    ])
+    expect(host.revision()).toBe(1)
+  })
+
   it('resolves cross-A/B swap candidates from the latest scoped V9 document and excludes occupied occurrences', () => {
     const source = fixture()
     const alternating = {

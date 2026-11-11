@@ -6,11 +6,11 @@ import { V9_AUTO_BACKUP_PREFIX, type V9HighRiskOperation } from './data/storageV
 import { cancelOccurrenceV9, createOneOffLessonV9, createRecurringLessonV9,
   deleteOneOffLessonV9, deleteRecurringLessonV9, endRecurringLessonFromDateV9,
   getRecurringLessonV9Impact, moveOccurrenceV9,
-  permanentlyUpdateLessonV9, replaceOccurrenceChangeV9, replaceOccurrenceV9,
+  permanentlySwapLessonsV9, permanentlyUpdateLessonV9, replaceOccurrenceChangeV9, replaceOccurrenceV9,
   replaceSwapGroupV9, revokeOccurrenceOverrideV9, revokeSwapGroupV9, swapOccurrencesV9,
   updateOneOffLessonV9, updateRecurringLessonV9,
   type LessonV9Scope, type OccurrenceChangeV9Draft,
-  type OneOffLessonV9Draft, type RecurringLessonV9Draft,
+  type OneOffLessonV9Draft, type PermanentSwapLessonsV9Draft, type RecurringLessonV9Draft,
   type SwapGroupV9Ids, type SwapOccurrencesV9Draft } from './data/lessonMutationsV9'
 
 export type FormalLessonV9ErrorCode = 'invalid-document' | 'invalid-scope' | 'not-writable'
@@ -47,6 +47,7 @@ export interface FormalLessonV9Actions {
   permanentlyUpdateFromDate: (lessonId: string, date: string,
     draft: RecurringLessonV9Draft) => Promise<FormalLessonV9Result>
   permanentlyEndFromDate: (lessonId: string, date: string) => Promise<FormalLessonV9Result>
+  permanentlySwapFromDate: (draft: PermanentSwapLessonsV9Draft) => Promise<FormalLessonV9Result>
   createOneOff: (draft: OneOffLessonV9Draft, allowConflict?: boolean) => Promise<FormalLessonV9Result>
   updateOneOff: (oneOffId: string, draft: OneOffLessonV9Draft,
     allowConflict?: boolean) => Promise<FormalLessonV9Result>
@@ -171,6 +172,15 @@ export function createFormalLessonManagementV9Controller(host: FormalV9HostPort,
     permanentlyEndFromDate: (id, date) => commit(
       (current) => endRecurringLessonFromDateV9(current, captured, id, date),
       () => id, 'permanently-end-lesson'),
+    permanentlySwapFromDate: (draft) => {
+      let firstNewId = ''
+      return commit((current) => {
+        firstNewId = createId()
+        const secondNewId = createId()
+        return permanentlySwapLessonsV9(current, captured, draft,
+          { firstLessonId: firstNewId, secondLessonId: secondNewId })
+      }, () => firstNewId, 'permanently-swap-lessons')
+    },
     createOneOff: (draft, allowConflict = false) => {
       let id = ''
       return commit((current) => {

@@ -58,6 +58,54 @@ describe('LessonEditor integrated experience', () => {
     expect(screen.getByLabelText('課程異動類型')).toBeTruthy()
   })
 
+  it('reuses the existing Formal permanent-swap flow and writes only after confirmation', async () => {
+    const data = setup()
+    const partner = resolveProjectDay(data, data.activeProjectId!, fromDateKey('2026-09-07'))
+      .find((item) => item.kind === 'recurring' && item.id !== 'c1')!
+    const port = { ...fixedPort(ordinaryOccurrencePort()),
+      permanentSwapCandidates: vi.fn(() => [partner]),
+      previewPermanentSwap: vi.fn(), permanentlySwap: vi.fn().mockResolvedValue(undefined) }
+    render(<LessonEditor data={data} fixedLessonPort={port} lessonId="c1"
+      occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
+    expect(screen.getByRole('option', { name: '永久交換' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'permanent-swap' } })
+    fireEvent.change(screen.getByLabelText('異動日期'), { target: { value: '2026-09-09' } })
+    const select = screen.getByLabelText('交換課程') as HTMLSelectElement
+    const partnerId = [...select.options].find((item) => item.value)?.value
+    fireEvent.change(select, { target: { value: partnerId } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(port.previewPermanentSwap).toHaveBeenCalledWith({
+      firstLessonId: 'c1', secondLessonId: partnerId, date: '2026-09-09',
+    })
+    expect(port.permanentlySwap).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('異動預覽').textContent).toContain('從指定日期起永久交換')
+    fireEvent.click(screen.getByRole('button', { name: '確認套用' }))
+    await waitFor(() => expect(port.permanentlySwap).toHaveBeenCalledWith({
+      firstLessonId: 'c1', secondLessonId: partnerId, date: '2026-09-09',
+    }))
+  })
+
+  it('keeps the Formal permanent-swap draft open when preview validation fails', () => {
+    const data = setup()
+    const partner = resolveProjectDay(data, data.activeProjectId!, fromDateKey('2026-09-07'))
+      .find((item) => item.kind === 'recurring' && item.id !== 'c1')!
+    const port = { ...fixedPort(ordinaryOccurrencePort()),
+      permanentSwapCandidates: vi.fn(() => [partner]),
+      previewPermanentSwap: vi.fn(() => { throw Object.assign(new Error('future override'), {
+        code: 'referenced',
+      }) }), permanentlySwap: vi.fn() }
+    render(<LessonEditor data={data} fixedLessonPort={port} lessonId="c1"
+      occurrenceDate="2026-09-07" onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /從指定日期起/ }))
+    fireEvent.change(screen.getByLabelText('課程異動類型'), { target: { value: 'permanent-swap' } })
+    fireEvent.change(screen.getByLabelText('交換課程'), { target: { value: partner.id } })
+    fireEvent.click(screen.getByRole('button', { name: '預覽異動' }))
+    expect(screen.getByRole('alert')).toBeTruthy()
+    expect((screen.getByLabelText('交換課程') as HTMLSelectElement).value).toBe(partner.id)
+    expect(port.permanentlySwap).not.toHaveBeenCalled()
+  })
+
   it('only exposes Formal V9 swap when the occurrence port has the atomic group capability', () => {
     const data = setup()
     const first = render(<LessonEditor data={data} fixedLessonPort={fixedPort(ordinaryOccurrencePort())}

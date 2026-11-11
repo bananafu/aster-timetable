@@ -13,7 +13,8 @@ export const V9_BACKUP_PREFIX = 'aster-timetable-v9-subject-backup:'
 export const V9_AUTO_BACKUP_PREFIX = 'toki-v9-auto-backup:'
 export const V9_AUTO_BACKUP_LIMIT = 10
 export type V9HighRiskOperation = 'delete-recurring-lesson' | 'permanently-update-lesson'
-  | 'permanently-end-lesson' | 'delete-one-off-lesson' | 'delete-project' | 'delete-timetable'
+  | 'permanently-end-lesson' | 'permanently-swap-lessons'
+  | 'delete-one-off-lesson' | 'delete-project' | 'delete-timetable'
 export interface V9PreMutationBackup {
   schemaVersion: 1
   kind: 'v9-pre-mutation-backup'
@@ -271,7 +272,8 @@ async function verifiedAutoBackup(raw: string, key: string): Promise<V9PreMutati
       || value.kind !== 'v9-pre-mutation-backup' || typeof value.mutationAttemptId !== 'string'
       || !/^[0-9a-f-]{36}$/.test(value.mutationAttemptId)
       || key !== `${V9_AUTO_BACKUP_PREFIX}${value.mutationAttemptId}`
-      || !['delete-recurring-lesson', 'permanently-update-lesson', 'permanently-end-lesson', 'delete-one-off-lesson',
+      || !['delete-recurring-lesson', 'permanently-update-lesson', 'permanently-end-lesson',
+        'permanently-swap-lessons', 'delete-one-off-lesson',
         'delete-project', 'delete-timetable'].includes(String(value.operation))
       || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0
       || !digest(value.digest) || typeof value.rawDocument !== 'string' || !iso(value.createdAt)

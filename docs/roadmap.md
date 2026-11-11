@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R4-1D-4C — Formal V9 effective-dated permanent Lesson swap（完成）
+
+正式 V9 已沿用既有 LessonEditor 的永久交換 UI，以一份純 domain candidate 同時切分兩個最新版本，且只交換 day／period；雙方 series identity、內容、EVERY／A／B pattern 與 A/B anchor 均保留。生效日可為雙方非 occurrence，但必須位於相同 Project／Timetable／TeachingUnit、TeachingUnit term 與有效區間交集。歷史 Override 保留並重驗，future Override 與完整 grouped swap 只有在可安全映射、重綁及解析時才提交；fixed／Override／OneOff 衝突、跨界 group、malformed group 或任何引用問題均 fail closed。
+
+Confirm 只走一次 `permanently-swap-lessons` high-risk Host transaction，沿用 revision、selection、validator、safe-update、verified receipt/readback、Web Lock、exact-raw pre-mutation backup、Runtime Gate 與多分頁 stale 防護；未新增 schema、Host、persistence、storage key 或 UI 設計。Domain／controller／adapter／React／真實 persistence targeted tests 與專用 disposable Chromium smoke 已覆蓋 A/B 歷史／未來解析、future Override 重綁與拒絕、backup failure、reload 及 stale editor。完整平行／序列 Vitest 與全 browser suite 的結果仍須在本次交付中與 targeted evidence 分開記錄。
+
 ## Phase 4D R4-1D-4B — Formal V9 permanent end（完成）
 
 正式 V9 已沿用既有 LessonEditor 的「從指定日期起 → 結束課程」preview／confirm 流程，透過單一 `permanently-end-lesson` high-risk Host transaction 實作 inclusive cessation。最新版本於 D 前一日結束；D 等於版本起日時只在沒有 Override／OneOff 引用下移除版本。歷史資料、OneOff 與進度不重寫；future source／move target、跨界或 malformed grouped swap、歷史版本、重複與 term 外操作均 fail closed。未新增 schema、Host、persistence、storage key、Runtime Gate 或 UI 設計。
