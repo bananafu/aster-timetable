@@ -6,6 +6,7 @@ import {
   openOneOffDraft,
   proveBrowserContextIsolation,
   readFormalV9Evidence,
+  reloadFormalV9,
   seedFormalV9ConflictMatrix,
   test,
   type ConflictMatrixDates,
@@ -25,7 +26,7 @@ async function prepare(browser: Parameters<typeof proveBrowserContextIsolation>[
   const fixture = await createFormalV9BrowserFixture(page, { anchorDate: dates.monday, anchorPattern: 'A' })
   const seeded = await seedFormalV9ConflictMatrix(page, dates)
   expect(seeded).toMatchObject({ writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })
-  await page.reload({ waitUntil: 'domcontentloaded' })
+  await reloadFormalV9(page)
   return { dates, fixture, seeded }
 }
 
@@ -46,7 +47,7 @@ async function expectPersisted(page: Parameters<typeof readFormalV9Evidence>[0],
   expect(evidence).toMatchObject({ revision: previousRevision + 1, validDocument: true,
     writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })
   expect(evidence.document?.oneOffLessons.some((item: { room?: string }) => item.room === room)).toBe(true)
-  await page.reload({ waitUntil: 'domcontentloaded' })
+  await reloadFormalV9(page)
   const reloaded = await readFormalV9Evidence(page)
   expect(reloaded.document?.oneOffLessons.some((item: { room?: string }) => item.room === room)).toBe(true)
   return reloaded

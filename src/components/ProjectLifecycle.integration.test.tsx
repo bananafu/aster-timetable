@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initialData } from '../data/seed'
 import { migrateV3ToV4 } from '../data/migrationsV4'
@@ -43,7 +43,7 @@ describe('ProjectLifecycleModal hierarchical settings', () => {
     expect(screen.getByRole('button', { name: /返回上一層/ })).toBeTruthy()
   })
 
-  it('切換學校後學制會重新對應該校資料', () => {
+  it('切換學校後學制會重新對應該校資料', async () => {
     const data = migrateV3ToV4(structuredClone(initialData))
     const projectId = data.activeProjectId!
     data.schools.push({ id: 'school-2', projectId, name: '第二校', color: '#718B6C' })
@@ -53,8 +53,10 @@ describe('ProjectLifecycleModal hierarchical settings', () => {
     fireEvent.click(screen.getByRole('button', { name: /課堂時間表/ }))
     fireEvent.change(screen.getByLabelText('學校'), { target: { value: 'school-2' } })
     const level = screen.getByLabelText('目前學制') as HTMLSelectElement
-    expect(level.value).toBe('unit-2')
-    expect([...level.options].map((option) => option.text)).toEqual(['國中部'])
+    await waitFor(() => {
+      expect(level.value).toBe('unit-2')
+      expect([...level.options].map((option) => option.text)).toEqual(['國中部'])
+    })
   })
 
   it('刪除專案確認訊息包含會一起移除的單日課程數', () => {

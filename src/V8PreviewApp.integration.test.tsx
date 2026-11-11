@@ -17,21 +17,21 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks() })
 
-async function seedProjectWithTimetable() {
+async function seedProjectWithTimetable(includeTimetable = true) {
   const bootstrap = await bootstrapEmptyV8(localStorage, { attemptId: 'preview-seed' })
   if (!bootstrap.ok) throw new Error(bootstrap.code)
   const initial = createEmptyAppDataV8()
   let serial = 0
   let data = createBlankProject(initial, { name: '新學期', academicYear: 116, semester: 'first',
     startDate: '2027-08-01', endDate: '2028-01-31' }, () => `preview-${++serial}`)
-  data = createTeacherTimetableV8(data, data.activeProjectId!,
+  if (includeTimetable) data = createTeacherTimetableV8(data, data.activeProjectId!,
     { name: '甲課表', teacherName: '王老師' }, 'teacher-a')
   const saved = persistAppDataV8(localStorage, initial, data,
     { raw: bootstrap.receipt.raw, legacyGuardRaw: null, revision: 0 }, 0)
   const metadata = JSON.parse(localStorage.getItem(V8_BOOTSTRAP_KEY)!)
   localStorage.setItem(V8_BOOTSTRAP_KEY, JSON.stringify({ ...metadata,
     currentDigest: await fingerprintV7Raw(saved.raw), documentRevision: saved.revision }))
-  return { stored: data, originalTimetableId: 'teacher-a' }
+  return { stored: data, originalTimetableId: includeTimetable ? 'teacher-a' : null }
 }
 
 async function expectConfirmedProjectSwitch(projectId: string, previousRevision: number) {
@@ -43,7 +43,7 @@ async function expectConfirmedProjectSwitch(projectId: string, previousRevision:
 }
 
 describe('V8 browser preview shell', () => {
-  it('requires explicit bootstrap and persists blank Project and Timetable management', async () => {
+  it('requires explicit bootstrap and persists blank Project management', async () => {
     const { unmount } = render(<V8PreviewApp onReturn={vi.fn()} />)
     expect(screen.getByText('建立空白 V8 工作空間')).toBeTruthy()
     expect(localStorage.getItem(APP_DATA_V8_KEY)).toBeNull()
@@ -71,10 +71,18 @@ describe('V8 browser preview shell', () => {
     expect(stored.events).toEqual([])
     expect(stored.teachingProgress).toEqual([])
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBeNull()
-    fireEvent.click(screen.getByLabelText('關閉對話框'))
+    unmount()
+  })
+
+  it('creates and confirms an empty teacher timetable', async () => {
+    await seedProjectWithTimetable(false)
+    const { unmount } = render(<V8PreviewApp onReturn={vi.fn()} />)
+    await waitFor(() => expect((screen.getByRole('button', { name: '教師課表' }) as HTMLButtonElement).disabled)
+      .toBe(false))
     fireEvent.click(screen.getByRole('button', { name: '教師課表' }))
-    await waitFor(() => expect((screen.getByRole('button', { name: /新增教師課表/ }) as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(screen.getByText('新增教師課表'))
+    const timetableDialog = await screen.findByRole('dialog', { name: 'V8 教師課表管理' })
+    await waitFor(() => expect((within(timetableDialog).getByRole('button', { name: /新增教師課表/ }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(within(timetableDialog).getByRole('button', { name: /新增教師課表/ }))
     fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '甲課表' } })
     fireEvent.change(screen.getByLabelText('教師名稱'), { target: { value: '王老師' } })
     fireEvent.click(screen.getByText('建立課表'))
@@ -83,9 +91,20 @@ describe('V8 browser preview shell', () => {
     expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).timetables).toMatchObject([
       { name: '甲課表', teacherName: '王老師' },
     ])
-    const originalTimetableId = JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).timetables[0].id
-    fireEvent.click(screen.getByText('複製課表設定'))
-    fireEvent.change(screen.getByLabelText('來源課表'), { target: { value: originalTimetableId } })
+    unmount()
+  })
+
+  it('persists timetable copy, deletion, and remount selection', async () => {
+    const { stored, originalTimetableId } = await seedProjectWithTimetable()
+    const { unmount } = render(<V8PreviewApp onReturn={vi.fn()} />)
+    await waitFor(() => expect((screen.getByRole('button', { name: '教師課表' }) as HTMLButtonElement).disabled)
+      .toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '教師課表' }))
+    const timetableDialog = await screen.findByRole('dialog', { name: 'V8 教師課表管理' })
+    await waitFor(() => expect((within(timetableDialog).getByRole('button', { name: /複製課表設定/ }) as HTMLButtonElement).disabled)
+      .toBe(false))
+    fireEvent.click(within(timetableDialog).getByRole('button', { name: /複製課表設定/ }))
+    fireEvent.change(screen.getByLabelText('來源課表'), { target: { value: originalTimetableId! } })
     fireEvent.change(screen.getByLabelText('目的專案'), { target: { value: stored.activeProjectId } })
     fireEvent.click(screen.getByText('複製設定'))
     await waitFor(() => expect(JSON.parse(localStorage.getItem(APP_DATA_V8_KEY)!).timetables).toHaveLength(2))

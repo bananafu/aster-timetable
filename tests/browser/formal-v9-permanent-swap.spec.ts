@@ -10,6 +10,7 @@ import {
   openOneOffDraft,
   proveBrowserContextIsolation,
   readFormalV9Evidence,
+  reloadFormalV9,
   seedFormalV9PermanentOverride,
   seedFormalV9SwapOneOffBlocker,
   seedFormalV9SwapPartner,
@@ -32,7 +33,7 @@ async function setupPermanentSwap(page: Page) {
   const monday = dateKeyAtStartOfBrowserWeek(0)
   const fixture = await createFormalV9BrowserFixture(page, { anchorDate: monday, anchorPattern: 'A' })
   const seeded = await seedFormalV9SwapPartner(page, 2, 'B')
-  await page.reload({ waitUntil: 'domcontentloaded' })
+  await reloadFormalV9(page)
   return { monday, effectiveDate: addDays(monday, 2), fixture, seeded }
 }
 
@@ -131,7 +132,7 @@ test('Formal V9 permanent A/B swap reloads with history, future resolution, back
       record: { operation: 'permanently-swap-lessons', revision: before.revision, rawDocument: before.raw },
     })
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     expect(await readFormalV9Evidence(page)).toMatchObject({ revision: seeded.revision + 1,
       attemptId: before.attemptId, validDocument: true, writeEvidenceValid: true,
       runtime: 'v9', v9Status: 'active' })
@@ -144,7 +145,7 @@ test('Formal V9 permanent swap safely rebinds a future override to the new versi
     const oldOverrideDate = addDays(monday, 14)
     const mappedOverrideDate = addDays(monday, 15)
     const seeded = await seedFormalV9PermanentOverride(page, oldOverrideDate)
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     const editor = await openPermanentSwap(page, effectiveDate)
     await editor.getByRole('button', { name: '預覽異動' }).click()
     expect((await readFormalV9Evidence(page)).revision).toBe(seeded.revision)
@@ -166,7 +167,7 @@ test('Formal V9 permanent-swap preview rejects an unsafe future override rebind 
     const { monday, effectiveDate } = await setupPermanentSwap(page)
     await seedFormalV9PermanentOverride(page, addDays(monday, 14))
     const blocker = await seedFormalV9SwapOneOffBlocker(page, addDays(monday, 15))
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     const editor = await openPermanentSwap(page, effectiveDate)
     await editor.getByRole('button', { name: '預覽異動' }).click()
     await expect(editor.getByRole('alert').first()).toBeVisible()

@@ -7,10 +7,11 @@ The suite remains fully parallel with four workers; eight concurrent Chromium wo
 verified Windows runner capacity and caused scattered default-timeout terminations without a shared
 product path, while the same batches passed at one to four workers. Assertions and timeouts are unchanged.
 
-Every test receives a newly created `BrowserContext`. Test setup proves context isolation by writing
-a non-product sentinel in a separate disposable context and confirming it is absent from the test
-context at the same origin. The test then confirms that no `aster-timetable-*` or `toki-v9-*`
-evidence exists before the Formal V9 flow begins. Tests never clear or remove LocalStorage.
+Every test receives a newly created `BrowserContext`. The dedicated
+`formal-v9-context-isolation.spec.ts` contract writes a non-product sentinel in one disposable
+context and confirms that a second disposable context at the same origin cannot read it. Before
+any Formal V9 write, each ordinary test also confirms that its own context contains no
+`aster-timetable-*` or `toki-v9-*` evidence. Tests never clear or remove LocalStorage.
 
 The fixture follows the production contracts:
 
@@ -65,6 +66,9 @@ Run all browser tests with:
 npm run test:browser
 ```
 
-Playwright closes only its disposable contexts and temporary browser profile. Generated traces,
-screenshots and reports are ignored by Git. Live Subject/Class resource editing, corrupted or
-ambiguous Recovery evidence, and legacy-browser compatibility remain separate follow-up coverage.
+Playwright closes only its disposable contexts and temporary browser profile. Each invocation writes
+JSON results, the HTML report, traces and screenshots to a unique
+`test-results/playwright/<run-id>/` directory, so a later successful rerun does not overwrite the
+first failure evidence. Generated artifacts are ignored by Git. Live Subject/Class resource editing,
+corrupted or ambiguous Recovery evidence, and legacy-browser compatibility remain separate follow-up
+coverage.

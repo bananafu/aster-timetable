@@ -8,6 +8,7 @@ import {
   openOneOffDraft,
   proveBrowserContextIsolation,
   readFormalV9Evidence,
+  reloadFormalV9,
   seedFormalV9SwapOneOffBlocker,
   seedFormalV9SwapPartner,
   test,
@@ -24,7 +25,7 @@ async function setupSwap(page: Parameters<typeof createFormalV9BrowserFixture>[0
   expect(fixture.fixtureReceiptAttemptId).toBe(fixture.activationAttemptId)
   expect(seeded).toMatchObject({ revision: fixture.fixtureRevision + 1,
     writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })
-  await page.reload({ waitUntil: 'domcontentloaded' })
+  await reloadFormalV9(page)
   await expect(page.getByText('已儲存至此裝置', { exact: true })).toHaveText('已儲存至此裝置')
   return { monday, seeded, fixture }
 }
@@ -56,7 +57,7 @@ test('Formal V9 existing LessonEditor swaps A to B across weeks, reloads, and re
     ])
     expect(evidence.document?.overrides[0].groupId).toBe(evidence.document?.overrides[1].groupId)
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     await page.getByRole('button', { name: '下一週' }).click()
     await expect(page.getByText('調入', { exact: true }).first()).toBeVisible()
     await page.getByText('調入', { exact: true }).first().click()
@@ -71,7 +72,7 @@ test('Formal V9 existing LessonEditor swaps A to B across weeks, reloads, and re
     expect(evidence).toMatchObject({ revision: seeded.revision + 2, validDocument: true,
       writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })
     expect(evidence.document?.overrides).toEqual([])
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     await expect(page.getByRole('button', { name: /編輯 Browser Smoke 數學・Browser Smoke 101/ }).first())
       .toBeVisible()
     await page.getByRole('button', { name: '下一週' }).click()
@@ -124,7 +125,7 @@ test('Formal V9 same-day swap persists and grouped revoke removes both overrides
     expect(evidence.document?.overrides).toHaveLength(2)
     expect(new Set(evidence.document?.overrides.map((item) => item.groupId)).size).toBe(1)
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     await page.getByText('調入', { exact: true }).first().click()
     const grouped = page.getByRole('dialog', { name: '編輯課程' })
     await expect(grouped.getByLabel('現有單日異動')).toContainText('單日交換')
@@ -174,7 +175,7 @@ test('Formal V9 swap preview rejects an overlapping OneOff without a revision or
     const { seeded } = await setupSwap(page, 1, 'B')
     const nextMonday = dateKeyAtStartOfBrowserWeek(7)
     const blocker = await seedFormalV9SwapOneOffBlocker(page, nextMonday)
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     await page.getByRole('button', { name: /編輯 Browser Smoke 數學・Browser Smoke 101/ }).first().click()
     const dialog = page.getByRole('dialog', { name: '編輯課程' })
     await dialog.getByRole('button', { name: /僅此日期/ }).click()

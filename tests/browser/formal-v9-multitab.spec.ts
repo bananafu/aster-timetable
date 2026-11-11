@@ -6,6 +6,7 @@ import {
   openOneOffDraft,
   proveBrowserContextIsolation,
   readFormalV9Evidence,
+  reloadFormalV9,
   test,
 } from './fixtures/formalV9'
 
@@ -15,7 +16,7 @@ test('B stale editor fails closed after another page commits a verified V9 revis
     await initializeFormalV9ThroughProductionEntry(firstPage)
     const monday = dateKeyAtStartOfBrowserWeek(0)
     const fixture = await createFormalV9BrowserFixture(firstPage, { anchorDate: monday, anchorPattern: 'A' })
-    await firstPage.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(firstPage)
 
     const staleDialog = await openOneOffDraft(firstPage, {
       date: dateKeyAtStartOfBrowserWeek(1), purpose: 'extra', mode: 'period',
@@ -49,7 +50,7 @@ test('B stale editor fails closed after another page commits a verified V9 revis
     expect(afterStaleAttempt.document?.oneOffLessons).toHaveLength(1)
     expect(afterStaleAttempt.document?.oneOffLessons[0]).toMatchObject({ room: 'Second-Page-Write' })
 
-    await firstPage.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(firstPage)
     const reloaded = await readFormalV9Evidence(firstPage)
     expect(reloaded).toMatchObject({ revision: fixture.fixtureRevision + 1,
       validDocument: true, writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })

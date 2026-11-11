@@ -9,6 +9,7 @@ import {
   openOneOffDraft,
   proveBrowserContextIsolation,
   readFormalV9Evidence,
+  reloadFormalV9,
   seedFormalV9PermanentOverride,
   test,
   V9_ACTIVATION_KEY,
@@ -33,7 +34,7 @@ test('Formal V9 permanent end reloads with history, verified backup, and active 
     const fixture = await createFormalV9BrowserFixture(page, {
       anchorDate: endDate, anchorPattern: 'A',
     })
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
 
     await page.getByRole('button', { name: /編輯 Browser Smoke 數學・Browser Smoke 101/ }).click()
     const editor = page.getByRole('dialog', { name: '編輯課程' })
@@ -99,7 +100,7 @@ test('Formal V9 permanent end reloads with history, verified backup, and active 
       record: { operation: 'permanently-end-lesson', revision: before.revision, rawDocument: before.raw },
     })
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     const reloaded = await readFormalV9Evidence(page)
     expect(reloaded).toMatchObject({ revision: fixture.fixtureRevision + 1,
       attemptId: before.attemptId, validDocument: true, writeEvidenceValid: true,
@@ -116,7 +117,7 @@ test('Formal V9 permanent-end preview rejects a future override without revision
     const futureDate = addDays(endDate, 14)
     await createFormalV9BrowserFixture(page, { anchorDate: endDate, anchorPattern: 'A' })
     const seeded = await seedFormalV9PermanentOverride(page, futureDate)
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
 
     await page.getByRole('button', { name: /編輯 Browser Smoke 數學・Browser Smoke 101/ }).click()
     const editor = page.getByRole('dialog', { name: '編輯課程' })
@@ -143,7 +144,7 @@ test('Formal V9 stale permanent-end editor cannot overwrite a newer verified pag
     await initializeFormalV9ThroughProductionEntry(firstPage)
     const endDate = dateKeyAtStartOfBrowserWeek(0)
     const fixture = await createFormalV9BrowserFixture(firstPage, { anchorDate: endDate, anchorPattern: 'A' })
-    await firstPage.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(firstPage)
 
     await firstPage.getByRole('button', { name: /編輯 Browser Smoke 數學・Browser Smoke 101/ }).click()
     const staleEditor = firstPage.getByRole('dialog', { name: '編輯課程' })

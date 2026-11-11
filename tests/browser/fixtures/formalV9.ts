@@ -22,11 +22,16 @@ interface FormalV9BrowserFixtures {
 }
 
 export const test = base.extend<FormalV9BrowserFixtures>({
-  formalPage: async ({ browser }, provide) => {
+  formalPage: async ({ browser }, provide, testInfo) => {
+    const startedAt = performance.now()
     const context = await browser.newContext()
     await context.route(/^https:\/\/fonts\.(?:googleapis|gstatic)\.com\//,
       (route) => route.abort('blockedbyclient'))
     const page = await context.newPage()
+    testInfo.annotations.push({
+      type: 'formal-page-fixture-ms',
+      description: String(Math.round(performance.now() - startedAt)),
+    })
     await provide(page)
     await context.close()
   },
@@ -49,19 +54,7 @@ export interface FormalV9FixtureEvidence {
 
 export async function proveBrowserContextIsolation(browser: Browser, formalPage: Page): Promise<void> {
   expect(browser.browserType().name()).toBe('chromium')
-  const probeContext = await browser.newContext()
-  await probeContext.route(/^https:\/\/fonts\.(?:googleapis|gstatic)\.com\//,
-    (route) => route.abort('blockedbyclient'))
-  const probePage = await probeContext.newPage()
-  await probePage.goto(FORMAL_V9_PATH, { waitUntil: 'domcontentloaded' })
-  await probePage.evaluate(() => localStorage.setItem('toki-browser-smoke-context-probe', 'isolated'))
-
   await formalPage.goto(FORMAL_V9_PATH, { waitUntil: 'domcontentloaded' })
-  await expect.poll(() => formalPage.evaluate(() => localStorage.getItem('toki-browser-smoke-context-probe')))
-    .toBeNull()
-  expect(formalPage.context()).not.toBe(probeContext)
-  await probeContext.close()
-
   const tokiKeys = await formalPage.evaluate(() => Array.from(
     { length: localStorage.length }, (_, index) => localStorage.key(index),
   ).filter((key) => key?.startsWith('aster-timetable-') || key?.startsWith('toki-v9-')))
@@ -352,6 +345,19 @@ export async function readFormalV9Evidence(page: Page) {
       v9Status: 'v9Status' in decision ? decision.v9Status : null,
     }
   })
+}
+
+export async function reloadFormalV9(page: Page) {
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByText('已儲存至此裝置', { exact: true })).toHaveText('已儲存至此裝置')
+  const evidence = await readFormalV9Evidence(page)
+  expect(evidence).toMatchObject({
+    validDocument: true,
+    writeEvidenceValid: true,
+    runtime: 'v9',
+    v9Status: 'active',
+  })
+  return evidence
 }
 
 export async function seedFormalV9BoundaryMatrix(page: Page, input: {

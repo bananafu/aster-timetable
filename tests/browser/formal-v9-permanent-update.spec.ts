@@ -7,6 +7,7 @@ import {
   initializeFormalV9ThroughProductionEntry,
   proveBrowserContextIsolation,
   readFormalV9Evidence,
+  reloadFormalV9,
   seedFormalV9PermanentOverride,
   test,
   V9_ACTIVATION_KEY,
@@ -35,7 +36,7 @@ test('D permanent update preserves history, rebinds future override, and writes 
     const seeded = await seedFormalV9PermanentOverride(page, futureDate)
     expect(seeded).toMatchObject({ revision: fixture.fixtureRevision + 1,
       writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
 
     await page.getByRole('button', { name: /編輯 Browser Smoke 數學・Browser Smoke 101/ }).click()
     const editor = page.getByRole('dialog', { name: '編輯課程' })
@@ -104,7 +105,7 @@ test('D permanent update preserves history, rebinds future override, and writes 
       record: { operation: 'permanently-update-lesson', revision: before.revision, rawDocument: before.raw },
     })
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     const reloaded = await readFormalV9Evidence(page)
     expect(reloaded).toMatchObject({ revision: before.revision + 1, attemptId: before.attemptId,
       validDocument: true, writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })

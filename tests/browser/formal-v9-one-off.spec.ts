@@ -6,6 +6,7 @@ import {
   FORMAL_V9_FIXTURE_IDS,
   initializeFormalV9ThroughProductionEntry,
   proveBrowserContextIsolation,
+  reloadFormalV9,
   test,
   V9_ACTIVATION_KEY,
   V9_AUTO_BACKUP_PREFIX,
@@ -27,7 +28,7 @@ test('Formal V9 OneOff CRUD survives reload and delete creates verified backup e
     })
     expect(fixture.fixtureReceiptAttemptId).toBe(fixture.activationAttemptId)
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     await expect(page.getByText('已儲存至此裝置', { exact: true })).toHaveText('已儲存至此裝置')
     await expect(page.getByRole('heading', { name: '本週行事曆' })).toBeVisible()
 
@@ -67,7 +68,7 @@ test('Formal V9 OneOff CRUD survives reload and delete creates verified backup e
       time: { mode: 'period', periodId: fixture.periodIds[1] },
     })
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     await expect(page.getByText('已儲存至此裝置', { exact: true })).toHaveText('已儲存至此裝置')
     await page.getByRole('button', { name: /編輯單日課程/ }).click()
     const editDialog = page.getByRole('dialog', { name: '編輯單日課程' })
@@ -77,7 +78,7 @@ test('Formal V9 OneOff CRUD survives reload and delete creates verified backup e
     await editDialog.getByRole('button', { name: '送出修改' }).click()
     await expect(editDialog).toBeHidden()
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     await expect(page.getByText('已儲存至此裝置', { exact: true })).toHaveText('已儲存至此裝置')
     const edited = await page.evaluate(({ dataKey, id }) => {
       const data = JSON.parse(localStorage.getItem(dataKey) ?? 'null')
@@ -144,7 +145,7 @@ test('Formal V9 OneOff CRUD survives reload and delete creates verified backup e
       },
     })
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     await expect(page.getByText('已儲存至此裝置', { exact: true })).toHaveText('已儲存至此裝置')
     await expect(page.getByRole('button', { name: /編輯單日課程/ })).toHaveCount(0)
     const finalRuntime = await page.evaluate(async () => {

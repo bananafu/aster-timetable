@@ -10,7 +10,7 @@ import { initializeFreshV9 } from './data/initializeFreshV9'
 import { APP_DATA_V8_KEY, createEmptyAppDataV8 } from './data/storageV8'
 import { APP_DATA_V7_KEY } from './data/storageV7'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, V9_AUTO_BACKUP_PREFIX,
-  loadAppDataV9, persistAppDataV9 } from './data/storageV9'
+  checkV9WriteEvidence, loadAppDataV9, persistAppDataV9 } from './data/storageV9'
 import { createBlankProjectV9, createTeacherTimetableV9, createTeacherSubjectV9,
   configureTeacherSubjectV9, createTeachingUnitV9, switchActiveProjectV9 } from './data/teacherSubjectsV9'
 import { createDefaultPeriods } from './data/academicSettingsV4'
@@ -205,8 +205,19 @@ function occurrenceFixture(options: { blocker?: boolean; cancelled?: boolean; on
 
 async function mount() {
   const view = render(<FormalV9Composition />)
-  await waitFor(() => expect(screen.getByText('已儲存至此裝置')).toBeTruthy())
+  await waitForVerifiedV9(revision())
   return view
+}
+async function waitForVerifiedV9(expectedRevision: number) {
+  await waitFor(async () => {
+    const raw = localStorage.getItem(APP_DATA_V9_KEY)
+    const metadataRaw = localStorage.getItem(V9_ACTIVATION_KEY)
+    expect(raw).not.toBeNull()
+    expect(metadataRaw).not.toBeNull()
+    expect(JSON.parse(metadataRaw!).documentRevision).toBe(expectedRevision)
+    expect(await checkV9WriteEvidence(localStorage, raw!, metadataRaw!)).toBe(true)
+    expect(screen.getByText('已儲存至此裝置')).toBeTruthy()
+  }, { timeout: 3000 })
 }
 function add(label: string) {
   fireEvent.click(screen.getByRole('button', { name: '新增' }))
@@ -248,11 +259,11 @@ function unsetAcademicFixture(withTimetable = false) {
 }
 
 describe('formal V9 management composition', () => {
-  it('mounts the real V9 tree from the formal entry and creates only a named Project', async () => {
-    const rawV8 = await activate()
+  it('mounts the real V9 tree from the formal entry without writing during Host readiness', async () => {
+    await activate()
     const writes = vi.spyOn(Storage.prototype, 'setItem')
     const entry = render(<FormalAppEntry />)
-    await waitFor(() => expect(screen.getByText('已儲存至此裝置')).toBeTruthy())
+    await waitForVerifiedV9(0)
     expect(screen.getByRole('heading', { name: '建立你的第一份課表' })).toBeTruthy()
     expect(document.querySelector('.app-shell')?.classList.contains('sidebar-is-collapsed')).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: '展開側邊欄' }))
@@ -264,13 +275,23 @@ describe('formal V9 management composition', () => {
     expect((screen.getByRole('button', { name: '手機導覽：我的課表' }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByRole('button', { name: '手機導覽：會議與活動' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: '查看範例' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(writes).not.toHaveBeenCalled()
+    entry.unmount()
+  })
+
+  it('creates only a named Project through a verified V9 receipt', async () => {
+    const rawV8 = await activate()
+    const writes = vi.spyOn(Storage.prototype, 'setItem')
+    const entry = render(<FormalAppEntry />)
+    await waitForVerifiedV9(0)
     fireEvent.click(screen.getByRole('button', { name: '建立第一個課表專案' }))
     expect(screen.getAllByRole('textbox')).toHaveLength(1)
     expect(screen.queryByLabelText('學年度')).toBeNull()
     expect(screen.queryByLabelText('起始日')).toBeNull()
     fireEvent.change(screen.getByLabelText('專案名稱'), { target: { value: '名稱專案' } })
     fireEvent.click(screen.getByRole('button', { name: '建立並開始' }))
-    await waitFor(() => expect(stored().projects).toHaveLength(1))
+    await waitForVerifiedV9(1)
+    expect(stored().projects).toHaveLength(1)
     await waitFor(() => expect(screen.queryByRole('heading', { name: '建立你的第一份課表' })).toBeNull())
     await waitFor(() => expect(screen.getByRole('dialog', { name: '專案設定' })).toBeTruthy())
     expect(revision()).toBe(1)
@@ -325,8 +346,10 @@ describe('formal V9 management composition', () => {
     vi.mocked(window.confirm).mockReturnValueOnce(false)
     closeDialog()
     expect((screen.getByLabelText('專案名稱') as HTMLInputElement).value).toBe('新空白')
+    const previousRevision = revision()
     fireEvent.click(screen.getByRole('button', { name: '建立並切換' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: '儲存學期' })).toBeTruthy())
+    await waitForVerifiedV9(previousRevision + 1)
+    expect(screen.getByRole('button', { name: '儲存學期' })).toBeTruthy()
     expect(stored().projects.at(-1)).toMatchObject({ name: '新空白', term: null })
     expect((screen.getByRole('button', { name: '切換專案' }) as HTMLButtonElement).disabled).toBe(true)
     closeDialog()

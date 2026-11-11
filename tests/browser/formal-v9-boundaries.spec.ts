@@ -6,6 +6,7 @@ import {
   openOneOffDraft,
   proveBrowserContextIsolation,
   readFormalV9Evidence,
+  reloadFormalV9,
   seedFormalV9BoundaryMatrix,
   test,
 } from './fixtures/formalV9'
@@ -25,7 +26,7 @@ test('C1 EVERY, active A, and active B occurrences follow the TeachingUnit ancho
       bDate: dateKeyAtStartOfBrowserWeek(8), boundaryStart: '2026-12-31',
     })
     expect(seeded).toMatchObject({ writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
 
     for (const draft of [
       { date: monday, periodId: fixture.periodIds[0], room: 'A-Conflict' },
@@ -56,7 +57,7 @@ test('C2 boundary dates persist across year, outside dates reject, and other Tim
     })
     const seeded = await seedFormalV9BoundaryMatrix(page, { bDate: '2027-01-05', boundaryStart: startDate })
     expect(seeded).toMatchObject({ writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
 
     for (const outside of ['2026-12-30', '2027-01-02']) {
       const dialog = await openOneOffDraft(page, { date: outside, purpose: 'extra', mode: 'period',
@@ -89,7 +90,7 @@ test('C2 boundary dates persist across year, outside dates reject, and other Tim
     await edit.getByRole('button', { name: '送出修改' }).click()
     await expect(edit).toBeHidden()
 
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await reloadFormalV9(page)
     const reloaded = await readFormalV9Evidence(page)
     expect(reloaded).toMatchObject({ revision: seeded.revision + 2, validDocument: true,
       writeEvidenceValid: true, runtime: 'v9', v9Status: 'active' })

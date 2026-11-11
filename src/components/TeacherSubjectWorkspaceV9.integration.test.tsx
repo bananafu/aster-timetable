@@ -26,15 +26,18 @@ beforeEach(() => {
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks() })
 
 async function confirmedV9Write(label: string, previousRevision: number) {
-  // The workspace shows this message only after host.update resolves and its receipt is checked.
-  await waitFor(() => expect(screen.getByText(`${label}，資料已保存。`)).toBeTruthy())
-  const raw = localStorage.getItem(APP_DATA_V9_KEY)
-  const metadataRaw = localStorage.getItem(V9_ACTIVATION_KEY)
-  expect(raw).not.toBeNull()
-  expect(metadataRaw).not.toBeNull()
-  expect(JSON.parse(metadataRaw!).documentRevision).toBe(previousRevision + 1)
-  expect(await checkV9WriteEvidence(localStorage, raw!, metadataRaw!)).toBe(true)
-  return JSON.parse(raw!) as AppDataV9
+  let persisted: AppDataV9 | null = null
+  await waitFor(async () => {
+    const raw = localStorage.getItem(APP_DATA_V9_KEY)
+    const metadataRaw = localStorage.getItem(V9_ACTIVATION_KEY)
+    expect(raw).not.toBeNull()
+    expect(metadataRaw).not.toBeNull()
+    expect(JSON.parse(metadataRaw!).documentRevision).toBe(previousRevision + 1)
+    expect(await checkV9WriteEvidence(localStorage, raw!, metadataRaw!)).toBe(true)
+    expect(screen.getByText(`${label}，資料已保存。`)).toBeTruthy()
+    persisted = JSON.parse(raw!) as AppDataV9
+  }, { timeout: 3000 })
+  return persisted!
 }
 
 function v9Revision() {
@@ -178,9 +181,9 @@ describe('V8 Preview teacher-owned Subject library', () => {
     vi.unstubAllGlobals()
   })
 
-  it('lets teacher A configure one Subject in both school levels while B starts empty and owns same name independently', async () => {
-    const { sourceRaw } = await activated()
-    const view = render(<V8PreviewApp onReturn={vi.fn()} />)
+  it('lets teacher A configure one Subject in both school levels', async () => {
+    await activated()
+    render(<V8PreviewApp onReturn={vi.fn()} />)
     await waitFor(() => expect(screen.getByRole('button', { name: '科目與班級' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
     fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
@@ -215,6 +218,23 @@ describe('V8 Preview teacher-owned Subject library', () => {
     expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).teachingUnitSubjects).toHaveLength(2)
     expect(JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects[0].applicableSchoolLevels)
       .toContain('junior-high')
+  })
+
+  it('keeps teacher B empty until it independently creates a Subject with the same name', async () => {
+    const { sourceRaw } = await activated()
+    const view = render(<V8PreviewApp onReturn={vi.fn()} />)
+    await waitFor(() => expect((screen.getByRole('button', { name: '科目與班級' }) as HTMLButtonElement).disabled)
+      .toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '科目與班級' }))
+    fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: '儲存科目' }) as HTMLButtonElement).disabled)
+      .toBe(false))
+    fireEvent.change(screen.getByLabelText('科目名稱'), { target: { value: '數學' } })
+    fireEvent.change(screen.getByLabelText('科目簡稱'), { target: { value: '數' } })
+    let revision = v9Revision()
+    fireEvent.click(screen.getByRole('button', { name: '儲存科目' }))
+    await confirmedV9Write('已新增科目', revision++)
+    const subjectA = JSON.parse(localStorage.getItem(APP_DATA_V9_KEY)!).subjects[0]
     fireEvent.click(screen.getByRole('button', { name: '關閉對話框' }))
     fireEvent.click(screen.getByRole('button', { name: '教師課表' }))
     fireEvent.change(screen.getByLabelText('課表名稱'), { target: { value: '乙課表' } })
