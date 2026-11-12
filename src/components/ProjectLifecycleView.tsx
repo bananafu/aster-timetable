@@ -89,10 +89,12 @@ export function FirstUseView({ data, onViewArchived, actions, example, pending =
 }
 
 export function ProjectLifecycleView({ data, initialPage = 'root', onClose, onViewArchived, actions,
-  pending = false, readOnly = false, protectDrafts = false, renderAcademicSettings, deletionMessage }: SharedProps & {
+  pending = false, readOnly = false, protectDrafts = false, renderAcademicSettings,
+  renderDataManagement, deletionMessage }: SharedProps & {
   initialPage?: 'root' | 'blank' | 'term'
   onClose: () => void
   renderAcademicSettings?: (page: 'schools' | 'periods') => ReactNode
+  renderDataManagement?: (onImported: () => void) => ReactNode
   deletionMessage: (projectId: string) => string
 }) {
   const active = data.projects.find((item) => item.id === data.activeProjectId)
@@ -104,7 +106,7 @@ export function ProjectLifecycleView({ data, initialPage = 'root', onClose, onVi
   const sourceUnits = useMemo(() => data.teachingUnits.filter((item) => item.projectId === copySourceId), [data.teachingUnits, copySourceId])
   const [unitDates, setUnitDates] = useState<Record<string, { sourceEffectiveDate: string; startDate: string; endDate: string; anchorDate: string; anchorPattern: 'A' | 'B' }>>({})
   const [error, setError] = useState('')
-  const [page, setPage] = useState<'root' | 'name' | 'schools' | 'schools-settings' | 'blank' | 'copy' | 'term' | 'history' | Exclude<AcademicSettingsPage, 'classes' | 'subjects'>>(initialPage)
+  const [page, setPage] = useState<'root' | 'name' | 'schools' | 'schools-settings' | 'blank' | 'copy' | 'term' | 'history' | 'data' | Exclude<AcademicSettingsPage, 'classes' | 'subjects'>>(initialPage)
   const busy = useRef(false)
   const [submitting, setSubmitting] = useState(false)
   const initialCopy = useRef(JSON.stringify(copyDraft))
@@ -177,14 +179,18 @@ export function ProjectLifecycleView({ data, initialPage = 'root', onClose, onVi
   }
 
   const goBack = () => setPage(['schools-settings', 'periods'].includes(page) ? 'schools' : 'root')
-  const menuItem = (label: string, description: string, target: typeof page, disabled = false) => <button type="button" disabled={disabled || pending} className="settings-menu-item" onClick={() => setPage(target)}><span><strong>{label}</strong><small>{description}</small></span><ChevronRight size={17} /></button>
+  const menuItem = (label: string, description: string, target: typeof page, disabled = false,
+    allowReadOnly = false) => <button type="button"
+      disabled={disabled || pending || (readOnly && !allowReadOnly)} className="settings-menu-item"
+      onClick={() => setPage(target)}><span><strong>{label}</strong><small>{description}</small></span><ChevronRight size={17} /></button>
 
   const content = <>
     {page !== 'root' && <div className="settings-breadcrumb"><button type="button" onClick={goBack}><ChevronLeft size={15} />返回上一層</button></div>}
-    {page === 'root' && <nav className="settings-menu" aria-label="專案管理">{active && menuItem('目前專案名稱', active.name, 'name')}{active?.term === null && actions.configureTerm && menuItem('學期設定', '設定學年度與學期', 'term')}{active && menuItem('學校與學制管理', '學校、學制與課堂時間表', 'schools', !renderAcademicSettings)}{data.projects.length > 0 && menuItem('複製為新學期', '複製固定設定並重新確認日期', 'copy')}{menuItem('歷史與專案管理', '封存、查看、重新啟用或刪除', 'history')}</nav>}
+    {page === 'root' && <nav className="settings-menu" aria-label="專案管理">{active && menuItem('目前專案名稱', active.name, 'name')}{active?.term === null && actions.configureTerm && menuItem('學期設定', '設定學年度與學期', 'term')}{active && menuItem('學校與學制管理', '學校、學制與課堂時間表', 'schools', !renderAcademicSettings)}{data.projects.length > 0 && menuItem('複製為新學期', '複製固定設定並重新確認日期', 'copy')}{menuItem('歷史與專案管理', '封存、查看、重新啟用或刪除', 'history')}{renderDataManagement && menuItem('資料管理', '手動匯出或安全替換 Formal V9 JSON', 'data', false, true)}</nav>}
     {page === 'schools' && <nav className="settings-menu" aria-label="學校與學制管理">{menuItem('學校與學制', '建立或修改學校、識別色、日期與輪週規則', 'schools-settings')}{menuItem('課堂時間表', '管理所選學制的節次與起訖時間', 'periods')}</nav>}
     {page === 'schools-settings' && renderAcademicSettings?.('schools')}
     {page === 'periods' && renderAcademicSettings?.('periods')}
+    {page === 'data' && renderDataManagement?.(onClose)}
     {page === 'name' && active && <form className="form-grid compact-form" onSubmit={async (event) => { event.preventDefault(); if (!actions.renameProject) return; if (!name.trim()) { setError('專案名稱不得為空白。'); return } try { await actions.renameProject(active.id, name); setError('') } catch { setError('專案名稱未儲存，請重新確認。') } }}>{actions.renameProject && <label className="full">目前專案名稱<input value={name} onChange={(event) => setName(event.target.value)} required /></label>}<div className="form-actions full"><button type="button" className="danger-button" onClick={async () => { if (window.confirm(`封存「${active.name}」？封存後仍可唯讀查看及重新啟用。`)) { try { await actions.archiveProject(active.id); onClose() } catch { setError('目前無法封存專案。') } } }}><Archive size={14} />封存</button>{actions.renameProject && <button type="submit" className="primary-button">重新命名</button>}</div></form>}
     {page === 'term' && active?.term === null && actions.configureTerm && <form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); void run(() => submitTerm(event)) }}><AcademicTermFields value={termDraft} onChange={setTermDraft} /><div className="form-actions full"><button type="button" onClick={close}>取消</button><button type="submit" className="primary-button">儲存學期</button></div></form>}
     {page === 'blank' && <form className="form-grid project-create-form" onSubmit={(event) => { event.preventDefault(); void run(() => submitBlank(event)) }}><div className="full"><strong>建立新專案</strong><p>{actions.creationMode === 'empty-v9' ? '建立完全空白的專案，不沿用目前專案資料。' : '使用固定預設，不沿用目前專案的學校、節次、班級或課程。'}</p></div>{actions.creationMode === 'empty-v9' ? <label className="full">專案名稱<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required /></label> : 'academicYear' in draft && <><TermFields value={draft} onChange={setDraft} /><label className="full">授課教師姓名<input value={draft.teacherName ?? ''} onChange={(event) => setDraft({ ...draft, teacherName: event.target.value })} required /></label></>}<div className="form-actions full"><button type="button" onClick={close}>取消</button><button type="submit" className="primary-button">建立並切換</button></div></form>}
@@ -193,8 +199,8 @@ export function ProjectLifecycleView({ data, initialPage = 'root', onClose, onVi
     {page === 'history' && data.migrationWarnings.length > 0 && <section className="migration-warning-list"><strong>資料遷移警告</strong><p>以下資料仍完整保留，不會自動套用或刪除。</p>{data.migrationWarnings.map((warning) => <div className="warning-row" key={warning.id}><div><strong>{warning.entityType === 'override' ? '未歸屬的單日異動' : '待確認資料'}</strong><p>紀錄 ID {warning.entityId}</p><p>{warning.message}</p></div></div>)}</section>}
     {error && <p className="form-error" role="alert">{error}</p>}
   </>
-  return <Modal title="專案設定" subtitle={page === 'root' ? '選擇要管理的項目。' : `目前位置：專案管理 / ${page === 'schools' ? '學校與學制管理' : page === 'schools-settings' ? '學校與學制管理 / 學校與學制' : page === 'periods' ? '學校與學制管理 / 課堂時間表' : page === 'name' ? '目前專案名稱' : page === 'blank' ? '建立新專案' : page === 'term' ? '學期設定' : page === 'copy' ? '複製為新學期' : '歷史與專案管理'}`} onClose={close}>
+  return <Modal title="專案設定" subtitle={page === 'root' ? '選擇要管理的項目。' : `目前位置：專案管理 / ${page === 'schools' ? '學校與學制管理' : page === 'schools-settings' ? '學校與學制管理 / 學校與學制' : page === 'periods' ? '學校與學制管理 / 課堂時間表' : page === 'name' ? '目前專案名稱' : page === 'blank' ? '建立新專案' : page === 'term' ? '學期設定' : page === 'copy' ? '複製為新學期' : page === 'data' ? '資料管理' : '歷史與專案管理'}`} onClose={close}>
     <div className="project-settings">{protectDrafts
-      ? <fieldset disabled={locked} style={{ display: 'contents' }}>{content}</fieldset> : content}</div>
+      ? <fieldset disabled={locked && page !== 'root' && page !== 'data'} style={{ display: 'contents' }}>{content}</fieldset> : content}</div>
   </Modal>
 }

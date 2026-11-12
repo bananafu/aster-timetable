@@ -14,7 +14,7 @@ export const V9_AUTO_BACKUP_PREFIX = 'toki-v9-auto-backup:'
 export const V9_AUTO_BACKUP_LIMIT = 10
 export type V9HighRiskOperation = 'delete-recurring-lesson' | 'permanently-update-lesson'
   | 'permanently-end-lesson' | 'permanently-swap-lessons'
-  | 'delete-one-off-lesson' | 'delete-project' | 'delete-timetable'
+  | 'delete-one-off-lesson' | 'delete-project' | 'delete-timetable' | 'import-json'
 export interface V9PreMutationBackup {
   schemaVersion: 1
   kind: 'v9-pre-mutation-backup'
@@ -258,6 +258,11 @@ export class V9PersistenceError extends Error {
 export interface V9PersistenceReceipt { raw: string; revision: number; attemptId: string;
   mutationAttemptId?: string
   preMutationBackup?: V9PreMutationBackupEvidence }
+export interface V9ConfirmedExportSnapshot {
+  raw: string
+  revision: number
+  digest: `sha256:${string}`
+}
 
 type AutoBackupStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>
 function isAutoBackupStorage(storage: Pick<Storage, 'getItem' | 'setItem'>): storage is AutoBackupStorage {
@@ -274,7 +279,7 @@ async function verifiedAutoBackup(raw: string, key: string): Promise<V9PreMutati
       || key !== `${V9_AUTO_BACKUP_PREFIX}${value.mutationAttemptId}`
       || !['delete-recurring-lesson', 'permanently-update-lesson', 'permanently-end-lesson',
         'permanently-swap-lessons', 'delete-one-off-lesson',
-        'delete-project', 'delete-timetable'].includes(String(value.operation))
+        'delete-project', 'delete-timetable', 'import-json'].includes(String(value.operation))
       || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0
       || !digest(value.digest) || typeof value.rawDocument !== 'string' || !iso(value.createdAt)
       || await fingerprintV7Raw(value.rawDocument) !== value.digest) return null
@@ -340,15 +345,45 @@ async function hasPreMutationBackupEvidence(storage: Pick<Storage, 'getItem'>,
     && record.digest === evidence.digest && record.rawDocument === evidence.rawDocument
 }
 
-/** One confirmed write, guarded by both old-source and current-document evidence. */
-export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setItem'>,
-  current: AppDataV9, next: AppDataV9,
-  expected: { raw: string; metadataRaw: string; revision: number },
+type V9ExpectedSnapshot = { raw: string; metadataRaw: string; revision: number }
+
+function matchesExpectedDocument(document: AppDataV9, raw: string): boolean {
+  try { return JSON.stringify(parseAppDataV9Raw(raw)) === JSON.stringify(document) }
+  catch { return false }
+}
+
+/** Captures exact confirmed bytes while holding the same lock used by V9 writes. */
+export async function createConfirmedV9ExportSnapshot(storage: Pick<Storage, 'getItem'>,
+  expected: V9ExpectedSnapshot): Promise<V9ConfirmedExportSnapshot> {
+  try {
+    return await withV8StorageLock(async () => {
+      if (!(await checkV9WriteEvidence(storage, expected.raw, expected.metadataRaw))) {
+        throw new V9PersistenceError('activation-conflict')
+      }
+      const loaded = loadAppDataV9(storage)
+      if (loaded.status !== 'active' || !loaded.metadata
+        || loaded.rawDocument !== expected.raw || loaded.rawMetadata !== expected.metadataRaw
+        || loaded.metadata.documentRevision !== expected.revision) {
+        throw new V9PersistenceError('stale-snapshot')
+      }
+      const digestValue = await fingerprintV7Raw(loaded.rawDocument)
+      if (digestValue !== loaded.metadata.currentDigest
+        || storage.getItem(APP_DATA_V9_KEY) !== loaded.rawDocument
+        || storage.getItem(V9_ACTIVATION_KEY) !== loaded.rawMetadata) {
+        throw new V9PersistenceError('stale-snapshot')
+      }
+      return Object.freeze({ raw: loaded.rawDocument, revision: loaded.metadata.documentRevision,
+        digest: digestValue })
+    })
+  } catch (cause) {
+    if (cause instanceof V9PersistenceError) throw cause
+    throw new V9PersistenceError('lock-unavailable')
+  }
+}
+
+async function persistConfirmedV9Raw(storage: Pick<Storage, 'getItem' | 'setItem'>,
+  raw: string, expectedDigest: `sha256:${string}` | null, expected: V9ExpectedSnapshot,
   highRiskOperation?: V9HighRiskOperation): Promise<V9PersistenceReceipt> {
-  if (!isCompatibleAppDataV9(current)) throw new V9PersistenceError('invalid-current')
-  if (!isCompatibleAppDataV9(next)) throw new V9PersistenceError('invalid-next')
-  if (!isSafeAppDataV9Update(current, next)) throw new V9PersistenceError('unsafe-update')
-  if (JSON.stringify(current) !== expected.raw) throw new V9PersistenceError('stale-snapshot')
   try {
     return await withV8StorageLock(async () => {
       if (!(await checkV9WriteEvidence(storage, expected.raw, expected.metadataRaw))) {
@@ -356,6 +391,14 @@ export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setIt
       }
       const meta: V9ActivationRecord = JSON.parse(expected.metadataRaw)
       if (meta.documentRevision !== expected.revision) throw new V9PersistenceError('stale-snapshot')
+      try { parseAppDataV9Raw(raw) }
+      catch { throw new V9PersistenceError('invalid-next') }
+      let digestNext: `sha256:${string}`
+      try { digestNext = await fingerprintV7Raw(raw) }
+      catch { throw new V9PersistenceError('digest-failure') }
+      if (expectedDigest !== null && digestNext !== expectedDigest) {
+        throw new V9PersistenceError('stale-snapshot')
+      }
       let preMutationBackup: V9PreMutationBackupEvidence | undefined
       let mutationAttemptId: string | undefined
       if (highRiskOperation) {
@@ -373,10 +416,6 @@ export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setIt
           throw new V9PersistenceError('activation-conflict')
         }
       }
-      const raw = JSON.stringify(next)
-      let digestNext: `sha256:${string}`
-      try { digestNext = await fingerprintV7Raw(raw) }
-      catch { throw new V9PersistenceError('digest-failure') }
       const updated: V9ActivationRecord = { ...meta, currentDigest: digestNext,
         documentRevision: meta.documentRevision + 1,
         updatedAt: new Date(Math.max(Date.now(), Date.parse(meta.updatedAt))).toISOString() }
@@ -394,9 +433,10 @@ export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setIt
       if (storage.getItem(V9_ACTIVATION_KEY) !== expected.metadataRaw) {
         throw new V9PersistenceError('activation-conflict')
       }
-      try { storage.setItem(V9_ACTIVATION_KEY, JSON.stringify(updated)) }
+      const updatedRaw = JSON.stringify(updated)
+      try { storage.setItem(V9_ACTIVATION_KEY, updatedRaw) }
       catch { throw new V9PersistenceError('write-failure') }
-      if (!(await checkV9WriteEvidence(storage, raw, JSON.stringify(updated)))) {
+      if (!(await checkV9WriteEvidence(storage, raw, updatedRaw))) {
         throw new V9PersistenceError('readback-failure')
       }
       return { raw, revision: updated.documentRevision, attemptId: updated.attemptId,
@@ -406,4 +446,31 @@ export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setIt
     if (cause instanceof V9PersistenceError) throw cause
     throw new V9PersistenceError('lock-unavailable')
   }
+}
+
+/** One ordinary confirmed write. Its incremental safe-update contract is unchanged. */
+export async function persistAppDataV9(storage: Pick<Storage, 'getItem' | 'setItem'>,
+  current: AppDataV9, next: AppDataV9, expected: V9ExpectedSnapshot,
+  highRiskOperation?: V9HighRiskOperation): Promise<V9PersistenceReceipt> {
+  if (!isCompatibleAppDataV9(current)) throw new V9PersistenceError('invalid-current')
+  if (!isCompatibleAppDataV9(next)) throw new V9PersistenceError('invalid-next')
+  if (!isSafeAppDataV9Update(current, next)) throw new V9PersistenceError('unsafe-update')
+  if (!matchesExpectedDocument(current, expected.raw)) throw new V9PersistenceError('stale-snapshot')
+  return persistConfirmedV9Raw(storage, JSON.stringify(next), null, expected, highRiskOperation)
+}
+
+/** Dedicated import-only whole-document replacement. Never exposed through ordinary Host updates. */
+export async function replaceAppDataV9FromValidatedImport(
+  storage: Pick<Storage, 'getItem' | 'setItem'>, current: AppDataV9,
+  candidateRaw: string, candidateDigest: `sha256:${string}`, expected: V9ExpectedSnapshot,
+): Promise<V9PersistenceReceipt> {
+  if (!isCompatibleAppDataV9(current)) throw new V9PersistenceError('invalid-current')
+  if (!matchesExpectedDocument(current, expected.raw)) throw new V9PersistenceError('stale-snapshot')
+  try { parseAppDataV9Raw(candidateRaw) }
+  catch { throw new V9PersistenceError('invalid-next') }
+  let actualDigest: `sha256:${string}`
+  try { actualDigest = await fingerprintV7Raw(candidateRaw) }
+  catch { throw new V9PersistenceError('digest-failure') }
+  if (actualDigest !== candidateDigest) throw new V9PersistenceError('stale-snapshot')
+  return persistConfirmedV9Raw(storage, candidateRaw, candidateDigest, expected, 'import-json')
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { AddChoiceDialog } from './components/AddChoiceDialog'
 import { FormalAcademicSettingsV9 } from './components/FormalAcademicSettingsV9'
+import { FormalV9DataManagement } from './components/FormalV9DataManagement'
 import { LessonEditor } from './components/LessonEditor'
 import { OneOffLessonEditor } from './components/OneOffLessonEditor'
 import { CourseResourceManagerDialog } from './components/CourseResourceManager'
@@ -227,6 +228,14 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
     subjectPort?.clearFeedback(); classPort?.clearFeedback(); academicPort?.clearFeedback(); setTableNotice('')
   }
   const closeLifecycle = () => { restoreModalFocus.current = true; setLifecycle(null) }
+  const completeImport = () => {
+    setLessonEditor(null)
+    setLessonDragIntent(null)
+    setOneOffEditor(null)
+    setTableDialog(null)
+    setPendingTerm(null)
+    setResource(null)
+  }
   const closeTimetable = () => { restoreModalFocus.current = true; setTableDialog(null) }
   useEffect(() => {
     if (lifecycle || tableDialog || !restoreModalFocus.current) return
@@ -392,7 +401,10 @@ export function FormalV9Workspace({ data, selection, onProjectChange, onTimetabl
     </main>
     {lifecycle && academicPort && <ProjectLifecycleView {...lifecycle} pending={pending} readOnly={!writable} protectDrafts
       onClose={closeLifecycle} renderAcademicSettings={(page) =>
-        <FormalAcademicSettingsV9 port={academicPort} page={page} />} />}
+        <FormalAcademicSettingsV9 port={academicPort} page={page} />}
+      renderDataManagement={(onImported) => formal
+        ? <FormalV9DataManagement transfer={formal.management.jsonTransfer}
+          disabled={!hostWritable || pending} onImported={() => { completeImport(); onImported() }} /> : null} />}
     {tableDialog?.mode === 'create' && <TimetableForm error={tableError} onSubmit={submitTimetable}
       submitting={pending} readOnly={!writable} protectDrafts onClose={closeTimetable} />}
     {tableDialog?.mode === 'edit' && tableDialog.source && <TimetableInfoDialog timetable={tableDialog.source}

@@ -1,5 +1,11 @@
 # Toki v0.3.2 roadmap
 
+## Phase 4D R4-1D-5E-2 — Formal V9 verified JSON transfer（完成）
+
+既有設定 Modal 已加入「資料管理」子頁，提供 verified exact-raw JSON 匯出、純驗證 preview、目前／匯入摘要、明確 replacement checkbox 與整份 V9 文件替換。匯入只走單一 Host 的 dedicated import path，保留 ordinary safe-update，並沿用 Web Lock、revision、activation lineage、`import-json` exact pre-backup、最多十份 rotation、receipt、Runtime Gate 與多分頁 stale 防護；V7／V8 JSON 不在本階段遷移。
+
+Domain／parser／controller／React／真實 persistence targeted tests 已覆蓋格式、schema、ID／引用／ownership、identity、duplicate／stale、exact Blob、backup／receipt、完整替換及合法 null selection。Disposable Chromium 已實際通過 verified download、preview 零寫入、完整替換與 reload、malformed JSON、backup failure、多分頁 stale，以及 document 成功但 metadata 失敗後的 blocked Recovery exact evidence。LocalStorage 多 key 仍非原子；Recovery 維持 export-only，不自動復原或挑選文件。完整平行／序列 Vitest、全 browser suite、lint 與 build 的最終執行結果須在交付報告分開列示。
+
 ## Phase 4D R4-1D-4C — Formal V9 effective-dated permanent Lesson swap（完成）
 
 正式 V9 已沿用既有 LessonEditor 的永久交換 UI，以一份純 domain candidate 同時切分兩個最新版本，且只交換 day／period；雙方 series identity、內容、EVERY／A／B pattern 與 A/B anchor 均保留。生效日可為雙方非 occurrence，但必須位於相同 Project／Timetable／TeachingUnit、TeachingUnit term 與有效區間交集。歷史 Override 保留並重驗，future Override 與完整 grouped swap 只有在可安全映射、重綁及解析時才提交；fixed／Override／OneOff 衝突、跨界 group、malformed group 或任何引用問題均 fail closed。

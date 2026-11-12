@@ -336,6 +336,8 @@ export async function readFormalV9Evidence(page: Page) {
     const decision = await runtime.inspectFormalRuntime(localStorage)
     return {
       document: loaded.document,
+      rawDocument: loaded.rawDocument,
+      rawMetadata: loaded.rawMetadata,
       revision: loaded.metadata?.documentRevision ?? null,
       attemptId: loaded.metadata?.attemptId ?? null,
       validDocument: validators.isCompatibleAppDataV9(loaded.document),

@@ -21,6 +21,9 @@ beforeEach(() => {
       host = { ...host, data: next, revision: receipt.revision, receipt }
       return receipt
     }),
+    createConfirmedExportSnapshot: vi.fn(async () => ({ raw: JSON.stringify(host.data),
+      revision: host.revision, digest: `sha256:${'0'.repeat(64)}` as const })),
+    replaceDocumentFromValidatedImport: vi.fn(async () => { throw new Error('not used') }),
     exportLocalJson: () => null, exportStoredJson: () => null,
     exportActivationJson: () => null, exportBackupJson: () => null, adoptExternal: async () => false,
   }

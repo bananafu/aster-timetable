@@ -1,5 +1,13 @@
 # Toki v0.3.2 product specification
 
+## Phase 4D R4-1D-5E-2 — Formal V9 verified JSON transfer
+
+正式 V9 的既有「專案設定」Modal 根目錄提供「資料管理」子頁。手動匯出只在全域 Host active、非 pending 且完整 evidence 通過驗證時建立整份 confirmed AppDataV9 下載，檔名為本地時間 `toki-backup-YYYY-MM-DD-HHmmss.json`；下載 Blob 使用 verified snapshot 的 exact persisted raw，不含 activation metadata 或自動備份。歷史唯讀 Project 不阻擋全域匯出，但 stale／conflict／write-error 狀態不得宣稱一般匯出成功；瀏覽器觸發下載也不代表檔案已寫入磁碟。
+
+匯入只接受通過完整 V9 validator 的 `schemaVersion: 9` JSON。選檔先顯示檔名、schema version，以及目前 confirmed／匯入候選的 Project、Timetable、RecurringLesson、OneOffLesson、Event 數量，不寫入 storage；V7／V8、損壞引用、重複 ID、非法 ownership 或 scope 均拒絕，不修復、遷移、合併或重建 ID。使用者必須勾選「我了解目前資料將被替換」才可確認；更換檔案會重置確認。
+
+確認匯入是整份文件替換。它只經單一 Formal V9 Host 的 dedicated import path，沿用既有 Web Lock、revision、activation evidence、receipt、Runtime Gate 與最多十份的 `toki-v9-auto-backup:` rotation；`import-json` backup 必須先保存並讀回驗證 exact 舊文件、revision、digest 與獨立 mutation attempt。一般 Host update 仍受原本 safe-update 約束。成功後依 imported `activeProjectId` 重新選取，合法 null 保持 null；失敗保留預覽並停用 stale Host。LocalStorage 文件與 metadata 的跨 key 寫入不具原子 rollback；partial write reload 後由 Runtime Gate 阻擋，Recovery 僅提供 exact evidence export，不自動 resume、rollback、Fresh、merge 或選擇新舊文件。
+
 ## Phase 4D R4-1C-3 — Formal V9 full-page recovery
 
 正式入口在合法 V8、已驗證的中斷升級或唯一孤立備份時顯示獨立全頁復原；不更動 Fresh Modal、V7 舊資料入口或正常 V9 Workspace。V8 轉換要求逐筆確認科目與任教配置歸屬、匯出同一快照的原始 JSON，並明確確認外部檔案已保存。中斷與孤立備份只允許使用已驗證的同一候選續接。不明、損壞、讀取失敗及多筆孤立備份維持阻擋，僅在有可取得的證據時提供原始資料匯出。復原成功後重新通過正式 Runtime Gate 才掛載既有 V9 Host。

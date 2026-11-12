@@ -4,6 +4,7 @@ import type { CopyProjectV8Input } from '../data/projectRuntimeV8'
 import type { TimetableV8Details } from '../data/timetablesV8'
 import { createFormalProjectTimetableV9Controller, reconcileFormalProjectTimetableV9Selection,
   type FormalProjectTimetableV9Selection, type FormalTimetableCopyInput } from '../formalProjectTimetableV9'
+import { createFormalV9JsonTransferController, type PreparedV9JsonImport } from '../formalV9JsonTransfer'
 import { toFormalV9HostPort, type FormalV9HostPort } from '../formalRuntime'
 import { useAppDataV9 } from './useAppDataV9'
 
@@ -56,9 +57,12 @@ export function createFormalProjectTimetableV9Actions(controller: FormalV9Contro
 
 export function useFormalProjectTimetableV9Adapter() {
   const host = useAppDataV9()
+  const hostRef = useRef(host)
+  hostRef.current = host
   const [selection, setSelection] = useState<FormalProjectTimetableV9Selection>({
     projectId: null, timetableId: null,
   })
+  const preserveImportedNullSelectionRef = useRef(false)
   const selectionRef = useRef(selection)
   selectionRef.current = selection
   const snapshotRef = useRef(toFormalV9HostPort(host))
@@ -66,6 +70,11 @@ export function useFormalProjectTimetableV9Adapter() {
   useEffect(() => {
     const document = host.data
     if (!document) return
+    if (preserveImportedNullSelectionRef.current && document.activeProjectId === null) {
+      preserveImportedNullSelectionRef.current = false
+      setSelection({ projectId: null, timetableId: null })
+      return
+    }
     setSelection((current) => reconcileFormalProjectTimetableV9Selection(document, current))
   }, [host.data])
   const port = useMemo(() => ({
@@ -85,5 +94,32 @@ export function useFormalProjectTimetableV9Adapter() {
   const select = useCallback<Select>((next) => setSelection(next), [])
   const actions = useMemo(() => controller
     ? createFormalProjectTimetableV9Actions(controller, select) : null, [controller, select])
-  return { host, controller, actions, selection }
+  const jsonTransferController = useMemo(() => createFormalV9JsonTransferController({
+    get document() { return hostRef.current.data },
+    get status() { return hostRef.current.status },
+    get writable() { return hostRef.current.writable },
+    get pending() { return hostRef.current.pending },
+    get revision() { return hostRef.current.revision },
+    createConfirmedExportSnapshot: () => hostRef.current.createConfirmedExportSnapshot(),
+    replaceDocumentFromValidatedImport: (input) =>
+      hostRef.current.replaceDocumentFromValidatedImport(input),
+  }), [])
+  const jsonTransfer = useMemo(() => ({
+    exportVerified: () => jsonTransferController.exportVerified(),
+    prepareImport: (fileName: string, raw: string) =>
+      jsonTransferController.prepareImport(fileName, raw),
+    confirmImport: async (prepared: PreparedV9JsonImport, candidateIdentity: string,
+      acknowledged: boolean) => {
+      const result = await jsonTransferController.confirmImport(prepared, candidateIdentity, acknowledged)
+      if (result.activeProjectId === null) {
+        preserveImportedNullSelectionRef.current = true
+        setSelection({ projectId: null, timetableId: null })
+      } else {
+        setSelection(reconcileFormalProjectTimetableV9Selection(prepared.candidate.document,
+          { projectId: result.activeProjectId }))
+      }
+      return result
+    },
+  }), [jsonTransferController])
+  return { host, controller, actions, selection, jsonTransfer }
 }

@@ -4,8 +4,11 @@ import { APP_DATA_V7_KEY } from '../data/storageV7'
 import { APP_DATA_V8_KEY } from '../data/storageV8'
 import { V8_BOOTSTRAP_KEY, V8_TRANSACTION_KEY } from '../data/activationV8'
 import { APP_DATA_V9_KEY, V9_ACTIVATION_KEY, checkV9WriteEvidence, loadAppDataV9,
-  persistAppDataV9, type V9HighRiskOperation, type V9LoadStatus, type V9PersistenceReceipt } from '../data/storageV9'
+  createConfirmedV9ExportSnapshot, persistAppDataV9, replaceAppDataV9FromValidatedImport,
+  type V9ConfirmedExportSnapshot, type V9HighRiskOperation, type V9LoadStatus,
+  type V9PersistenceReceipt } from '../data/storageV9'
 import { isCompatibleAppDataV9 } from '../data/validators/v9'
+import { inspectFormalRuntime } from '../formalRuntime'
 
 export type V9HostStatus = V9LoadStatus | 'conflict' | 'write-error' | 'lock-unavailable'
 export interface V9Host {
@@ -20,6 +23,11 @@ export interface V9Host {
   update: (produce: (current: AppDataV9) => AppDataV9) => Promise<V9PersistenceReceipt>
   updateHighRisk?: (produce: (current: AppDataV9) => AppDataV9,
     operation: V9HighRiskOperation) => Promise<V9PersistenceReceipt>
+  createConfirmedExportSnapshot: () => Promise<V9ConfirmedExportSnapshot>
+  replaceDocumentFromValidatedImport: (input: {
+    raw: string
+    digest: `sha256:${string}`
+  }) => Promise<V9PersistenceReceipt>
   exportLocalJson: () => string | null
   exportStoredJson: () => string | null
   exportActivationJson: () => string | null
@@ -151,8 +159,82 @@ export function useAppDataV9(): V9Host {
     return true
   }, [verify])
 
+  const createConfirmedExportSnapshot = useCallback(async () => {
+    const expectedRaw = rawRef.current
+    const expectedMetadataRaw = metadataRawRef.current
+    if (!writableRef.current || pendingRef.current || !expectedRaw || !expectedMetadataRaw) {
+      throw new Error('v9-not-exportable')
+    }
+    const generation = generationRef.current
+    try {
+      const snapshot = await createConfirmedV9ExportSnapshot(localStorage, {
+        raw: expectedRaw, metadataRaw: expectedMetadataRaw, revision: revisionRef.current,
+      })
+      if (generationRef.current !== generation) throw new Error('external-storage-change')
+      return snapshot
+    } catch (cause) {
+      revoke(cause instanceof Error ? cause.message : 'v9-export-evidence-failed')
+      throw cause
+    }
+  }, [revoke])
+
+  const replaceDocumentFromValidatedImport = useCallback(async (input: {
+    raw: string; digest: `sha256:${string}`
+  }) => {
+    const current = documentRef.current
+    const expectedRaw = rawRef.current
+    const expectedMetadataRaw = metadataRawRef.current
+    if (!writableRef.current || pendingRef.current || !current || !expectedRaw || !expectedMetadataRaw) {
+      throw new Error('v9-not-writable')
+    }
+    pendingRef.current = true
+    setPending(true)
+    const generation = generationRef.current
+    try {
+      const confirmed = await replaceAppDataV9FromValidatedImport(localStorage, current,
+        input.raw, input.digest, { raw: expectedRaw, metadataRaw: expectedMetadataRaw,
+          revision: revisionRef.current })
+      if (generationRef.current !== generation) throw new Error('external-storage-change')
+      const expectedMetadata = JSON.parse(expectedMetadataRaw) as { attemptId: string;
+        currentDigest: `sha256:${string}` }
+      if (confirmed.raw !== input.raw || confirmed.revision !== revisionRef.current + 1
+        || confirmed.attemptId !== expectedMetadata.attemptId
+        || confirmed.preMutationBackup?.operation !== 'import-json'
+        || confirmed.preMutationBackup.rawDocument !== expectedRaw
+        || confirmed.preMutationBackup.revision !== revisionRef.current
+        || confirmed.preMutationBackup.digest !== expectedMetadata.currentDigest
+        || confirmed.mutationAttemptId !== confirmed.preMutationBackup.mutationAttemptId) {
+        throw new Error('post-import-receipt-mismatch')
+      }
+      const loaded = loadAppDataV9(localStorage)
+      if (loaded.rawDocument !== confirmed.raw || !loaded.rawMetadata || !loaded.document
+        || loaded.metadata?.documentRevision !== confirmed.revision) {
+        throw new Error('post-write-readback-failed')
+      }
+      const runtime = await inspectFormalRuntime(localStorage)
+      if (runtime.runtime !== 'v9') throw new Error('post-import-runtime-gate-failed')
+      rawRef.current = loaded.rawDocument
+      metadataRawRef.current = loaded.rawMetadata
+      backupKeyRef.current = loaded.metadata.backupKey
+      revisionRef.current = confirmed.revision
+      documentRef.current = loaded.document
+      setData(loaded.document)
+      setReceipt(confirmed)
+      setStatus('active')
+      setErrorCode(null)
+      return confirmed
+    } catch (cause) {
+      revoke(cause instanceof Error ? cause.message : 'v9-import-failed', 'write-error')
+      throw cause
+    } finally {
+      pendingRef.current = false
+      setPending(false)
+    }
+  }, [revoke])
+
   return { data, status, writable, pending, receipt, revision: revisionRef.current, errorCode,
     update, updateHighRisk: (produce, operation) => update(produce, operation), adoptExternal,
+    createConfirmedExportSnapshot, replaceDocumentFromValidatedImport,
     exportLocalJson: () => documentRef.current ? JSON.stringify(documentRef.current) : null,
     exportStoredJson: () => { try { return localStorage.getItem(APP_DATA_V9_KEY) } catch { return null } },
     exportActivationJson: () => { try { return localStorage.getItem(V9_ACTIVATION_KEY) } catch { return null } },

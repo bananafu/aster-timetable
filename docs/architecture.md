@@ -1,5 +1,13 @@
 # Toki v0.3.2 architecture
 
+## Phase 4D R4-1D-5E-2 — Formal V9 verified JSON export and replacement
+
+`useAppDataV9.createConfirmedExportSnapshot()` 在既有 V9 storage Web Lock 內，以 Host 固定的 raw／metadata／revision 呼叫 `checkV9WriteEvidence()`，再核對 exact document raw 的 SHA-256、metadata `currentDigest`、`documentRevision` 及最終讀回。不可變 snapshot 只供下載 exact raw、revision 與 digest；一般匯出不包入 activation 或 backup。`formalV9JsonTransfer` 的 parser 只接受 schema 9，重用 `parseAppDataV9Raw()` 與 `isCompatibleAppDataV9()`，並以候選原始 bytes 的 SHA-256 與長度固定 preview identity；摘要只由已驗證文件產生。
+
+全量替換由 `replaceAppDataV9FromValidatedImport()` 這個 import-only storage 入口執行，沒有加入 `FormalV9HostPort`，一般 `update()`／`updateHighRisk()` 仍先通過既有 `isSafeAppDataV9Update()`。Dedicated path 在同一 Web Lock 內重驗 current evidence、baseline、候選 raw／digest／schema，先建立並確認 `import-json` pre-mutation backup 與 rotation，再依序寫入 exact imported raw、讀回、確認舊 metadata 未變、以原 activation attempt／backup／initial digest／source lineage 產生 revision +1 metadata、讀回並重跑 evidence check。Host 在 verified receipt 與正式 Runtime Gate 均通過後才替換 React confirmed document；controller 再核對候選 identity、preview baseline 與 matching backup receipt，防 pending、duplicate submit 與 stale preview。
+
+此流程不宣稱 LocalStorage 跨 key 原子性。若 document 已寫入而 activation metadata 寫入失敗，不核發成功、不更新 selection，Host 進入 write-error；reload 的 Runtime Gate 回報 blocked-v9，既有 Recovery 以 export-only snapshot 保留新 document raw、舊 metadata raw 與 exact `import-json` backup，且不新增 mutation action。
+
 ## Phase 4D R4-1D-4C — Formal V9 effective-dated permanent Lesson swap
 
 Formal V9 沿用既有 `LessonEditor` 的「從指定日期起 → 永久交換」、生效日期、第二堂課、preview 與 confirmation。Adapter 只列出同一 Project／Timetable／TeachingUnit、不同 series、且生效日落在雙方最新版本有效區間交集內的候選；preview 以 `permanentlySwapLessonsV9` 建立並丟棄完整 candidate，不寫入。Confirm 由固定的 editor identity、selection 與 document baseline 重新驗證最新 confirmed document，再呼叫既有 controller。

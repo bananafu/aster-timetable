@@ -35,6 +35,15 @@ pre-mutation backup evidence, and active Runtime Gate evidence. The regression s
   rejection, exact high-risk backup failure behavior, reload and stale editor protection; and
 - Recovery exact-raw export, focus, cross-page storage events and snapshot invalidation.
 
+R4-1D-5E-2 adds `formal-v9-json-transfer.spec.ts` on the same disposable fixture. It proves the
+downloaded normal backup uses the product filename and exact confirmed document raw; malformed input
+and validation preview do not write; explicit confirmation replaces a different Project set and
+survives reload with valid evidence. Separate cases prove `import-json` backup failure and another
+tab's newer revision block replacement, while a document-write/metadata-write partial failure reloads
+to blocked export-only Recovery with exact new document, old activation metadata and pre-import
+backup evidence. The browser checks do not claim a user-selected download destination was durably
+written, and Recovery gains no automatic mutation action.
+
 R4-1D-3B adds `formal-v9-swap.spec.ts` on the same isolated fixture. It proves same-day UI
 swap → reload → grouped revoke, one revision per atomic operation, card-to-card cross-date intent
 in the displayed resolved week, OneOff fail-closed preview, verified V9 readback/Runtime Gate
