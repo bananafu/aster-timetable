@@ -28,6 +28,28 @@ const unitLabel = (unit: TeachingUnit, units: TeachingUnit[]) => {
   if (peers.length === 1) return unit.schoolLevel === 'other' ? unit.name : levelLabel[unit.schoolLevel]
   return `${unit.schoolLevel === 'other' ? unit.name : levelLabel[unit.schoolLevel]}（重複設定 ${peers.findIndex((item) => item.id === unit.id) + 1}：${unit.name}）`
 }
+const dialogUnitLabel = (unit: TeachingUnit, units: TeachingUnit[]) => {
+  const peers = units.filter((item) => item.schoolId === unit.schoolId && item.schoolLevel === unit.schoolLevel)
+  return peers.length === 1 ? levelLabel[unit.schoolLevel]
+    : `${levelLabel[unit.schoolLevel]}（重複設定 ${peers.findIndex((item) => item.id === unit.id) + 1}）`
+}
+const subjectDialogMessages: Record<string, string> = {
+  '目前教師尚無此科目；可建立獨立 Subject 並配置到目前任教單位。': '目前教師尚無此科目；可建立獨立 Subject 並配置到目前學制。',
+  '目前教師的科目已配置到目前任教單位。': '目前教師的科目已配置到目前學制。',
+  '目前教師已有此科目，可配置到目前任教單位。': '目前教師已有此科目，可配置到目前學制。',
+  '已儲存：已配置科目到目前任教單位。': '已儲存：已配置科目到目前學制。',
+  '已儲存：已解除目前任教單位的科目配置；科目本身仍保留。': '已儲存：已解除目前學制的科目配置；科目本身仍保留。',
+}
+const subjectDialogMessage = (message: string) => {
+  const copy = subjectDialogMessages[message] ?? message
+  return copy.replace(/(\d+) 筆任教單位配置/g, '$1 筆科目配置')
+}
+const classDialogMessages: Record<string, string> = {
+  'Project 或任教單位已切換，舊操作不能寫入目前範圍。': 'Project 或目前學制已切換，舊操作不能寫入目前範圍。',
+  '任教單位不屬於目前 Project。': '目前學制不屬於目前 Project。',
+  '目前任教單位已存在相同年級與班號。': '目前學制已存在相同年級與班號。',
+}
+const classDialogMessage = (message: string) => classDialogMessages[message] ?? message
 const subjectDraft = (subject: Subject): SubjectDraft => ({ name: subject.name, shortName: subject.shortName, color: subject.color, applicableSchoolLevels: [...(subject.applicableSchoolLevels ?? SCHOOL_LEVELS)] })
 const classDraft = (item: ProjectClass): ClassDraft => ({ name: item.name, grade: item.grade, classNumber: item.classNumber, room: item.room ?? '', teachingUnitId: item.teachingUnitId })
 
@@ -508,11 +530,12 @@ function V9SubjectManagerDialog(props: V9SubjectProps & { onClose: () => void })
       else document.querySelector<HTMLButtonElement>('[data-course-add]')?.focus()
     }
   }, [])
-  return <Modal title="管理科目" subtitle="科目屬於目前教師課表，任教單位配置彼此獨立。"
+  const dialogUi = { ...ui, error: subjectDialogMessage(ui.error), success: subjectDialogMessage(ui.success) }
+  return <Modal title="管理科目" subtitle="科目屬於目前教師課表，各學制的科目配置彼此獨立。"
     onClose={() => ui.requestTransition(props.onClose)}>
     <div className="resource-manager-dialog">
       <div ref={content} className="resource-manager-scroll">
-        <V9SubjectManagerContent {...props} ui={ui} />
+        <V9SubjectManagerContent {...props} ui={dialogUi} dialogCopy />
       </div>
       <div className="resource-manager-complete">
         <p>「新增科目」會儲存目前這一筆；「建立」會完成管理並返回原流程。</p>
@@ -537,7 +560,7 @@ function v9CatalogStatusLabel(status: string) {
 }
 
 function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSettings, onCreated,
-  ui }: V9SubjectProps & { ui: V9SubjectUiSession }) {
+  ui, dialogCopy = false }: V9SubjectProps & { ui: V9SubjectUiSession; dialogCopy?: boolean }) {
   const [editor, setEditor] = useState<EditorSelection>(null)
   const [subjectQuery, setSubjectQuery] = useState('')
   const [subjectActionId, setSubjectActionId] = useState<string | null>(null)
@@ -557,6 +580,9 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
   const editable = !readOnly && port.writable && !port.pending && Boolean(view?.project && view.timetable)
   const unavailableReason = readOnly ? '目前為唯讀狀態，不能修改科目。'
     : view?.actions.createAndConfigureFromCatalog.reason ?? view?.actions.createCustom.reason ?? null
+  const configurationScope = dialogCopy ? '目前學制' : '目前任教單位'
+  const configurationCountLabel = dialogCopy ? '科目配置' : '任教單位配置'
+  const displayReason = (reason: string) => dialogCopy ? subjectDialogMessage(reason) : reason
   const scopeKey = `${port.selection.projectId ?? ''}:${port.selection.timetableId ?? ''}:${port.selection.teachingUnitId ?? ''}`
   const subjectCreateKey = `subject-create:${scopeKey}`
   const emptyDraft = emptySubjectDraft(unit ?? undefined)
@@ -637,7 +663,7 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
     const item = view?.catalog.find((candidate) => candidate.entry.catalogKey === catalogKey)
     if (!item || !unit) return
     if (confirmLevelExtension && !window.confirm(
-      `將既有科目「${item.entry.name}」擴充為適用${levelLabel[unit.schoolLevel]}，並配置到目前任教單位？\n科目 ID、名稱、簡稱與顏色都會保留。`)) return
+      `將既有科目「${item.entry.name}」擴充為適用${levelLabel[unit.schoolLevel]}，並配置到${configurationScope}？\n科目 ID、名稱、簡稱與顏色都會保留。`)) return
     setSubjectActionId(`catalog:${catalogKey}`)
     await finish(() => port.actions.configure(subjectId, confirmLevelExtension), undefined, true)
   }
@@ -652,13 +678,13 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
       || !ui.drafts[selectedSubjectKey]) return
     setSubjectActionId(selectedSubject.id)
     const impact = port.actions.impact(selectedSubject.id)
-    if (!window.confirm(`儲存目前教師科目「${selectedSubject.name}」的變更？這會影響 ${impact.configurations.length} 筆任教單位配置及 ${impact.references.length} 筆課程、異動或進度引用。`)) return
+    if (!window.confirm(`儲存目前教師科目「${selectedSubject.name}」的變更？這會影響 ${impact.configurations.length} 筆${configurationCountLabel}及 ${impact.references.length} 筆課程、異動或進度引用。`)) return
     await finish(() => port.actions.update(selectedSubject.id, { ...selectedDraft,
       applicableSchoolLevels: [...selectedDraft.applicableSchoolLevels] }), selectedSubjectKey)
   }
   const deleteSubject = async (subject: Subject) => {
     setSubjectActionId(subject.id)
-    if (!window.confirm(`確定永久刪除目前教師科目「${subject.name}」？\n仍有任教單位配置、課程、歷史版本、異動、單日課程或教學進度引用時，系統會阻止刪除。`)) return
+    if (!window.confirm(`確定永久刪除目前教師科目「${subject.name}」？\n仍有${configurationCountLabel}、課程、歷史版本、異動、單日課程或教學進度引用時，系統會阻止刪除。`)) return
     const result = await finish(() => port.actions.delete(subject.id), selectedSubjectKey)
     if (result) setEditor(null)
   }
@@ -683,7 +709,7 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
         onChange={(event) => changeUnit(event.target.value)} disabled={!schoolUnits.length || ui.locked}>
         {duplicate && <option value="">請選擇要管理的學制設定</option>}
         {schoolUnits.map((candidate) => <option key={candidate.id} value={candidate.id}>
-          {unitLabel(candidate, units)}</option>)}
+          {dialogCopy ? dialogUnitLabel(candidate, units) : unitLabel(candidate, units)}</option>)}
       </select></label>
     </div>
     {(!schools.length || !units.length) && <div className="settings-empty">
@@ -693,7 +719,9 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
 
     {unit && !editor && <section className="resource-browser subject-picker" aria-label="科目清單">
       <ResourceBrowserHeading title="我的科目"
-        description={`目前${levelLabel[unit.schoolLevel]}可使用的教師科目。點標籤可編輯；× 只解除目前任教單位配置，科目本身仍保留。`}
+        description={dialogCopy
+          ? `目前${levelLabel[unit.schoolLevel]}可使用的教師科目。點標籤可編輯；× 只解除目前學制的科目配置，科目本身仍保留。`
+          : `目前${levelLabel[unit.schoolLevel]}可使用的教師科目。點標籤可編輯；× 只解除目前任教單位配置，科目本身仍保留。`}
         dirtyCount={dirtyCount} action={null} />
       <label className="subject-picker-search">搜尋科目<input type="search" aria-label="搜尋科目"
         value={subjectQuery} onChange={(event) => setSubjectQuery(event.target.value)}
@@ -703,8 +731,8 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
           const key = `subject:${scopeKey}:${subject.id}`
           const preview = ui.draft(key, subjectDraft(subject))
           const configured = configuredIds.has(subject.id)
-          const removeAction = configured ? `解除科目「${subject.name}」的目前任教單位配置`
-            : `科目「${subject.name}」尚未配置到目前任教單位`
+          const removeAction = configured ? `解除科目「${subject.name}」的${configurationScope}配置`
+            : `科目「${subject.name}」尚未配置到${configurationScope}`
           return <div key={subject.id} style={{ display: 'grid', gap: 4 }}>
             <div className="subject-chip">
               <button type="button" className="subject-chip-edit" aria-label={`編輯科目 ${subject.name}`}
@@ -730,10 +758,10 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
             const actionKey = `catalog:${item.entry.catalogKey}`
             const inlineError = subjectActionId === actionKey ? ui.error : ''
             return <div key={item.entry.catalogKey} className={`subject-catalog-card ${item.analysisStatus}`}
-              title={item.reason}><i style={{ background: item.entry.color }} aria-hidden="true" />
+              title={displayReason(item.reason)}><i style={{ background: item.entry.color }} aria-hidden="true" />
               <span><strong>{item.entry.name}</strong><small>{item.entry.shortName}</small>
                 {(inlineError || !['safe-to-create-and-configure', 'configured', 'available-to-configure'].includes(item.status))
-                  && <small role={inlineError ? 'alert' : undefined}>{inlineError || item.reason}</small>}</span>
+                  && <small role={inlineError ? 'alert' : undefined}>{inlineError || displayReason(item.reason)}</small>}</span>
               {item.status === 'safe-to-create-and-configure'
                 ? <button type="button" aria-label={`加入預設科目 ${item.entry.name}`}
                     title={`加入 ${item.entry.name}`} disabled={!editable || ui.locked}
@@ -745,10 +773,10 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
                         onClick={() => void configureCatalog(item.existingSubjectId!, item.entry.catalogKey, false)}>＋</button>
                     : item.status === 'requires-level-confirmation' && item.existingSubjectId
                       ? <button type="button" aria-label={`將既有科目 ${item.entry.name} 加入此學制並配置`}
-                          title={item.reason} disabled={!editable || ui.locked}
+                          title={displayReason(item.reason)} disabled={!editable || ui.locked}
                           onClick={() => void configureCatalog(item.existingSubjectId!, item.entry.catalogKey, true)}
                           style={{ width: 'auto', height: 'auto', padding: '5px 8px', borderRadius: 'var(--radius-sm)', fontSize: 10, whiteSpace: 'nowrap' }}>加入此學制</button>
-                      : <em title={item.reason}>{v9CatalogStatusLabel(item.status)}</em>}
+                      : <em title={displayReason(item.reason)}>{v9CatalogStatusLabel(item.status)}</em>}
             </div>
           })}
           {!visibleCatalogItems.length && <p className="resource-list-empty">{unit.schoolLevel === 'other'
@@ -791,7 +819,7 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
           && <p className="form-error" role="alert">{ui.error}</p>}
         <div className="subject-management-actions">
           {configuredIds.has(selectedSubject.id) && <button type="button" disabled={!editable}
-            onClick={() => void unconfigure(selectedSubject)}>解除目前任教單位配置</button>}
+            onClick={() => void unconfigure(selectedSubject)}>解除{configurationScope}配置</button>}
           <button type="submit" className="primary-button"
             disabled={!editable || !ui.drafts[selectedSubjectKey]}>儲存科目</button>
           <button type="button" className="danger-outline" disabled={!editable}
@@ -802,7 +830,7 @@ function V9SubjectManagerContent({ subjectPort: port, readOnly = false, onOpenSe
       </form>
     </section>}
     {!unit && units.length > 0 && <p className="settings-empty">請先選擇學校與學制，才能查看或新增科目。</p>}
-    {!editable && unavailableReason && !ui.error && <p role="status">{unavailableReason}</p>}
+    {!editable && unavailableReason && !ui.error && <p role="status">{displayReason(unavailableReason)}</p>}
     {ui.error && !subjectActionId && <p className="form-error" role="alert">{ui.error}</p>}
     {ui.locked && <p role="status">正在儲存科目變更，尚未確認 Host receipt…</p>}
     {ui.success && <p role="status">{ui.success}</p>}
@@ -891,11 +919,12 @@ function V9ClassManagerDialog(props: V9ClassProps & { onClose: () => void }) {
       else document.querySelector<HTMLButtonElement>('[data-course-add]')?.focus()
     }
   }, [])
+  const dialogUi = { ...ui, error: classDialogMessage(ui.error), success: classDialogMessage(ui.success) }
   return <Modal title="管理班級" subtitle="班級屬於所選專案與學制，不屬於教師課表。"
     onClose={() => ui.requestTransition(props.onClose)}>
     <div className="resource-manager-dialog">
       <div ref={content} className="resource-manager-scroll">
-        <V9ClassManagerContent {...props} ui={ui} />
+        <V9ClassManagerContent {...props} ui={dialogUi} dialogCopy />
       </div>
       <div className="resource-manager-complete">
         <p>「新增班級」會儲存目前這一筆；「建立」會完成管理並返回原流程。</p>
@@ -912,7 +941,7 @@ function V9ClassManager(props: V9ClassProps) {
 }
 
 function V9ClassManagerContent({ classPort: port, readOnly = false, onOpenSettings, onCreated,
-  ui }: V9ClassProps & { ui: V9ClassUiSession }) {
+  ui, dialogCopy = false }: V9ClassProps & { ui: V9ClassUiSession; dialogCopy?: boolean }) {
   const [editorId, setEditorId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [classActionId, setClassActionId] = useState<string | null>(null)
@@ -1029,7 +1058,7 @@ function V9ClassManagerContent({ classPort: port, readOnly = false, onOpenSettin
         onChange={(event) => changeUnit(event.target.value)} disabled={!schoolUnits.length || ui.locked}>
         {duplicate && <option value="">請選擇要管理的學制設定</option>}
         {schoolUnits.map((candidate) => <option key={candidate.id} value={candidate.id}>
-          {unitLabel(candidate, units)}</option>)}
+          {dialogCopy ? dialogUnitLabel(candidate, units) : unitLabel(candidate, units)}</option>)}
       </select></label>
     </div>
     {(!schools.length || !units.length) && <div className="settings-empty">

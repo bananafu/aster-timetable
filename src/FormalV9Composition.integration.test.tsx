@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { FormalV9Composition } from './FormalV9Composition'
+import { FormalV9Composition, FormalV9Workspace } from './FormalV9Composition'
 import { FormalAppEntry } from './DevAppEntry'
 import { bootstrapEmptyV8 } from './data/bootstrapV8'
 import { fingerprintV7Raw } from './data/activationV8'
@@ -475,6 +475,90 @@ describe('formal V9 management composition', () => {
     expect(useAppDataV4).not.toHaveBeenCalled()
   })
 
+  it('routes all four AddChoice entries through the existing managers and restores focus', async () => {
+    const f = fixture()
+    await activate(f.data)
+    await mount()
+    const addTrigger = screen.getByRole('button', { name: '新增課程' })
+    addTrigger.focus()
+    fireEvent.click(addTrigger)
+
+    let choice = screen.getByRole('dialog', { name: '新增課程' })
+    for (const name of [/新增固定課程/, /新增單日課程/, /管理科目/, /管理班級/]) {
+      expect(within(choice).getByRole('button', { name })).toBeTruthy()
+    }
+    expect(choice.querySelectorAll('.add-choice-group')).toHaveLength(2)
+    expect(choice.textContent).not.toContain('任教單位')
+    expect((within(choice).getByRole('button', { name: /新增固定課程/ }) as HTMLButtonElement).disabled).toBe(false)
+    expect((within(choice).getByRole('button', { name: /新增單日課程/ }) as HTMLButtonElement).disabled).toBe(false)
+
+    fireEvent.click(within(choice).getByRole('button', { name: /管理科目/ }))
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(screen.getByRole('dialog', { name: '管理科目' }).textContent).not.toContain('任教單位')
+    expect(screen.getByRole('button', { name: '編輯科目 甲專用' })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    choice = screen.getByRole('dialog', { name: '新增課程' })
+    expect(document.activeElement).toBe(within(choice).getByRole('button', { name: /管理科目/ }))
+
+    fireEvent.click(within(choice).getByRole('button', { name: /管理班級/ }))
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    const manager = screen.getByRole('dialog', { name: '管理班級' })
+    expect(manager.textContent).not.toContain('任教單位')
+    fireEvent.click(within(manager).getByRole('button', { name: '＋ 新增班級' }))
+    const form = within(manager).getByRole('form', { name: '新增班級表單' })
+    fireEvent.change(within(form).getByLabelText('新班級班號'), { target: { value: '2' } })
+    fireEvent.click(within(form).getByRole('button', { name: '新增班級' }))
+    await waitFor(() => expect(within(manager).getByText('已儲存：已新增班級。')).toBeTruthy())
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    expect(stored().classes).toContainEqual(expect.objectContaining({ projectId: f.projectA,
+      teachingUnitId: f.seniorA.id, name: '102' }))
+    fireEvent.click(within(manager).getByRole('button', { name: '關閉對話框' }))
+    choice = screen.getByRole('dialog', { name: '新增課程' })
+    expect(document.activeElement).toBe(within(choice).getByRole('button', { name: /管理班級/ }))
+    expect(within(choice).getByRole('button', { name: /管理科目/ })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(addTrigger)
+  })
+
+  it('keeps lesson entries disabled without a Timetable and follows each resource port capability', async () => {
+    await activate(unsetAcademicFixture())
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    const choice = screen.getByRole('dialog', { name: '新增課程' })
+    expect((within(choice).getByRole('button', { name: /新增固定課程/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(choice).getByRole('button', { name: /新增單日課程/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(choice).getByRole('button', { name: /管理科目/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(choice).getByRole('button', { name: /管理班級/ }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(within(choice).getByRole('button', { name: /管理班級/ }))
+    expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+  })
+
+  it('disables every AddChoice path after an external selection change makes the Host non-writable', async () => {
+    const f = fixture()
+    await activate(f.data)
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    const loaded = loadAppDataV9(localStorage)
+    const external = switchActiveProjectV9(loaded.document!, f.projectB)
+    await persistAppDataV9(localStorage, loaded.document!, external, {
+      raw: loaded.rawDocument!, metadataRaw: loaded.rawMetadata!, revision: loaded.metadata!.documentRevision,
+    })
+    act(() => window.dispatchEvent(new StorageEvent('storage', {
+      key: V9_ACTIVATION_KEY, oldValue: loaded.rawMetadata,
+      newValue: localStorage.getItem(V9_ACTIVATION_KEY),
+      storageArea: localStorage,
+    })))
+    await waitFor(() => expect(screen.getByText('偵測到多分頁衝突')).toBeTruthy())
+    const choice = screen.getByRole('dialog', { name: '新增課程' })
+    for (const name of [/新增固定課程/, /新增單日課程/, /管理科目/, /管理班級/]) {
+      expect((within(choice).getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true)
+    }
+    fireEvent.click(within(choice).getByRole('button', { name: /管理班級/ }))
+    expect(screen.queryByRole('dialog', { name: '管理班級' })).toBeNull()
+    expect(stored().activeProjectId).toBe(f.projectB)
+  })
+
   it('isolates teacher Subjects and Project/unit Classes while keeping all selection local', async () => {
     const f = fixture()
     await activate(f.data)
@@ -539,26 +623,122 @@ describe('formal V9 management composition', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
     expect(screen.getAllByText('甲專用')).toHaveLength(2)
-    expect(screen.queryByText('A 週')).toBeNull()
-    expect(screen.queryByText('B 週')).toBeNull()
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.getByText('B 週')).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: '各校課表' }))
-    expect(screen.queryByText('A 週')).toBeNull()
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.getByText('B 週')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('篩選學制'), { target: { value: f.seniorA.id } })
     expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.queryByText('B 週')).toBeNull()
     expect(screen.getAllByText('甲專用')).toHaveLength(1)
     fireEvent.click(screen.getByRole('tab', { name: '總課表' }))
-    expect(screen.queryByText('A 週')).toBeNull()
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.getByText('B 週')).toBeTruthy()
     expect(screen.getAllByText('甲專用')).toHaveLength(2)
 
     chooseTeacher(/乙課表/)
     expect(screen.getByText('乙專用')).toBeTruthy()
     expect(screen.queryByText('甲專用')).toBeNull()
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.getByText('B 週')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '切換專案' }))
     fireEvent.click(screen.getByRole('menuitemradio', { name: /乙專案/ }))
     expect(screen.getByText('丙專用')).toBeTruthy()
     expect(screen.queryByText('乙專用')).toBeNull()
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.queryByText('B 週')).toBeNull()
     expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(raw)
     expect(useAppDataV4).not.toHaveBeenCalled()
+  })
+
+  it.each(['A', 'B'] as const)('shows one %s week label and follows date navigation', async (pattern) => {
+    const f = readableFixture()
+    const monday = toDateKey(startOfWeek(new Date()))
+    f.data.teachingUnits = f.data.teachingUnits.map((unit) => ({ ...unit,
+      weekCycle: { enabled: true, anchorDate: monday, anchorPattern: pattern } }))
+    render(<FormalV9Workspace data={f.data} selection={{ projectId: f.projectA, timetableId: 'teacher-a' }}
+      onProjectChange={vi.fn()} onTimetableChange={vi.fn()} source={{ kind: 'preview' }} />)
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect([...document.querySelectorAll('.week-pill strong')].map((node) => node.textContent)).toEqual([`${pattern} 週`])
+    fireEvent.click(screen.getByRole('button', { name: '下一週' }))
+    expect([...document.querySelectorAll('.week-pill strong')].map((node) => node.textContent))
+      .toEqual([`${pattern === 'A' ? 'B' : 'A'} 週`])
+    fireEvent.click(screen.getByRole('button', { name: '今天' }))
+    expect([...document.querySelectorAll('.week-pill strong')].map((node) => node.textContent)).toEqual([`${pattern} 週`])
+  })
+
+  it('matches the fixed A-week occurrence across a year boundary', () => {
+    const f = readableFixture()
+    f.data.teachingUnits = f.data.teachingUnits.map((unit) => ({ ...unit,
+      weekCycle: { enabled: true, anchorDate: '2026-12-28', anchorPattern: 'A' as const } }))
+    f.data.recurringLessons.find((item) => item.id === 'read-a-senior')!.weekPattern = 'A'
+    render(<FormalV9Workspace data={f.data} selection={{ projectId: f.projectA, timetableId: 'teacher-a' }}
+      onProjectChange={vi.fn()} onTimetableChange={vi.fn()} source={{ kind: 'preview' }}
+      initialWeekStart={fromDateKey('2026-12-28')} />)
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /課程 甲專用・甲班/ })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: '下一週' }))
+    expect(screen.getByText('B 週')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /課程 甲專用・甲班/ })).toBeNull()
+  })
+
+  it('follows the selected school and withholds a partial or unknown week label', () => {
+    const f = readableFixture()
+    f.data = createSchoolV9(f.data, f.projectA, { name: '乙校', color: '#718B6C' }, 'other-school')
+    f.data.teachingUnits = f.data.teachingUnits.map((unit) => unit.id === 'junior-a'
+      ? { ...unit, schoolId: 'other-school' } : unit)
+    render(<FormalV9Workspace data={f.data} selection={{ projectId: f.projectA, timetableId: 'teacher-a' }}
+      onProjectChange={vi.fn()} onTimetableChange={vi.fn()} source={{ kind: 'preview' }} />)
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.getByText('B 週')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: '各校課表' }))
+    expect(screen.getByText('A 週')).toBeTruthy()
+    expect(screen.queryByText('B 週')).toBeNull()
+    fireEvent.change(screen.getByLabelText('選擇學校'), { target: { value: 'other-school' } })
+    expect(screen.getByText('B 週')).toBeTruthy()
+    expect(screen.queryByText('A 週')).toBeNull()
+  })
+
+  it('does not infer A for a disabled cycle or claim a partial mixed scope', () => {
+    const f = readableFixture()
+    f.data.teachingUnits = f.data.teachingUnits.map((unit) => unit.id === 'junior-a'
+      ? { ...unit, weekCycle: { enabled: false as const, anchorDate: unit.weekCycle.anchorDate,
+        anchorPattern: unit.weekCycle.anchorPattern } } : unit)
+    render(<FormalV9Workspace data={f.data} selection={{ projectId: f.projectA, timetableId: 'teacher-a' }}
+      onProjectChange={vi.fn()} onTimetableChange={vi.fn()} source={{ kind: 'preview' }} />)
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect(document.querySelector('.week-pill')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: '各校課表' }))
+    fireEvent.change(screen.getByLabelText('篩選學制'), { target: { value: f.seniorA.id } })
+    expect(screen.getByText('A 週')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('篩選學制'), { target: { value: 'junior-a' } })
+    expect(document.querySelector('.week-pill')).toBeNull()
+  })
+
+  it('hides the week label when every visible unit is outside its date range', () => {
+    const f = readableFixture()
+    render(<FormalV9Workspace data={f.data} selection={{ projectId: f.projectA, timetableId: 'teacher-a' }}
+      onProjectChange={vi.fn()} onTimetableChange={vi.fn()} source={{ kind: 'preview' }}
+      initialWeekStart={fromDateKey('2036-01-07')} />)
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect(document.querySelector('.week-pill')).toBeNull()
+  })
+
+  it('restores the same week label from persisted V9 data after remount', async () => {
+    const f = readableFixture()
+    await activate(f.data)
+    const view = await mount()
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect([...document.querySelectorAll('.week-pill strong')].map((node) => node.textContent))
+      .toEqual(['A 週', 'B 週'])
+    view.unmount()
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: '我的課表' }))
+    expect([...document.querySelectorAll('.week-pill strong')].map((node) => node.textContent))
+      .toEqual(['A 週', 'B 週'])
   })
 
   it('creates, edits, and high-risk deletes a fixed lesson only after V9 Host receipts', async () => {
@@ -945,7 +1125,8 @@ describe('formal V9 management composition', () => {
     fireEvent.click(screen.getByRole('button', { name: '管理科目' }))
     let manager = screen.getByRole('dialog', { name: '管理科目' })
     fireEvent.click(within(manager).getByRole('button', { name: '加入預設科目 數學' }))
-    await waitFor(() => expect(within(manager).getByText('已儲存：已配置科目到目前任教單位。')).toBeTruthy())
+    await waitFor(() => expect(within(manager).getByText('已儲存：已配置科目到目前學制。')).toBeTruthy())
+    expect(manager.textContent).not.toContain('任教單位')
     fireEvent.click(within(manager).getByRole('button', { name: '關閉對話框' }))
 
     await waitFor(() => expect((screen.getByRole('combobox', { name: '課程科目' }) as HTMLInputElement).value)
@@ -1120,7 +1301,7 @@ describe('formal V9 management composition', () => {
     await waitFor(() => expect(screen.getByText('已儲存：已加入預設科目。')).toBeTruthy())
     const math = stored().subjects.find((item) => item.name === '數學')!
     expect(stored().teachingUnitSubjects).toContainEqual(expect.objectContaining({ subjectId: math.id, teachingUnitId: f.seniorA.id }))
-    fireEvent.click(screen.getByRole('button', { name: '解除科目「數學」的目前任教單位配置' }))
+    fireEvent.click(screen.getByRole('button', { name: '解除科目「數學」的目前學制配置' }))
     await waitFor(() => expect(stored().teachingUnitSubjects.some((item) => item.subjectId === math.id)).toBe(false))
     expect(stored().subjects.some((item) => item.id === math.id)).toBe(true)
     expect(screen.getByRole('button', { name: '加入預設科目 數學' }).textContent).toBe('＋')
@@ -1151,7 +1332,9 @@ describe('formal V9 management composition', () => {
   it('waits for the real Host receipt, blocks duplicate submissions and preserves a pending modal', async () => {
     await activate(fixture().data)
     await mount()
-    openResource('subjects')
+    fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '新增課程' }))
+      .getByRole('button', { name: /管理科目/ }))
     fireEvent.click(screen.getByRole('button', { name: '＋ 新增科目' }))
     fireEvent.change(screen.getByLabelText('新科目名稱'), { target: { value: '等待科目' } })
     fireEvent.change(screen.getByLabelText('新科目簡稱'), { target: { value: '等' } })
@@ -1171,6 +1354,8 @@ describe('formal V9 management composition', () => {
     await act(async () => { await release!() })
     await waitFor(() => expect(screen.getByText('已儲存：已新增科目。')).toBeTruthy())
     expect(stored().subjects.filter((item) => item.name === '等待科目')).toHaveLength(1)
+    closeDialog()
+    expect(screen.getByRole('dialog', { name: '新增課程' })).toBeTruthy()
   })
 
   it('keeps drafts on conflict and prevents Subject/Class writes after eligibility is revoked', async () => {
@@ -1210,6 +1395,7 @@ describe('formal V9 management composition', () => {
     render(<FormalV9Composition />)
     await waitFor(() => expect(screen.getByText('資料目前為唯讀，已暫停寫入')).toBeTruthy())
     expect(screen.queryByRole('button', { name: '新增' })).toBeNull()
+    expect((screen.getByRole('button', { name: '新增課程' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: /管理科目，/ }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: /管理班級，/ }) as HTMLButtonElement).disabled).toBe(true)
     expect(localStorage.getItem(APP_DATA_V9_KEY)).toBe(raw)

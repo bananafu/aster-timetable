@@ -45,7 +45,7 @@ type TimetableDialog = {
 }
 
 type ResourceMode = 'classes' | 'subjects'
-type ResourceDialogSource = 'sidebar' | 'lesson-editor' | 'one-off-editor'
+type ResourceDialogSource = 'add-choice' | 'sidebar' | 'lesson-editor' | 'one-off-editor'
 type ResourceDialogState = { mode: ResourceMode; source: ResourceDialogSource }
 type OneOffEditorState = { projectId: string; timetableId: string; date?: string; id?: string; source: 'add-choice' | 'schedule' }
 
@@ -504,6 +504,19 @@ export default function App() {
     if (source === 'sidebar') restoreSidebarResourceFocusRef.current = mode
     if (source === 'lesson-editor' || source === 'one-off-editor') resourceCreatedRef.current = null
     setResourceDialog(null)
+    if (source === 'add-choice') {
+      setAddChoiceFocus(mode)
+      setAddChoiceOpen(true)
+    }
+  }
+
+  const openResourceManagerFromAddChoice = (mode: ResourceMode) => {
+    if (!canManageResources || resourceDialog || storagePersistence.pending) return
+    resourceSession.requestTransition(() => {
+      setAddChoiceOpen(false)
+      setAddChoiceFocus(mode)
+      setResourceDialog({ mode, source: 'add-choice' })
+    })
   }
 
   const openResourceManagerFromEditor = (source: 'lesson-editor' | 'one-off-editor', mode: ResourceMode,
@@ -626,7 +639,7 @@ export default function App() {
 
       {storageStatus !== 'read-error' && <>{modal === 'event' && <EventForm onSubmit={handleAddEvent} onClose={() => setModal(null)} defaultDate={toDateKey(new Date())} />}
       {modal === 'settings' && <ProjectLifecycleModal data={appData} setData={setAppData} actions={projectLifecycleActions} initialPage={projectLifecycleInitialPage} storageStatus={storageStatus} storagePersistence={storagePersistence} readOnly={Boolean(historicalProject)} onClose={closeProjectSettings} onViewArchived={viewArchivedProject} />}</>}
-      {addChoiceOpen && <AddChoiceDialog initialFocus={addChoiceFocus} canAddLesson={canAddLesson} addLessonReason={addLessonUnavailableReason} canAddOneOff={canAddOneOff} addOneOffReason={createTimetableUnavailableReason || (!displayTimetable ? missingTimetableReason : '目前資料仍在儲存，請稍後再試。')} onAddOneOff={() => openOneOff(toDateKey(new Date()), undefined, 'add-choice')} onAddLesson={() => {
+      {addChoiceOpen && <AddChoiceDialog initialFocus={addChoiceFocus} canAddLesson={canAddLesson} addLessonReason={addLessonUnavailableReason} canAddOneOff={canAddOneOff} addOneOffReason={createTimetableUnavailableReason || (!displayTimetable ? missingTimetableReason : '目前資料仍在儲存，請稍後再試。')} canManageSubjects={canManageResources} manageSubjectsReason="目前無法管理科目，請先確認專案與儲存狀態。" canManageClasses={canManageResources} manageClassesReason="目前無法管理班級，請先確認專案與儲存狀態。" onManage={openResourceManagerFromAddChoice} onAddOneOff={() => openOneOff(toDateKey(new Date()), undefined, 'add-choice')} onAddLesson={() => {
         if (!canAddLesson) return
         setAddChoiceOpen(false)
         lessonEditorFromAddRef.current = true

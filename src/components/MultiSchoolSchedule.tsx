@@ -38,7 +38,7 @@ interface ResolvedProps {
   days: readonly ScheduleDisplayDay[]
   schools: readonly ScheduleDisplaySchool[]
   teachingUnits: readonly ScheduleDisplayTeachingUnit[]
-  onHeaderTeachingUnitChange?: (teachingUnitId: string | null) => void
+  onHeaderTeachingUnitChange?: (teachingUnitId: string | null, schoolId: string | null) => void
   onLessonClick?: (lessonId: string, date: string, overrideId?: string) => void
   onLessonDrop?: (intent: LessonDragIntent) => void
   onOneOffClick?: (oneOffId: string) => void
@@ -143,9 +143,10 @@ export function MultiSchoolSchedule(props: Props) {
   }, [draggedLesson])
   const headerTeachingUnitId = scope === 'school' && unitId !== 'all'
     && units.some((item) => item.id === unitId && item.schoolId === schoolId) ? unitId : null
+  const headerSchoolId = scope === 'school' && schools.some((item) => item.id === schoolId) ? schoolId : null
   useEffect(() => {
-    if (resolved) onHeaderTeachingUnitChange?.(headerTeachingUnitId)
-  }, [headerTeachingUnitId, onHeaderTeachingUnitChange, resolved])
+    if (resolved) onHeaderTeachingUnitChange?.(headerTeachingUnitId, headerSchoolId)
+  }, [headerTeachingUnitId, headerSchoolId, onHeaderTeachingUnitChange, resolved])
 
   const schoolUnits = units.filter((item) => item.schoolId === schoolId)
   const fullWeekDays = useMemo(() => weekDays[0]

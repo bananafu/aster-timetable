@@ -200,40 +200,50 @@ describe('App v4 runtime', () => {
     expect(localStorage.getItem(APP_DATA_V7_KEY)).toBe(raw)
   })
 
-  it('新增課程選單只提供固定課與單日課，並只保留 X 關閉入口', () => {
+  it('新增課程選單提供四個入口，並只保留 X 關閉入口', () => {
     const data = copyReadyData()
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
     const dialog = screen.getByRole('dialog', { name: '新增課程' })
     expect(within(dialog).getByText('課程')).toBeTruthy()
-    expect(within(dialog).queryByText('基礎資料')).toBeNull()
-    expect(dialog.querySelectorAll('.add-choice-group')).toHaveLength(1)
-    expect(dialog.querySelectorAll('.add-choice-divider')).toHaveLength(0)
+    expect(within(dialog).getByText('基礎資料')).toBeTruthy()
+    expect(dialog.querySelectorAll('.add-choice-group')).toHaveLength(2)
+    expect(dialog.querySelectorAll('.add-choice-divider')).toHaveLength(1)
     expect(within(dialog).getAllByRole('button').map((button) => button.textContent?.trim().split('。')[0]).filter(Boolean)).toEqual([
       expect.stringContaining('新增固定課程'), expect.stringContaining('新增單日課程'),
+      expect.stringContaining('管理科目'), expect.stringContaining('管理班級'),
     ])
-    expect(within(dialog).queryByRole('button', { name: /管理科目|管理班級|取消/ })).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: '取消' })).toBeNull()
+    expect(dialog.textContent).not.toContain('任教單位')
     expect(within(dialog).getByRole('button', { name: '關閉對話框' })).toBeTruthy()
   })
 
-  it('專案沒有教師課表時顯示兩種課程停用提示，Sidebar 仍可管理資源', () => {
+  it('專案沒有教師課表時停用課程入口，AddChoice 仍可往返既有資源管理器', () => {
     const source = copyReadyData()
     const data = deleteTimetable(source, source.projects[0].id, source.timetables[0].id)
     localStorage.setItem(APP_DATA_V7_KEY, JSON.stringify(data))
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: '新增課程' }))
+    let choice = screen.getByRole('dialog', { name: '新增課程' })
     expect((screen.getByRole('button', { name: /新增固定課程/ }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: /新增單日課程/ }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getAllByText('請先建立教師課表。')).toHaveLength(2)
-    expect(within(screen.getByRole('dialog', { name: '新增課程' })).queryByRole('button', { name: /管理科目|管理班級/ })).toBeNull()
-    fireEvent.keyDown(window, { key: 'Escape' })
-    fireEvent.click(screen.getByRole('button', { name: /管理科目/ }))
+    expect((within(choice).getByRole('button', { name: /管理科目/ }) as HTMLButtonElement).disabled).toBe(false)
+    expect((within(choice).getByRole('button', { name: /管理班級/ }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(within(choice).getByRole('button', { name: /管理科目/ }))
     expect(screen.getByRole('dialog', { name: '管理科目' })).toBeTruthy()
     fireEvent.keyDown(window, { key: 'Escape' })
-    fireEvent.click(screen.getByRole('button', { name: /管理班級/ }))
+    choice = screen.getByRole('dialog', { name: '新增課程' })
+    expect(document.activeElement).toBe(within(choice).getByRole('button', { name: /管理科目/ }))
+    fireEvent.click(within(choice).getByRole('button', { name: /管理班級/ }))
     expect(screen.getByRole('dialog', { name: '管理班級' })).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    choice = screen.getByRole('dialog', { name: '新增課程' })
+    expect(document.activeElement).toBe(within(choice).getByRole('button', { name: /管理班級/ }))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('專案設定移除重複資源與建立專案入口', () => {
